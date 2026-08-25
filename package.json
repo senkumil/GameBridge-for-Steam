@@ -1,0 +1,32 @@
+{
+	"scripts": {
+		"dev": "millennium-ttc --build dev",
+		"build": "millennium-ttc --build prod",
+		"typecheck": "tsc --noEmit",
+		"check:source": "node scripts/check-source.mjs",
+		"check": "npm run typecheck && npm run check:source",
+		"check:dist": "node scripts/check-dist.mjs",
+		"verify": "npm run check && npm run build && npm run check:dist"
+	},
+	"devDependencies": {
+		"@babel/preset-env": "^7.28.3",
+		"@babel/preset-react": "^7.27.1",
+		"@babel/traverse": "^7.28.3",
+		"@types/react": "^19.1.12",
+		"@types/react-dom": "^19.1.9",
+		"@types/webpack": "^5.28.5"
+	},
+	"type": "module",
+	"name": "gamebridge-for-steam",
+	"version": "2.6.0-alpha.2",
+	"description": "Vincula juegos no-Steam con metadatos oficiales de Steam para mostrar datos reales en la biblioteca.",
+	"main": "./frontend/index.tsx",
+	"author": "David Miranda (Davidjarod11)",
+	"license": "MIT",
+	"dependencies": {
+		"@steambrew/api": "^5.5.3",
+		"@steambrew/client": "^5.5.3",
+		"@steambrew/ttc": "^2.7.3",
+		"@steambrew/webkit": "^5.5.3"
+	}
+}

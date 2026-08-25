@@ -1,0 +1,10 @@
+{
+	"$schema": "https://raw.githubusercontent.com/SteamClientHomebrew/Millennium/main/src/sys/plugin-schema.json",
+	"name": "game-data-linker",
+	"common_name": "GameBridge for Steam",
+	"description": "Complemento para Steam que vincula accesos directos externos con ilustraciones, noticias, logros, tiempo de juego, comunidad y Big Picture.",
+	"version": "2.6.0-alpha.2",
+	"author": "David Miranda (Davidjarod11)",
+	"useBackend": true,
+	"backendType": "lua"
+}
