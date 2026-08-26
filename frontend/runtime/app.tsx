@@ -1,15 +1,15 @@
 import React from 'react';
 import { Millennium, IconsModule, definePlugin } from '@steambrew/client';
 import { backendLog } from '../api/backend';
-import { mappings, loadMappings, findMappingForTitle } from '../core/mappings';
+import { findMappingForTitle, mappings, loadMappings } from '../core/mappings';
 import { clearGameDataCache } from '../core/game-data';
 import { getSteamLanguage, subscribeSteamLanguageChange, startSteamLanguageWatcher, stopSteamLanguageWatcher, officialSteamText, setLocalizationDocumentProvider } from '../steam/localization';
 import { SettingsContent } from '../settings/SettingsContent';
-import { findActiveShortcutAppId } from '../steam/shortcuts';
+import { findActiveShortcutAppId, isSteamLibraryActive } from '../steam/shortcuts';
 import { clearLibraryAssetCaches } from '../features/library/artwork';
 import { clearCommunityItemCaches } from '../features/library/community-items';
 import { clearSocialRuntimeCaches, configureSocialRuntimeHost } from '../features/library/social';
-import { configureLibraryRuntimeHost, disposeLibraryRuntime, findNonSteamNotice, getCurrentInjectedAppId, getCurrentInjectedShortcutAppId, hideNoticeQuick, refreshLibraryArtwork, resetLibraryInjection, tryInjectLibraryData } from '../features/library/runtime';
+import { configureLibraryRuntimeHost, disposeLibraryRuntime, findNonSteamNotice, getCurrentInjectedAppId, getCurrentInjectedShortcutAppId, handleLibraryNavigation, hideNoticeQuick, refreshLibraryArtwork, resetLibraryInjection, tryInjectLibraryData } from '../features/library/runtime';
 import { DisposableRegistry } from '../core/disposables';
 import { configureShortcutRuntimeHost, startShortcutAutoDetector, stopShortcutAutoDetector, tryInjectPropertiesField } from '../features/shortcuts/runtime';
 import { GDL_INJECTED } from '../features/library/constants';
@@ -25,29 +25,16 @@ import {
 	registerNativeAchievementToastWindow,
 	showAchievementToast,
 } from '../features/achievements/runtime';
+import { startPlaytimeTracker, stopPlaytimeTracker } from '../features/playtime/tracker';
 let mainWindowDoc: Document | null = null;
 setLocalizationDocumentProvider(() => mainWindowDoc);
-
-
-
-// ── Millennium plugin-menu layout repair ─────────────────────────────────
-
-const pluginMenuRepairAt = new WeakMap<Document, number>();
-
 function normalizedDomText(value: unknown): string {
 	return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
-
 const copiedFeedbackCleanupScheduled = new WeakSet<Element>();
-
 function currentCopiedFeedbackLabels(): Set<string> {
-	return new Set([
-		normalizedDomText('Copied!'),
-		normalizedDomText(officialSteamText('Copied!')),
-		normalizedDomText(officialSteamText('Copied')),
-	].filter(Boolean));
+	return new Set(['copied!', 'copied', '¡copiado!', 'copiado!', 'copiado', normalizedDomText(officialSteamText('Copied!')), normalizedDomText(officialSteamText('Copied'))].filter(Boolean));
 }
-
 /**
  * Millennium sometimes leaves our transient "Copied" feedback portal mounted
  * after its owning settings view closes. Only target a floating, non-interactive
@@ -82,97 +69,9 @@ function scheduleCopiedFeedbackCleanup(doc: Document): void {
 		copiedFeedbackCleanupScheduled.add(target);
 		setTimeout(() => {
 			if (target.isConnected && copiedFeedbackLabels.has(normalizedDomText(target.textContent))) target.remove();
-		}, 1400);
+		}, 300);
 	}
 }
-
-function visibleDomElement(element: Element | null): element is HTMLElement {
-	if (!(element instanceof HTMLElement)) return false;
-	const style = element.ownerDocument.defaultView?.getComputedStyle(element);
-	if (style?.display === 'none' || style?.visibility === 'hidden' || Number(style?.opacity || 1) === 0) return false;
-	const rect = element.getBoundingClientRect();
-	return rect.width > 0 && rect.height > 0;
-}
-
-/**
- * Some Millennium builds mount the plugin action menu at (0, 0) when the
- * plugin manager is re-rendered. Detect our own menu structurally so the
- * repair is independent of the Steam/Millennium UI language.
- */
-function repairOwnPluginMenuPosition(doc: Document): void {
-	if (!doc.body) return;
-	const titleText = normalizedDomText('GameBridge for Steam');
-	const candidates: HTMLElement[] = [];
-	const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT, null);
-	let node: Node | null;
-	while ((node = walker.nextNode())) {
-		const element = node as HTMLElement;
-		if (!visibleDomElement(element)) continue;
-		const text = normalizedDomText(element.textContent);
-		if (!text.includes(titleText)) continue;
-		const interactiveCount = element.querySelectorAll('button, a, [role="button"], [tabindex]').length;
-		if (interactiveCount < 3) continue;
-		const rect = element.getBoundingClientRect();
-		if (rect.width < 180 || rect.height < 80 || rect.width > 700) continue;
-		candidates.push(element);
-	}
-	if (candidates.length === 0) return;
-
-	// Choose the smallest matching ancestor: it is the menu surface rather
-	// than the full plugin-manager page or its portal container.
-	const menu = candidates.sort((a, b) => {
-		const aArea = a.getBoundingClientRect().width * a.getBoundingClientRect().height;
-		const bArea = b.getBoundingClientRect().width * b.getBoundingClientRect().height;
-		return aArea - bArea;
-	})[0];
-	const now = Date.now();
-	if (now - (pluginMenuRepairAt.get(doc) || 0) < 120) return;
-	pluginMenuRepairAt.set(doc, now);
-
-	const menuRect = menu.getBoundingClientRect();
-	const misplaced = menuRect.left <= 2 && menuRect.top <= 2;
-	if (!misplaced) return;
-
-	// Locate the visible plugin row outside the menu. The row's right edge is
-	// the stable anchor even when the client window is resized.
-	const rowCandidates: HTMLElement[] = [];
-	const rowWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT, null);
-	while ((node = rowWalker.nextNode())) {
-		const element = node as HTMLElement;
-		if (element === menu || menu.contains(element) || !visibleDomElement(element)) continue;
-		const text = normalizedDomText(element.textContent);
-		if (text !== titleText && !text.startsWith(titleText + ' v')) continue;
-		const rect = element.getBoundingClientRect();
-		if (rect.top < 80 || rect.height < 20 || rect.height > 180 || rect.width < 300) continue;
-		rowCandidates.push(element);
-	}
-	const row = rowCandidates.sort((a, b) => {
-		const aArea = a.getBoundingClientRect().width * a.getBoundingClientRect().height;
-		const bArea = b.getBoundingClientRect().width * b.getBoundingClientRect().height;
-		return bArea - aArea;
-	})[0];
-	if (!row) return;
-
-	const rowRect = row.getBoundingClientRect();
-	const viewportWidth = doc.defaultView?.innerWidth || doc.documentElement.clientWidth || 0;
-	const viewportHeight = doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0;
-	const width = menuRect.width || 280;
-	const height = menuRect.height || 180;
-	const left = Math.max(8, Math.min(viewportWidth - width - 8, rowRect.right - width));
-	const below = rowRect.bottom + 8;
-	const top = below + height <= viewportHeight - 8
-		? below
-		: Math.max(8, rowRect.top - height - 8);
-
-	menu.style.setProperty('position', 'fixed', 'important');
-	menu.style.setProperty('left', `${Math.round(left)}px`, 'important');
-	menu.style.setProperty('top', `${Math.round(top)}px`, 'important');
-	menu.style.setProperty('right', 'auto', 'important');
-	menu.style.setProperty('bottom', 'auto', 'important');
-	menu.style.setProperty('transform', 'none', 'important');
-	menu.style.setProperty('margin', '0', 'important');
-}
-
 // ── Window create hook ─────────────────────────────────────────────────
 
 const observedDocs = new WeakSet<Document>();
@@ -182,32 +81,39 @@ function disposeDocumentLifecycles(): void {
 	for (const lifecycle of Array.from(documentLifecycles)) lifecycle.dispose();
 	documentLifecycles.clear();
 }
-
 function windowCreated(context: any): void {
-	const popupWin: Window | undefined = context?.window;
+	const popupWin: Window | undefined = context?.window || (context?.document ? context : (typeof window !== 'undefined' ? window : undefined));
 	const popupDoc: Document | undefined = popupWin?.document;
-	const popupName: string = context?.m_strName || '';
-	const popupTitle: string = context?.m_strTitle || '';
+	const popupName: string = context?.m_strName || popupWin?.name || '';
+	const popupTitle: string = context?.m_strTitle || popupDoc?.title || '';
 
-	if (!popupDoc?.body) return;
+	if (!popupWin || !popupDoc) return;
+
+	if (!popupDoc.body) {
+		popupWin.addEventListener('DOMContentLoaded', () => windowCreated(context), { once: true });
+		return;
+	}
 
 	if (observedDocs.has(popupDoc)) return;
 	observedDocs.add(popupDoc);
 
+	const isBigPictureWindow = /SP BPM|SP Big Picture|Big Picture|Gamepad/i.test(`${popupName} ${popupTitle}`);
+	const isOverlayWindow = /desktopoverlay|SP Overlay|Game Overlay/i.test(`${popupName} ${popupTitle}`);
+	const isMainWindow = popupName === 'SP Desktop'
+		|| (popupName.includes('SP Desktop') && !popupName.includes('Popup') && !popupName.includes('Login'))
+		|| (!popupName && popupWin === window && !isBigPictureWindow && !isOverlayWindow);
 	let lifecycle!: DisposableRegistry;
 	lifecycle = new DisposableRegistry(() => documentLifecycles.delete(lifecycle));
 	documentLifecycles.add(lifecycle);
-	const disposeWindow = () => lifecycle.dispose();
-	lifecycle.listen(popupWin, 'beforeunload', disposeWindow, { once: true });
-	lifecycle.listen(popupWin, 'unload', disposeWindow, { once: true });
+	// SP Desktop performs internal navigations while Steam rebuilds a shortcut.
+	// Its beforeunload/unload events are not proof that the visible CEF window is
+	// gone; disposing here permanently loses the observer until Steam restarts.
+	if (!isMainWindow) {
+		const disposeWindow = () => lifecycle.dispose();
+		lifecycle.listen(popupWin, 'beforeunload', disposeWindow, { once: true });
+		lifecycle.listen(popupWin, 'unload', disposeWindow, { once: true });
+	}
 	lifecycle.add(() => disposeLocalAchievementUI(popupDoc));
-
-	const isMainWindow = popupName === 'SP Desktop' || (popupName.includes('SP Desktop') && !popupName.includes('Popup') && !popupName.includes('Login'));
-	// Steam names the current Big Picture window "SP BPM_uidN". Keep the
-	// additional names as fallbacks because this has changed between client
-	// builds and is also used by some Steam forks.
-	const isBigPictureWindow = /SP BPM|SP Big Picture|Big Picture|Gamepad/i.test(`${popupName} ${popupTitle}`);
-	const isOverlayWindow = /desktopoverlay|SP Overlay|Game Overlay/i.test(`${popupName} ${popupTitle}`);
 	if (isOverlayWindow) {
 		registerNativeAchievementToastWindow(popupWin, 'overlay', `${popupName} ${popupTitle}`.trim());
 	} else if (isBigPictureWindow) {
@@ -227,51 +133,109 @@ function windowCreated(context: any): void {
 		mainWindowDoc = popupDoc;
 		installLocalAchievementUI(popupDoc);
 		scheduleCopiedFeedbackCleanup(popupDoc);
+		// A full CEF document replacement does require a new observer. Wait until
+		// the replacement document actually exists, then hand ownership over; do
+		// not tear the active observer down on Steam's earlier unload signal.
+		lifecycle.interval(() => {
+			try {
+				if (popupWin.closed) { lifecycle.dispose(); return; }
+				const liveDoc = popupWin.document;
+				if (liveDoc !== popupDoc && liveDoc?.body) {
+					lifecycle.dispose();
+					windowCreated({ window: popupWin, m_strName: popupName || 'SP Desktop', m_strTitle: popupTitle });
+				}
+			} catch {}
+		}, 250);
 	}
 
 	let mutationTimer: ReturnType<typeof setTimeout> | null = null;
 	lifecycle.add(() => { if (mutationTimer) clearTimeout(mutationTimer); mutationTimer = null; });
-	let lastNavUrl = '';
+	let lastNavUrl = String(popupDoc.defaultView?.location?.href || popupDoc.location?.href || '');
 	const runInjection = () => {
 		tryInjectPropertiesField(popupDoc, popupTitle);
 		if (isMainWindow) captureNativeUiBlueprints(popupDoc, { skip: () => Boolean(findNonSteamNotice(popupDoc) || popupDoc.getElementById(GDL_INJECTED)) });
-		if (isMainWindow) tryInjectLibraryData(popupDoc);
-		if (isMainWindow) repairOwnPluginMenuPosition(popupDoc);
+		if (isMainWindow) void tryInjectLibraryData(popupDoc).catch(e => backendLog('Library injection error: ' + e));
 		if (isMainWindow) scheduleCopiedFeedbackCleanup(popupDoc);
 		if (isBigPictureWindow) {
 			void refreshBigPicture(popupDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
 		}
 	};
-	const observer = new MutationObserver(() => {
+	const isGdlOwnedNode = (node: Node, fallback: Node): boolean => {
+		const element = (node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement)
+			|| (fallback.nodeType === Node.ELEMENT_NODE ? fallback as Element : fallback.parentElement);
+		return Boolean(element?.closest?.('[id^="gdl-"], [data-gdl-hidden], [data-gdl-shortcut-app-id]'));
+	};
+	const isGdlOnlyMutation = (records: MutationRecord[]): boolean => records.length > 0 && records.every(record => {
+		const changed = [...Array.from(record.addedNodes), ...Array.from(record.removedNodes)];
+		return changed.length > 0 && changed.every(node => isGdlOwnedNode(node, record.target));
+	});
+	const isVisibleNotice = (element: Element): boolean => {
+		const view = popupDoc.defaultView;
+		if (!view || !element.isConnected) return false;
+		const style = view.getComputedStyle(element);
+		return style.display !== 'none' && style.visibility !== 'hidden' && (element as HTMLElement).getClientRects().length > 0;
+	};
+	// The library list does not consistently change location.href before it
+	// starts replacing the app page.  Capture a game-row activation so pending
+	// linked-game work is invalidated before Steam can reuse the old page DOM.
+	const isLibraryGameRow = (target: EventTarget | null): boolean => {
+		if (!(target instanceof Element) || target.closest('[id^="gdl-"]')) return false;
+		const row = target.closest('[class*="AppListEntry"], [class*="appListEntry"], [class*="applist_entry"]');
+		if (row) return true;
+		const link = target.closest<HTMLAnchorElement>('a[href]');
+		return Boolean(link && /(?:games\/details|library\/app|\/app)\/\d+/i.test(link.href));
+	};
+	if (isMainWindow) {
+		lifecycle.listen(popupDoc, 'pointerdown', event => {
+			if (isLibraryGameRow(event.target)) handleLibraryNavigation(popupDoc);
+		}, true);
+	}
+	const observer = new MutationObserver((records) => {
 		const currentUrl = String(popupDoc.defaultView?.location?.href || popupDoc.location?.href || '');
 		if (currentUrl && currentUrl !== lastNavUrl) {
 			lastNavUrl = currentUrl;
 			if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
+			if (isMainWindow) handleLibraryNavigation(popupDoc);
 			runInjection();
 			return;
 		}
+		// Rendering a linked page creates several DOM mutations of its own. They
+		// are already complete, so feeding them back into the navigation observer
+		// used to schedule redundant injection/cleanup passes and visible flicker.
+		if (isGdlOnlyMutation(records)) return;
 		// Fast path: if a non-Steam notice exists and is visible, process immediately to prevent flash
 		if (isMainWindow) {
 			const noticeInfo = findNonSteamNotice(popupDoc);
-			if (noticeInfo && (noticeInfo.element as HTMLElement).style.display !== 'none') {
+			if (noticeInfo && isVisibleNotice(noticeInfo.element)) {
 				const activeShortcutAppId = findActiveShortcutAppId(popupDoc, noticeInfo.title);
-				const steamAppId = findMappingForTitle(noticeInfo.title, activeShortcutAppId);
-				if (steamAppId) {
-					hideNoticeQuick(noticeInfo.element);
-				}
+				if (findMappingForTitle(noticeInfo.title, activeShortcutAppId)) hideNoticeQuick(noticeInfo.element);
 				if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
 				runInjection();
 				return;
 			}
 		}
+		// Steam emits a burst of separate mutations while rebuilding its first
+		// library route. Coalesce that burst into one pass instead of mounting,
+		// cleaning and mounting our chrome several times in the first second.
 		if (mutationTimer) return;
-		runInjection();
 		mutationTimer = setTimeout(() => {
 			mutationTimer = null;
 			runInjection();
-		}, 150);
+		}, 90);
 	});
 	lifecycle.observe(observer, popupDoc.body, { childList: true, subtree: true });
+	// Steam can update the route before it mutates the library subtree. Polling
+	// the URL lightly closes that gap without observing every React attribute.
+	lifecycle.interval(() => {
+		try {
+			const currentUrl = String(popupDoc.defaultView?.location?.href || popupDoc.location?.href || '');
+			if (!currentUrl || currentUrl === lastNavUrl) return;
+			lastNavUrl = currentUrl;
+			if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
+			if (isMainWindow) handleLibraryNavigation(popupDoc);
+			runInjection();
+		} catch {}
+	}, 120);
 
 	// Big Picture replaces its app overviews while moving between tabs and
 	// after Steam finishes loading the library. Keep the shim alive through
@@ -293,26 +257,13 @@ function windowCreated(context: any): void {
 		}, 900);
 	}
 
+	// One settled startup pass is sufficient. The observer and route watcher
+	// cover late Steam content; the former 100/400/1000 ms passes fought the
+	// native initial render and were a major source of background/bar flashes.
 	lifecycle.timeout(() => {
-		tryInjectPropertiesField(popupDoc, popupTitle);
-		if (isMainWindow) tryInjectLibraryData(popupDoc);
-		if (isMainWindow) repairOwnPluginMenuPosition(popupDoc);
-		if (isBigPictureWindow) void refreshBigPicture(popupDoc).catch(error => backendLog('Big Picture refresh error: ' + error));
-	}, 100);
-	lifecycle.timeout(() => {
-		tryInjectPropertiesField(popupDoc, popupTitle);
-		if (isMainWindow) tryInjectLibraryData(popupDoc);
-		if (isMainWindow) repairOwnPluginMenuPosition(popupDoc);
-		if (isBigPictureWindow) void refreshBigPicture(popupDoc).catch(error => backendLog('Big Picture refresh error: ' + error));
-	}, 400);
-	lifecycle.timeout(() => {
-		tryInjectPropertiesField(popupDoc, popupTitle);
-		if (isMainWindow) tryInjectLibraryData(popupDoc);
-		if (isBigPictureWindow) void refreshBigPicture(popupDoc).catch(error => backendLog('Big Picture refresh error: ' + error));
-	}, 1000);
+		runInjection();
+	}, 350);
 }
-
-// ── Plugin entry point ─────────────────────────────────────────────────
 
 export default definePlugin(() => {
 	console.log('[GDL] definePlugin callback executing - frontend initialized successfully');
@@ -328,12 +279,16 @@ export default definePlugin(() => {
 	});
 	configureShortcutRuntimeHost({
 		getMainWindowDoc: () => mainWindowDoc,
+		refreshLibraryArtwork,
+		resetLibraryInjection,
 		findNonSteamNotice: (doc) => {
 			const info = findNonSteamNotice(doc);
 			return info ? { title: info.title } : null;
 		},
-		resetLibraryInjection,
-		refreshLibraryArtwork,
+		isLibraryActive: (doc) => {
+			const target = doc || mainWindowDoc;
+			return Boolean(target && (findNonSteamNotice(target) || isSteamLibraryActive(target)));
+		},
 	});
 	configureSocialRuntimeHost({
 		getCurrentInjectedAppId,
@@ -356,6 +311,7 @@ export default definePlugin(() => {
 		.then(() => {
 			backendLog('Loaded ' + Object.keys(mappings).length + ' mapping(s)');
 			startShortcutAutoDetector();
+			startPlaytimeTracker();
 			if (mainWindowDoc) {
 				tryInjectLibraryData(mainWindowDoc).catch(e => backendLog('Post-startup library refresh error: ' + e));
 			}
@@ -366,6 +322,7 @@ export default definePlugin(() => {
 			console.error('[GDL] Failed to load mappings from backend:', e);
 			// Continue anyway - the UI should still work, just without saved mappings
 			startShortcutAutoDetector();
+			startPlaytimeTracker();
 		});
 
 	const unsubscribeLanguageRefresh = subscribeSteamLanguageChange((language, previousLanguage) => {
@@ -398,6 +355,11 @@ export default definePlugin(() => {
 	} catch {}
 
 	Millennium.AddWindowCreateHook(windowCreated);
+	try {
+		windowCreated(window);
+	} catch (e) {
+		console.error('[GDL] Failed to initialize current window hook:', e);
+	}
 	console.log('[GDL] Window create hook registered');
 
 	return {
@@ -410,6 +372,7 @@ export default definePlugin(() => {
 			unregisterUIModeChanged?.();
 			stopSteamLanguageWatcher();
 			stopShortcutAutoDetector();
+			stopPlaytimeTracker();
 			deactivateBigPicture();
 			disposeLibraryRuntime();
 			disposeAchievementRuntime();

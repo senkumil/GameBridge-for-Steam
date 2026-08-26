@@ -185,35 +185,19 @@ function playAchievementSound(): void {
 			steamClient.Sounds.PlayNavSound(5);
 			return;
 		}
-	} catch {}
-
-	try {
-		const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-		if (!AudioCtx) return;
-		const ctx = new AudioCtx();
-		const now = ctx.currentTime;
-		for (const [index, frequency] of [880, 1318.5].entries()) {
-			const oscillator = ctx.createOscillator();
-			const gain = ctx.createGain();
-			oscillator.type = 'triangle';
-			oscillator.frequency.setValueAtTime(frequency, now + index * 0.08);
-			gain.gain.setValueAtTime(0, now + index * 0.08);
-			gain.gain.linearRampToValueAtTime(0.28, now + index * 0.08 + 0.02);
-			gain.gain.exponentialRampToValueAtTime(0.001, now + index * 0.08 + 0.65);
-			oscillator.connect(gain);
-			gain.connect(ctx.destination);
-			oscillator.start(now + index * 0.08);
-			oscillator.stop(now + index * 0.08 + 0.7);
+		if (typeof steamClient?.Sounds?.PlaySoundEffect === 'function') {
+			steamClient.Sounds.PlaySoundEffect(5);
+			return;
 		}
 	} catch {}
 }
 
 export async function showAchievementToast(appid: string, achievement: LocalAchievementItem): Promise<void> {
-	playAchievementSound();
 	if (showNativeAchievementToast(appid, achievement)) {
 		backendLog(`Native achievement notification shown: ${appid}/${achievement.name}`);
 		return;
 	}
+	playAchievementSound();
 
 	const info = await getLocalAchievementGameInfo(appid);
 	const logo = achievement.icon

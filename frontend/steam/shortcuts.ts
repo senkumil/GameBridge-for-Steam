@@ -42,40 +42,113 @@ export function toSignedShortcutAppId(shortcutAppId: number): number {
 	return shortcutAppId >= SHORTCUT_THRESHOLD ? shortcutAppId - 4294967296 : shortcutAppId;
 }
 
+function canonicalizeGameTitle(value: string): string {
+	let text = normalizeTitle(value)
+		.replace(/\.(?:exe|com|bat|cmd|lnk|appimage)$/i, '')
+		.replace(/\[[^\]]*\]/g, ' ')
+		.replace(/\([^)]*(?:v\d|build|repack|gog|dodi|fitgirl|multi)[^)]*\)/gi, ' ')
+		.replace(/\bv\d+(?:\.\d+)*\b/gi, ' ')
+		.replace(/\b(?:repack|flt|codex|goldberg|rune|skidrow|dodi|fitgirl|elamigos|gog)\b/gi, ' ')
+		.replace(/[^a-z0-9]+/g, ' ')
+		.trim();
+
+	// Replace Roman numerals as standalone words
+	text = text
+		.replace(/\bviii\b/g, '8')
+		.replace(/\bvii\b/g, '7')
+		.replace(/\bvi\b/g, '6')
+		.replace(/\biv\b/g, '4')
+		.replace(/\bv\b/g, '5')
+		.replace(/\biii\b/g, '3')
+		.replace(/\bii\b/g, '2')
+		.replace(/\bix\b/g, '9')
+		.replace(/\bx\b/g, '10');
+
+	return text.replace(/\s+/g, '');
+}
+
+export function looseMatchTitle(a: string, b: string): boolean {
+	if (!a || !b) return false;
+	if (normalizeTitle(a) === normalizeTitle(b)) return true;
+	const cleanA = canonicalizeGameTitle(a);
+	const cleanB = canonicalizeGameTitle(b);
+	if (cleanA === cleanB && cleanA !== '') return true;
+	if (cleanA.length >= 5 && cleanB.length >= 5) {
+		if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
+	}
+	return false;
+}
+
+export function getSteamAppStore(): any | null {
+	if ((window as any).appStore?.m_mapApps) return (window as any).appStore;
+	const pm = (window as any).g_PopupManager;
+	if (pm) {
+		try {
+			for (const name of ['SP Desktop_uid0', 'SP Desktop', 'SP BPM_uid0', 'SP BPM']) {
+				const p = pm.GetExistingPopup?.(name) || pm.m_mapPopups?.get?.(name);
+				const win = p?.m_popup?.window || p?.window || p?.m_popup || p;
+				if (win?.appStore?.m_mapApps) return win.appStore;
+			}
+			if (pm.m_mapPopups) {
+				for (const [_, p] of pm.m_mapPopups) {
+					const win = p?.m_popup?.window || p?.window;
+					if (win?.appStore?.m_mapApps) return win.appStore;
+				}
+			}
+		} catch {}
+	}
+	return null;
+}
+
 /** Find a non-Steam shortcut's internal AppID by its exact display name. */
 export function findShortcutAppIdByName(title: string): number | null {
-	const appStore = (window as any).appStore;
+	const appStore = getSteamAppStore();
 	if (!appStore?.m_mapApps) return null;
-	const normalized = normalizeTitle(title);
 	for (const [id, app] of appStore.m_mapApps) {
 		const rawId = Number(id);
 		if (!Number.isFinite(rawId)) continue;
 		const numId = rawId < 0 ? (rawId >>> 0) : rawId;
 		if (numId < SHORTCUT_THRESHOLD) continue;
 		const name = app?.display_name || app?.m_strDisplayName || '';
-		if (name && normalizeTitle(name) === normalized) return numId;
+		if (name && looseMatchTitle(name, title)) return numId;
 	}
 	return null;
 }
 
 /** Resolve the shortcut ID represented by a Steam library document. */
 export function findActiveShortcutAppId(doc: Document, title: string): string | null {
+	const trimmedTitle = (title || '').trim();
 	const urls = [
 		String(doc.defaultView?.location?.href || ''),
 		String(doc.location?.href || ''),
-		String((window as any).location?.href || ''),
 	];
+	if (typeof document !== 'undefined' && doc === document) urls.push(String((window as any).location?.href || ''));
 	for (const url of urls) {
 		const match = url.match(/(?:games\/details|library\/app|app)\/(\d+)/i);
-		if (match && Number(match[1]) >= SHORTCUT_THRESHOLD) return match[1];
+		if (match && Number(match[1]) >= SHORTCUT_THRESHOLD) {
+			const candidateId = Number(match[1]);
+			const app = getShortcutAppById(candidateId);
+			if (app) {
+				const name = app?.display_name || app?.m_strDisplayName || '';
+				if (!trimmedTitle || (name && looseMatchTitle(name, trimmedTitle))) {
+					return String(candidateId);
+				}
+				// Title didn't match this app's display name, check next
+				continue;
+			}
+			if (trimmedTitle) {
+				const byName = findShortcutAppIdByName(trimmedTitle);
+				if (byName && byName === candidateId) return String(byName);
+			}
+			return match[1];
+		}
 	}
-	const byName = findShortcutAppIdByName(title);
-	return byName ? String(byName) : null;
+	return null;
 }
 
 /** Find every shortcut matching a display name; useful while Steam is rebuilding an ID after rename. */
 export function findShortcutAppIdsByName(title: string): number[] {
-	const appStore = (window as any).appStore;
+	const appStore = getSteamAppStore();
 	if (!appStore?.m_mapApps) return [];
 	const normalized = normalizeTitle(title);
 	const result: number[] = [];
@@ -90,7 +163,7 @@ export function findShortcutAppIdsByName(title: string): number[] {
 }
 
 export function getShortcutAppById(shortcutAppId: number): any | null {
-	const appStore = (window as any).appStore;
+	const appStore = getSteamAppStore();
 	if (!appStore?.m_mapApps) return null;
 	const ids = new Set([shortcutAppId, toSignedShortcutAppId(shortcutAppId)]);
 	try {
@@ -168,4 +241,55 @@ export function getMappedShortcuts(): Array<{ id: number; title: string }> {
 
 export function clearShortcutRuntimeCaches(): void {
 	shortcutPlaytimeRequests.clear();
+}
+
+/** Check if the Steam Library tab or UI view is currently active in the client. */
+export function isSteamLibraryActive(doc?: Document | null): boolean {
+	const targetDoc = doc || (typeof document !== 'undefined' ? document : null);
+	if (!targetDoc || !targetDoc.body) return false;
+
+	const urls = [
+		String(targetDoc.defaultView?.location?.href || ''),
+		String(targetDoc.location?.href || ''),
+		String((window as any).location?.href || ''),
+	];
+	for (const url of urls) {
+		if (/store\.steampowered\.com|steamcommunity\.com|help\.steampowered\.com|steampowered\.com/i.test(url)) {
+			return false;
+		}
+		if (/(?:games\/details|library|libraryroot|steamloopback\.host)/i.test(url)) {
+			return true;
+		}
+	}
+
+	try {
+		const activeNav = targetDoc.querySelector(
+			'[class*="supernav"] [class*="active"], [class*="supernav"] [class*="selected"], [class*="supernav"] [aria-current="page"], [class*="tab_active"], [class*="activeTab"], [class*="active_tab"]'
+		);
+		if (activeNav) {
+			const text = (activeNav.textContent || '').toLowerCase();
+			const href = (activeNav.getAttribute('href') || '').toLowerCase();
+			if (/store|tienda|magasin|shop|comunidad|community|chat|amigos/i.test(text) || /store|community/i.test(href)) {
+				return false;
+			}
+			if (/biblioteca|library|games|jeux|spiele|kolekcja/i.test(text) || /games|library/i.test(href)) {
+				return true;
+			}
+		}
+	} catch {}
+
+	try {
+		const libraryContainer = targetDoc.querySelector(
+			'[class*="libraryroot"], [class*="libraryhome"], [class*="appdetails"], [class*="gamepadappoverview"], [class*="gamelistsection"]'
+		);
+		if (libraryContainer instanceof HTMLElement) {
+			const style = targetDoc.defaultView?.getComputedStyle(libraryContainer);
+			const rect = libraryContainer.getBoundingClientRect();
+			if (rect.width > 200 && rect.height > 200 && style?.display !== 'none' && style?.visibility !== 'hidden') {
+				return true;
+			}
+		}
+	} catch {}
+
+	return false;
 }

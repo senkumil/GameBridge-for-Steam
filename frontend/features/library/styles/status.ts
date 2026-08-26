@@ -62,11 +62,21 @@ export function ensureStatusComposerStyles(doc: Document): void {
 			pointer-events: auto !important;
 			margin-top: 10px !important;
 		}
-		#gdl-game-data .${post.EmoticonButton} { background:#232a33;border:1px solid rgba(255,255,255,.06);border-radius:2px;width:38px;height:38px;display:flex;align-items:center;justify-content:center;color:#8f98a0;cursor:pointer;position:relative;transition:background .15s,color .15s; }
-		#gdl-game-data .${post.EmoticonButton}:hover { background:#323c4a;color:#fff; }
-		#gdl-game-data .${post.PostButton} { background:#232a33;border:1px solid rgba(255,255,255,.05);border-radius:2px;color:#8f98a0;font-family:"Motiva Sans",Arial,Helvetica,sans-serif;font-size:14px;font-weight:500;padding:8px 26px;height:38px;cursor:default;opacity:1;transition:background .15s,color .15s,border-color .15s; }
-		#gdl-game-data .${post.PostButton}.${post.Enabled} { background:#1a9fff;border-color:#1a9fff;color:#fff;font-weight:700;cursor:pointer; }
-		#gdl-game-data .${post.PostButton}.${post.Enabled}:hover { background:#38b6ff;border-color:#38b6ff; }
+		#gdl-game-data .${post.EmoticonButton},
+		.gdl-status-box-container .${post.EmoticonButton},
+		.gdl-emoticon-btn { background:#232a33;border:1px solid rgba(255,255,255,.06);border-radius:2px;width:38px;height:38px;display:flex;align-items:center;justify-content:center;color:#8f98a0;cursor:pointer;position:relative;transition:background .15s,color .15s; }
+		#gdl-game-data .${post.EmoticonButton}:hover,
+		.gdl-status-box-container .${post.EmoticonButton}:hover,
+		.gdl-emoticon-btn:hover { background:#323c4a;color:#fff; }
+		#gdl-game-data .${post.PostButton},
+		.gdl-status-box-container .${post.PostButton},
+		#gdl-status-post { background:#232a33;border:1px solid rgba(255,255,255,.05);border-radius:2px;color:#8f98a0;font-family:"Motiva Sans",Arial,Helvetica,sans-serif;font-size:14px;font-weight:500;padding:8px 26px;height:38px;cursor:default;opacity:1;transition:background .15s,color .15s,border-color .15s; }
+		#gdl-game-data .${post.PostButton}.${post.Enabled},
+		.gdl-status-box-container .${post.PostButton}.${post.Enabled},
+		#gdl-status-post.is-enabled { background:#1a9fff;border-color:#1a9fff;color:#fff;font-weight:700;cursor:pointer; }
+		#gdl-game-data .${post.PostButton}.${post.Enabled}:hover,
+		.gdl-status-box-container .${post.PostButton}.${post.Enabled}:hover,
+		#gdl-status-post.is-enabled:hover { background:#38b6ff;border-color:#38b6ff; }
 		#gdl-emoticon-picker { position:absolute;bottom:calc(100% + 8px);right:0;width:290px;background:#232932;border:1px solid rgba(255,255,255,.16);box-shadow:0 16px 48px rgba(0,0,0,.95),0 0 0 1px rgba(255,255,255,.1);border-radius:4px;padding:14px 16px;z-index:999999;font-family:"Motiva Sans",Arial,Helvetica,sans-serif;color:#d6d7d8;animation:gdl-ep-popin .12s ease-out;box-sizing:border-box; }
 		@keyframes gdl-ep-popin { from { transform:scale(.95);opacity:0; } to { transform:scale(1);opacity:1; } }
 		.gdl-ep-heading { font-size:11px;font-weight:700;color:#8f98a0;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px; }

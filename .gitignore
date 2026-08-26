@@ -1,5 +1,5 @@
 # ==============================================================================
-# GameBridge for Steam (Steam Game Data Linker Mod) - .gitignore
+# GameBridge for Steam - .gitignore
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -32,15 +32,18 @@ mappings.json.bak
 *.bak
 *.tmp
 
-# Configuraciones locales de logros de usuario
+# Configuraciones locales de logros de usuario y sesiones de tiempo de juego
 achievement_base_path.txt
 achievement_paths.json
+playtime_sessions.json
+sessions.json
 steam_appid.txt
 
 # ------------------------------------------------------------------------------
 # 4. Carpetas y Archivos Locales / Descontinuados / Capturas
 # ------------------------------------------------------------------------------
-game-data-linker-DESCONTINUADO/
+[g]ame-data-linker-DESCONTINUADO/
+non-steam-playtimes-2.0.3/
 *DESCONTINUADO*
 *descontinuado*
 capturas juegos nativos steam/

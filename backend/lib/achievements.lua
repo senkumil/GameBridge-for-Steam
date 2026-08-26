@@ -6,7 +6,7 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "Steam-Game-Data-Linker-Mod/2.6"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
 local M = {}
 local get_config_path = config.get_config_path
 local html_unescape = util.html_unescape
@@ -23,13 +23,23 @@ end
 local function default_achievement_root()
     local appdata = os.getenv("APPDATA")
     if appdata and appdata ~= "" then
-        return fs.join(appdata, "Goldberg SteamEmu Saves")
+        if fs.exists(fs.join(appdata, "GSE Saves")) then
+            return fs.join(appdata, "GSE Saves")
+        end
+        if fs.exists(fs.join(appdata, "Goldberg SteamEmu Saves")) then
+            return fs.join(appdata, "Goldberg SteamEmu Saves")
+        end
+        return fs.join(appdata, "GSE Saves")
+    end
+    local localappdata = os.getenv("LOCALAPPDATA")
+    if localappdata and localappdata ~= "" and fs.exists(fs.join(localappdata, "GSE Saves")) then
+        return fs.join(localappdata, "GSE Saves")
     end
     local userprofile = os.getenv("USERPROFILE")
     if userprofile and userprofile ~= "" then
-        return fs.join(userprofile, "AppData", "Roaming", "Goldberg SteamEmu Saves")
+        return fs.join(userprofile, "AppData", "Roaming", "GSE Saves")
     end
-    return "C:\\Users\\" .. tostring(os.getenv("USERNAME") or "User") .. "\\AppData\\Roaming\\Goldberg SteamEmu Saves"
+    return "C:\\Users\\" .. tostring(os.getenv("USERNAME") or "User") .. "\\AppData\\Roaming\\GSE Saves"
 end
 
 local function achievement_base_path_config_path()
@@ -344,11 +354,52 @@ local function fetch_global_achievement_percentages(appid)
     return by_name, ordered
 end
 
+local function map_to_steam_lang(lang)
+    lang = tostring(lang or "spanish"):lower():gsub("[^%w_]", "")
+    if lang:find("spanish") or lang:find("latam") or lang:find("es") then
+        return "spanish"
+    end
+    if lang:find("french") or lang:find("fr") then return "french" end
+    if lang:find("german") or lang:find("de") then return "german" end
+    if lang:find("italian") or lang:find("it") then return "italian" end
+    if lang:find("portuguese") or lang:find("brazilian") or lang:find("pt") then return "brazilian" end
+    if lang:find("russian") or lang:find("ru") then return "russian" end
+    if lang:find("japanese") or lang:find("ja") then return "japanese" end
+    if lang:find("korean") or lang:find("ko") then return "koreana" end
+    if lang:find("schinese") or lang:find("zh_cn") or lang:find("zh_hans") then return "schinese" end
+    if lang:find("tchinese") or lang:find("zh_tw") or lang:find("zh_hant") then return "tchinese" end
+    return "english"
+end
+
+local function extract_localized_text(val, lang)
+    if type(val) == "string" then
+        return val
+    elseif type(val) == "table" then
+        local target = map_to_steam_lang(lang)
+        if val[target] and tostring(val[target]) ~= "" then
+            return tostring(val[target])
+        end
+        if target == "spanish" then
+            if val["spanish"] and tostring(val["spanish"]) ~= "" then return tostring(val["spanish"]) end
+            if val["latam"] and tostring(val["latam"]) ~= "" then return tostring(val["latam"]) end
+            if val["spanish_latam"] and tostring(val["spanish_latam"]) ~= "" then return tostring(val["spanish_latam"]) end
+            if val["es"] and tostring(val["es"]) ~= "" then return tostring(val["es"]) end
+            if val["es-ES"] and tostring(val["es-ES"]) ~= "" then return tostring(val["es-ES"]) end
+            if val["es-419"] and tostring(val["es-419"]) ~= "" then return tostring(val["es-419"]) end
+        end
+        if val["english"] and tostring(val["english"]) ~= "" then return tostring(val["english"]) end
+        if val["en"] and tostring(val["en"]) ~= "" then return tostring(val["en"]) end
+        for _, v in pairs(val) do
+            if type(v) == "string" and v ~= "" then return v end
+        end
+    end
+    return ""
+end
+
 local function fetch_community_achievement_rows(appid, lang)
-    lang = tostring(lang or "english"):gsub("[^%w_]", "")
-    if lang == "" then lang = "english" end
-    local url = "https://steamcommunity.com/stats/" .. tostring(appid) .. "/achievements?l=" .. lang
-    local cookie_header = "birthtime=0; mature_content=1; wants_mature_content=1; Steam_Language=" .. lang .. ";"
+    local steam_lang = map_to_steam_lang(lang)
+    local url = "https://steamcommunity.com/stats/" .. tostring(appid) .. "/achievements?l=" .. steam_lang
+    local cookie_header = "birthtime=0; mature_content=1; wants_mature_content=1; Steam_Language=" .. steam_lang .. ";"
     local ok, res = pcall(http.get, url, {
         headers = {
             ["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -385,11 +436,11 @@ local function fetch_community_achievement_rows(appid, lang)
             percent = tonumber(pct) or 0,
         }
     end
-    logger:info("Community achievement rows: " .. #rows .. " parsed for appid " .. tostring(appid))
+    logger:info("Community achievement rows: " .. #rows .. " parsed for appid " .. tostring(appid) .. " (lang: " .. steam_lang .. ")")
     return rows
 end
 
-local function normalize_local_schema(appid, root_dir)
+local function normalize_local_schema(appid, root_dir, lang)
     local appdata = os.getenv("APPDATA") or ""
     local localappdata = os.getenv("LOCALAPPDATA") or ""
     local userprofile = os.getenv("USERPROFILE") or ""
@@ -460,12 +511,13 @@ local function normalize_local_schema(appid, root_dir)
                         local a = (type(v) == "table") and v or {}
                         local name = tostring(a.name or a.id or k)
                         if name and name ~= "" then
-                            local display = a.displayName or a.display_name or a.name_localized or a.title or name
-                            local desc = a.description or a.desc or a.description_localized or ""
+                            local display = extract_localized_text(a.displayName or a.display_name or a.name_localized or a.title, lang)
+                            if display == "" then display = name end
+                            local desc = extract_localized_text(a.description or a.desc or a.description_localized, lang)
                             result[name] = {
                                 name = name,
-                                title = tostring(display or name),
-                                description = tostring(desc or ""),
+                                title = display,
+                                description = desc,
                                 icon = achievement_icon_url(appid, a.icon or a.icon_normal or a.iconNormal or ""),
                                 icongray = achievement_icon_url(appid, a.icongray or a.icon_gray or a.icon_locked or a.iconLocked or ""),
                                 hidden = a.hidden == true or tonumber(a.hidden) == 1,
@@ -484,46 +536,38 @@ local function normalize_local_schema(appid, root_dir)
 end
 
 local function match_public_metadata(appid, lang, root_dir)
-    local key = tostring(appid) .. "|" .. tostring(lang or "english")
+    local key = tostring(appid) .. "|" .. tostring(lang or "spanish")
     local now = os.time()
     local cached = local_achievement_meta_cache[key]
     if cached and (now - (cached.time or 0)) < 1800 then
         return cached.by_name or {}, cached.source or "cache"
     end
 
-    local schema, schema_path = normalize_local_schema(appid, root_dir)
+    local schema, schema_path = normalize_local_schema(appid, root_dir, lang)
     local global_by_name, global_ordered = fetch_global_achievement_percentages(appid)
     local community = fetch_community_achievement_rows(appid, lang)
-    if tostring(lang):lower() ~= "english" then
-        local english_rows = fetch_community_achievement_rows(appid, "english")
-        if #community == 0 then
-            community = english_rows
-        else
-            for index, row in ipairs(community) do
-                local fallback = english_rows[index]
-                if fallback then
-                    if tostring(row.title or "") == "" then row.title = fallback.title end
-                    if tostring(row.description or "") == "" then row.description = fallback.description end
-                    if tostring(row.icon or "") == "" then row.icon = fallback.icon end
-                end
-            end
-        end
+    if tostring(lang):lower() ~= "english" and #community == 0 then
+        community = fetch_community_achievement_rows(appid, "english")
     end
 
     if next(schema) then
         local community_by_icon = {}
-        for _, row in ipairs(community) do
+        for idx, row in ipairs(community) do
             local base = tostring(row.icon or ""):match("([^/]+)$")
             if base then community_by_icon[base] = row end
         end
+        local schema_list = {}
         for name, m in pairs(schema) do
-            m.global_percent = tonumber(global_by_name[name]) or 0
+            schema_list[#schema_list + 1] = m
+        end
+        for idx, m in ipairs(schema_list) do
+            m.global_percent = tonumber(global_by_name[m.name]) or 0
             local base = tostring(m.icon or ""):match("([^/]+)$")
-            local row = base and community_by_icon[base] or nil
+            local row = (base and community_by_icon[base]) or community[idx]
             if row then
                 if row.title ~= "" then m.title = row.title end
                 if row.description ~= "" then m.description = row.description end
-                if row.icon ~= "" then m.icon = row.icon end
+                if row.icon ~= "" and (m.icon == "" or not m.icon:find("^https?://")) then m.icon = row.icon end
             end
         end
         local_achievement_meta_cache[key] = { time = now, by_name = schema, source = "local_schema:" .. schema_path }

@@ -1,5 +1,5 @@
-import { mappings, shortcutMappingKey } from '../../core/mappings';
-import { readShortcutOverviewField, shortcutExecutableIdentity, shortcutPathBasename } from '../../steam/shortcuts';
+import { findMappingByExe, findMappingForTitle, mappings, shortcutMappingKey } from '../../core/mappings';
+import { getShortcutAppById, getSteamAppStore, readShortcutOverviewField, shortcutExecutableIdentity, shortcutPathBasename } from '../../steam/shortcuts';
 
 export interface ShortcutRecord {
 	id: number;
@@ -19,7 +19,7 @@ export function isUnrealShippingExecutable(value: string): boolean {
 }
 
 export function getAllShortcutRecords(): ShortcutRecord[] {
-	const appStore = (window as any).appStore;
+	const appStore = getSteamAppStore();
 	if (!appStore?.m_mapApps) return [];
 	const records: ShortcutRecord[] = [];
 	const seen = new Set<number>();
@@ -34,6 +34,18 @@ export function getAllShortcutRecords(): ShortcutRecord[] {
 	try { for (const [id, app] of appStore.m_mapApps) add(id, app); } catch {}
 	try { for (const app of Array.from(appStore.allApps || []) as any[]) add(app?.appid, app); } catch {}
 	return records;
+}
+
+/** Find shortcuts that launch exactly the same executable. This intentionally
+ * ignores title and launch options: adding the same .exe twice is still a
+ * duplicate library entry even if its display name differs. */
+export function findShortcutDuplicatesByExecutable(shortcutAppId: number, executablePath: string): ShortcutRecord[] {
+	const target = shortcutExecutableIdentity(executablePath);
+	if (!target) return [];
+	return getAllShortcutRecords().filter(record => record.id !== shortcutAppId
+		&& shortcutExecutableIdentity(readShortcutOverviewField(
+			record.app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
+		)) === target);
 }
 
 function shortcutLaunchFingerprint(app: any): string {
@@ -61,4 +73,38 @@ export function findMappingForDuplicateShortcut(shortcutAppId: number): string |
 
 export function shortcutAlreadyLinked(id: number): boolean {
 	return /^\d+$/.test(String(mappings[shortcutMappingKey(id)] || ''));
+}
+
+/** Resolve existing mapping for a shortcut via ID, exact duplicate launch, executable path, or title. */
+export function findMappingForShortcut(
+	shortcutAppId?: string | number | null,
+	title?: string | null,
+	exePath?: string | null,
+): string | null {
+	const numId = normalizedShortcutAppId(shortcutAppId);
+	if (numId) {
+		const exact = mappings[shortcutMappingKey(numId)];
+		if (exact && /^\d+$/.test(String(exact))) return String(exact);
+		const dup = findMappingForDuplicateShortcut(numId);
+		if (dup && /^\d+$/.test(String(dup))) return String(dup);
+	}
+	if (exePath) {
+		const byExe = findMappingByExe(exePath);
+		if (byExe && /^\d+$/.test(String(byExe))) return String(byExe);
+	}
+	if (numId) {
+		const app = getShortcutAppById(numId);
+		if (app) {
+			const appExe = readShortcutOverviewField(app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
+			if (appExe) {
+				const byExe = findMappingByExe(appExe);
+				if (byExe && /^\d+$/.test(String(byExe))) return String(byExe);
+			}
+		}
+	}
+	if (title) {
+		const byTitle = findMappingForTitle(title, shortcutAppId);
+		if (byTitle && /^\d+$/.test(String(byTitle))) return String(byTitle);
+	}
+	return null;
 }

@@ -67,7 +67,7 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 		let el: HTMLElement | null = layoutAnchor as HTMLElement;
 		for (let i = 0; i < 8 && el && el.parentElement; i += 1) {
 			el = el.parentElement;
-			if (el && el.getAttribute('role') === 'region' && el.id !== 'gdl-game-info-panel' && el.id !== 'gdl-custom-links' && !el.closest('#gdl-injected')) {
+			if (el && el.getAttribute('role') === 'region' && !el.id?.startsWith('gdl-') && !el.closest('#gdl-library-injected')) {
 				anchorRegion = el;
 				break;
 			}
@@ -88,6 +88,30 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 					break;
 				}
 			}
+		}
+	}
+
+	if (!twoColumnRow || !contentColumn || !sidebarColumn) {
+		let cur: HTMLElement | null = noticeElement.parentElement;
+		while (cur && cur !== doc.body) {
+			const parent: HTMLElement | null = cur.parentElement;
+			if (parent && parent.children.length >= 2) {
+				const siblings = Array.from(parent.children).filter(c => c !== cur) as HTMLElement[];
+				const foundSidebar = siblings.find(s => {
+					const txt = (s.textContent || '').toLowerCase();
+					return txt.includes('nota') || txt.includes('note') || txt.includes('captura') || txt.includes('screenshot') || s.querySelector('[role="region"]');
+				}) || (siblings.length === 1 ? siblings[0] : null);
+				if (foundSidebar) {
+					twoColumnRow = parent;
+					contentColumn = cur;
+					sidebarColumn = foundSidebar;
+					if (!anchorRegion) {
+						anchorRegion = (foundSidebar.querySelector('[role="region"]') || foundSidebar.firstElementChild || foundSidebar) as HTMLElement;
+					}
+					break;
+				}
+			}
+			cur = parent;
 		}
 	}
 

@@ -38,9 +38,13 @@ export function createPrimaryLinksBar(
 	const links = linkedGameDestinations(options);
 	const linkBar = doc.createElement('div');
 	linkBar.className = 'gdl-link-bar-inner';
-	linkBar.innerHTML = links.map(([label, url]) =>
+	const primaryLinks = links.map(([label, url]) =>
 		`<a class="gdl-primary-link" href="${url}" data-gdl-open-url="${url}">${label}</a>`,
 	).join('');
+	const overflowLinks = links.slice(3).map(([label, url]) =>
+		`<a class="gdl-primary-overflow-link" href="${url}" data-gdl-open-url="${url}">${label}</a>`,
+	).join('');
+	linkBar.innerHTML = `${primaryLinks}<details class="gdl-primary-more"><summary aria-label="Más enlaces">•••</summary><div class="gdl-primary-more-menu">${overflowLinks}</div></details>`;
 
 	if (layout.anchorRegion) {
 		const linkBarOuter = doc.createElement('div');
@@ -60,6 +64,7 @@ export function createPrimaryLinksBar(
 		linkBarOuter.id = 'gdl-link-bar';
 		return linkBarOuter;
 	} else {
+		linkBar.id = 'gdl-link-bar';
 		linkBar.style.cssText = 'display:flex;align-items:center;padding:8px 16px;background:#2a3040;border-bottom:1px solid rgba(255,255,255,0.06);';
 		return linkBar;
 	}

@@ -3,6 +3,12 @@ import { injectLibraryStyle } from './inject';
 export function ensureInfoPanelStyles(doc: Document): void {
 	injectLibraryStyle(doc, 'gdl-info-panel-styles', `
 		[data-gdl-game-info-button="1"] { cursor:pointer; }
+		[data-gdl-game-info-button="1"] svg,
+		[data-gdl-game-info-button="1"] .SVGIcon_Information {
+			width: 20px !important;
+			height: 20px !important;
+			display: block !important;
+		}
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback {
 			width:40px;height:40px;display:flex;align-items:center;justify-content:center;
 			padding:0;border:0;border-radius:2px;background:rgba(58,69,83,.72);color:#a8b0ba;
@@ -31,7 +37,6 @@ export function ensureInfoPanelStyles(doc: Document): void {
 
 		/* When the current Steam class modules resolve successfully, Steam owns
 		   the outer panel, expansion animation, column geometry and typography. */
-		#gdl-game-info-panel ._1Id6ZFEUVa5PKEMIvSg4nE,
 		#gdl-game-info-panel .gdl-info-portrait {
 			width: 109px !important;
 			min-width: 109px !important;
@@ -42,35 +47,28 @@ export function ensureInfoPanelStyles(doc: Document): void {
 			overflow: hidden !important;
 			border-radius: 2px !important;
 		}
-		#gdl-game-info-panel ._1Id6ZFEUVa5PKEMIvSg4nE img,
-		#gdl-game-info-panel .gdl-info-portrait img,
-		#gdl-game-info-panel ._3JzkHhrsBKThuVrwsu3Q7T {
+		#gdl-game-info-panel .gdl-info-portrait img {
 			width: 100% !important;
 			height: 100% !important;
 			object-fit: cover !important;
 			display: block !important;
 		}
-		#gdl-game-info-panel ._2ZcNQxY8YknnhNa4ZvIoU4,
 		#gdl-game-info-panel .gdl-info-associations {
 			display: flex !important;
 			flex-direction: column !important;
 			gap: 8px !important;
 		}
-		#gdl-game-info-panel ._-9icu8LqT7inRSJISgnkh,
 		#gdl-game-info-panel .gdl-info-row {
 			display: flex !important;
 			flex-direction: column !important;
 			margin-bottom: 4px !important;
 		}
-		#gdl-game-info-panel ._1vYL2q-91QLy-FBzntE7E5,
 		#gdl-game-info-panel .gdl-info-label {
 			font-size: 11px !important;
 			color: #8f98a0 !important;
 			margin-bottom: 2px !important;
 			text-transform: uppercase !important;
 		}
-		#gdl-game-info-panel ._2j8Xh4pPOOgF4MF6FVUI28,
-		#gdl-game-info-panel .izVv8jajo7mehdAkZozAK,
 		#gdl-game-info-panel .gdl-info-value {
 			font-size: 13px !important;
 			color: #dcdedf !important;

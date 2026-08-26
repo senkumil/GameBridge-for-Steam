@@ -16,6 +16,7 @@ import {
 	renderLocalAchievementSidebar,
 } from '../achievements/runtime';
 import { fetchLocalAchievementData } from '../achievements/service';
+import { ensureCloudStatus } from './cloud-status';
 
 export interface LinkedAchievementChromeContext {
 	steamAppId: string;
@@ -101,6 +102,7 @@ export async function finalizeLinkedAchievements(doc: Document, context: LinkedA
 		if (local?.found && Array.isArray(local.achievements) && local.total > 0) {
 			renderLocalAchievementSidebar(doc, local);
 			ensureLocalPlaybarStat(doc, local);
+			ensureCloudStatus(doc);
 			return;
 		}
 	} catch (error) {
@@ -108,4 +110,5 @@ export async function finalizeLinkedAchievements(doc: Document, context: LinkedA
 	}
 
 	await injectPlayBarAchievements(doc, context);
+	if (context.isCurrent()) ensureCloudStatus(doc);
 }

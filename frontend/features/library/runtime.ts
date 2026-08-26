@@ -2,13 +2,13 @@ import type { CommunityContentItem, FriendCategories, NewsItem, SteamGameData } 
 import { backendLog } from '../../api/backend';
 import { CACHE_TTL, cacheGet } from '../../core/cache';
 import { getGameData, gameDataCache } from '../../core/game-data';
-import { findMappingForTitle, mappings, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
-import { escapeHtml, normalizeTitle, templateToRegex } from '../../core/text';
+import { mappings, loadMappings, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
+import { escapeHtml, stripSurroundingQuotes, templateToRegex } from '../../core/text';
 import { findElementByText } from '../../core/dom';
 import { FEED_CLASSES, POST_CLASSES } from '../../steam/css';
-import { gdlText, getSteamLanguage, loc, steamLanguageSync } from '../../steam/localization';
+import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
 import { installSteamNavigation } from '../../steam/navigation';
-import { findActiveShortcutAppId } from '../../steam/shortcuts';
+import { findActiveShortcutAppId, findShortcutAppIdByName } from '../../steam/shortcuts';
 import { GDL_INJECTED } from './constants';
 import { spoofArtwork } from './artwork';
 import { getCommunityContent, getNews } from './news';
@@ -22,16 +22,31 @@ import { renderLinkedGamePage } from './renderer';
 import { finalizeLinkedAchievements } from './achievement-chrome';
 import { cacheLocalAchievements, hasCachedLocalAchievements } from '../achievements/runtime';
 import { fetchLocalAchievementData } from '../achievements/service';
-import { normalizedShortcutAppId, scheduleShortcutInspection, syncLinkedGameNote } from '../shortcuts/runtime';
+import { findMappingForShortcut, isShortcutDismissed, normalizedShortcutAppId, scheduleShortcutInspection, syncLinkedGameNote } from '../shortcuts/runtime';
+import { getPreferences } from '../../core/preferences';
+import { injectPlaytimeFallbackStats, removePlaytimeFallbackStats } from '../playtime/tracker';
+import { hideNoticeQuick } from './notice';
+import { hasVisibleNativeLinksBar, reconcileLibraryNavigation, routedSteamAppId } from './native-route';
+export { hideNoticeQuick } from './notice';
 
 export interface LibraryRuntimeHost {
 	getMainWindowDoc: () => Document | null;
 }
 
 let configuredLibraryRuntimeHost: LibraryRuntimeHost | null = null;
+let currentInjectedDocument: Document | null = null;
 let currentInjectedAppId: string | null = null;
 let currentInjectedShortcutAppId: string | null = null;
-let injectionInFlight: string | null = null;
+let injectionGeneration = 0;
+let injectionInFlight: { doc: Document; steamAppId: string; generation: number } | null = null;
+let navigationCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+let navigationCleanupDocument: Document | null = null;
+
+function isUsableLibraryDocument(doc: Document | null | undefined): doc is Document {
+	try {
+		return Boolean(doc?.body && doc.documentElement?.isConnected && doc.defaultView && !doc.defaultView.closed);
+	} catch { return false; }
+}
 
 export function configureLibraryRuntimeHost(host: LibraryRuntimeHost): void {
 	configuredLibraryRuntimeHost = host;
@@ -42,58 +57,108 @@ function libraryRuntimeHost(): LibraryRuntimeHost {
 	return configuredLibraryRuntimeHost;
 }
 
-export function refreshLibraryArtwork(appId: number): void {
-	try {
-		const steamClient = (window as any).SteamClient;
-		if (steamClient?.URL?.ExecuteSteamURL) {
-			steamClient.URL.ExecuteSteamURL('steam://nav/games/details/' + appId);
-			return;
-		}
-	} catch {}
-	const doc = libraryRuntimeHost().getMainWindowDoc();
-	if (!doc) return;
-	try {
-		currentInjectedAppId = null;
-		currentInjectedShortcutAppId = null;
-		cleanupInjection(doc);
-		void tryInjectLibraryData(doc);
-	} catch {}
+function setCurrentInjection(doc: Document, steamAppId: string, shortcutAppId: string | null): number {
+	if (currentInjectedDocument !== doc || currentInjectedAppId !== steamAppId || currentInjectedShortcutAppId !== shortcutAppId) injectionGeneration += 1;
+	currentInjectedDocument = doc;
+	currentInjectedAppId = steamAppId;
+	currentInjectedShortcutAppId = shortcutAppId;
+	return injectionGeneration;
 }
 
+function clearCurrentInjection(doc?: Document | null): void {
+	if (doc && currentInjectedDocument !== doc) return;
+	injectionGeneration += 1;
+	if (!doc || injectionInFlight?.doc === doc) injectionInFlight = null;
+	currentInjectedDocument = null;
+	currentInjectedAppId = null;
+	currentInjectedShortcutAppId = null;
+}
 
+function isCurrentRender(doc: Document, appId: string, generation: number): boolean {
+	return currentInjectedDocument === doc && currentInjectedAppId === appId && injectionGeneration === generation;
+}
+
+export function refreshLibraryArtwork(appId?: number): void {
+	if (Number(appId) >= 2147483648) {
+		try {
+			const urlApi = (window as any).SteamClient?.URL;
+			if (typeof urlApi?.ExecuteSteamURL === 'function') {
+				urlApi.ExecuteSteamURL(`steam://nav/games/details/${appId}`);
+				return;
+			}
+		} catch {}
+	}
+	const doc = libraryRuntimeHost().getMainWindowDoc();
+	if (isUsableLibraryDocument(doc)) void tryInjectLibraryData(doc).catch(() => {});
+}
 
 const NON_STEAM_NOTICE_FALLBACK =
 	'Some detailed information on %1$s is unavailable because it is a non-Steam game or mod. ' +
 	'Steam will still manage launching the game for you and in most cases the in-game overlay will be available.';
 
+const KNOWN_NOTICE_PATTERNS = [
+	/(?:sobre|on|sur|über|para|delle|da)\s+([^\n\r]+?)\s+(?:no está disponible|is unavailable|n'est pas disponible|ist nicht verfügbar|não está disponível|non sono disponibili)/i,
+	/(?:información sobre|information on|information sur|informationen über)\s+([^\n\r]+?)\s+(?:no está disponible|is unavailable|n'est pas disponible|ist nicht verfügbar)/i,
+];
+
 /** Find Steam's localized non-Steam shortcut notice and extract its title. */
 export function findNonSteamNotice(doc: Document): { element: Element; title: string } | null {
+	if (!doc) return null;
 	const template = loc('AppDetails_Shortcut_Explanation', NON_STEAM_NOTICE_FALLBACK);
 	const anchorText = template
 		.split('%1$s')
 		.reduce((left, right) => (right.trim().length > left.trim().length ? right : left), '')
 		.trim()
 		.slice(0, 60);
-	if (!anchorText) return null;
-	const element = findElementByText(doc, anchorText);
-	if (!element) return null;
-	const regex = templateToRegex(template);
-	const match = regex ? (element.textContent || '').match(regex) : null;
-	if (!match?.[1]) return null;
-	return { element, title: match[1].trim() };
-}
 
-/** Hide the default non-Steam notice immediately to prevent a flash before cached rendering. */
-export function hideNoticeQuick(noticeElement: Element): void {
-	let element: HTMLElement | null = noticeElement as HTMLElement;
-	for (let depth = 0; depth < 4 && element; depth += 1) {
-		if (depth > 0 && element.querySelector('[data-nsp]')) break;
-		element.style.display = 'none';
-		element.setAttribute('data-gdl-hidden', '1');
-		const parent = element.parentElement;
-		if (!parent || parent.childElementCount > 1) break;
-		element = parent;
+	let element: Element | null = null;
+	if (anchorText) {
+		element = findElementByText(doc, anchorText);
 	}
+
+	// Multi-language anchor fallbacks if localized token did not resolve
+	if (!element) {
+		const anchors = [
+			'no es un juego de Steam',
+			'no es un juego o mod',
+			'non-Steam game',
+			'is unavailable because it is a non-Steam game',
+			'nicht von Steam',
+			"n'est pas un jeu Steam",
+			'não é um jogo Steam',
+			'non è un gioco di Steam',
+			'не из Steam',
+		];
+		for (const anchor of anchors) {
+			element = findElementByText(doc, anchor);
+			if (element) break;
+		}
+	}
+	if (!element) return null;
+	const content = element.textContent || '';
+	// 1. Try template regex
+	const regex = templateToRegex(template);
+	const match = regex ? content.match(regex) : null;
+	if (match?.[1]?.trim()) {
+		return { element, title: stripSurroundingQuotes(match[1].trim()) };
+	}
+
+	// 2. Try known multi-language notice patterns
+	for (const pattern of KNOWN_NOTICE_PATTERNS) {
+		const m = content.match(pattern);
+		if (m?.[1]?.trim()) {
+			return { element, title: stripSurroundingQuotes(m[1].trim()) };
+		}
+	}
+
+	// 3. Fallback: extract title from library title heading in page
+	const heading = doc.querySelector('[class*="header_Title"], [class*="appheader_Title"], [class*="game_title"], [class*="Title_"]') as HTMLElement | null;
+	const headingTitle = heading?.textContent?.trim() || '';
+	if (headingTitle) {
+		return { element, title: stripSurroundingQuotes(headingTitle) };
+	}
+
+	return null;
 }
 
 function insertSkeleton(doc: Document, noticeElement: Element): void {
@@ -112,10 +177,6 @@ function insertSkeleton(doc: Document, noticeElement: Element): void {
 	host.appendChild(skeleton);
 }
 
-function isCurrentRender(appId: string): boolean {
-	return currentInjectedAppId === appId;
-}
-
 function renderLinkedPage(
 	doc: Document,
 	notice: Element,
@@ -124,16 +185,19 @@ function renderLinkedPage(
 	newsItems: NewsItem[],
 	friendResult: FriendCategories | null | undefined,
 	communityItems: CommunityContentItem[] | undefined,
-): void {
-	renderLinkedGamePage(doc, notice, data, steamAppId, newsItems, friendResult, communityItems, {
+	generation: number,
+): boolean {
+	return renderLinkedGamePage(doc, notice, data, steamAppId, newsItems, friendResult, communityItems, {
 		shortcutAppId: currentInjectedShortcutAppId,
-		isCurrent: () => isCurrentRender(steamAppId),
+		isCurrent: () => isCurrentRender(doc, steamAppId, generation),
 	});
 }
 
 /** Remove GDL desktop-Library UI and restore Steam's original shortcut notice. */
 export function cleanupInjection(doc: Document): void {
+	cancelNavigationCleanup(doc);
 	removeNativeGameChrome(doc, true);
+	removePlaytimeFallbackStats(doc);
 	disposeStatusPostBox(doc);
 	disposeActivityFeedInteractions(doc);
 	disposeTradingCardPreview(doc);
@@ -144,10 +208,36 @@ export function cleanupInjection(doc: Document): void {
 		'gdl-trading-cards-section', 'gdl-dlc-section', 'gdl-workshop-section',
 		'gdl-playbar-achievements', 'gdl-link-bar', 'gdl-community-content', 'gdl-activity-feed',
 	]) doc.getElementById(id)?.remove();
-	doc.querySelectorAll('[data-gdl-hidden]').forEach(element => {
-		(element as HTMLElement).style.display = '';
-		element.removeAttribute('data-gdl-hidden');
-	});
+	doc.querySelectorAll('[data-gdl-hidden]').forEach(element => { (element as HTMLElement).style.display = ''; element.removeAttribute('data-gdl-hidden'); });
+}
+export function handleLibraryNavigation(doc: Document): void {
+	if (isUsableLibraryDocument(doc) && (currentInjectedDocument === doc || doc.getElementById(GDL_INJECTED))) {
+		clearCurrentInjection(doc);
+		cleanupInjection(doc);
+	}
+	reconcileLibraryNavigation(doc, { currentInjectedAppId, currentInjectedShortcutAppId, clearCurrentInjection, cleanupInjection });
+}
+function cancelNavigationCleanup(doc?: Document): void {
+	if (doc && navigationCleanupDocument && navigationCleanupDocument !== doc) return;
+	if (navigationCleanupTimer) clearTimeout(navigationCleanupTimer);
+	navigationCleanupTimer = null;
+	navigationCleanupDocument = null;
+}
+
+function scheduleNavigationCleanup(doc: Document): void {
+	cancelNavigationCleanup();
+	navigationCleanupDocument = doc;
+	navigationCleanupTimer = setTimeout(() => {
+		navigationCleanupTimer = null;
+		navigationCleanupDocument = null;
+		if (!isUsableLibraryDocument(doc)) return;
+		if (findNonSteamNotice(doc)) {
+			void tryInjectLibraryData(doc).catch(error => backendLog('Library recovery failed: ' + String(error)));
+			return;
+		}
+		clearCurrentInjection(doc);
+		cleanupInjection(doc);
+	}, 350);
 }
 
 async function warmLocalAchievements(steamAppId: string, shortcutAppId: string | null): Promise<void> {
@@ -158,152 +248,247 @@ async function warmLocalAchievements(steamAppId: string, shortcutAppId: string |
 	}
 }
 
-function finalizeAchievements(doc: Document, steamAppId: string, fallbackTotal: number): void {
+function finalizeAchievements(doc: Document, steamAppId: string, fallbackTotal: number, generation = injectionGeneration): void {
 	void finalizeLinkedAchievements(doc, {
 		steamAppId,
 		fallbackTotal,
 		stateAppId: currentInjectedShortcutAppId || undefined,
-		isCurrent: () => isCurrentRender(steamAppId),
+		isCurrent: () => isCurrentRender(doc, steamAppId, generation),
 	}).catch(error => backendLog('Achievements error: ' + String(error)));
 }
 
 export async function tryInjectLibraryData(doc: Document): Promise<void> {
-	installSteamNavigation(doc);
+	if (!isUsableLibraryDocument(doc)) return;
+	const activeLibraryDoc = configuredLibraryRuntimeHost?.getMainWindowDoc() || null;
+	if (isUsableLibraryDocument(activeLibraryDoc) && activeLibraryDoc !== doc) return;
+	if (currentInjectedDocument && currentInjectedDocument !== doc
+		&& (!isUsableLibraryDocument(currentInjectedDocument) || configuredLibraryRuntimeHost?.getMainWindowDoc() === doc)) {
+		const previousDoc = currentInjectedDocument;
+		clearCurrentInjection();
+		if (isUsableLibraryDocument(previousDoc)) cleanupInjection(previousDoc);
+	}
+	// Public Steam AppIDs and Steam's own links row are authoritative proof that
+	// this is a native game. This guard must run before the notice heuristic:
+	// native pages must never inherit GDL's cached feed, play-bar, or info panel.
+	const routedAppId = routedSteamAppId(doc);
+	if ((routedAppId !== null && routedAppId > 0 && routedAppId < 2147483648)
+		|| hasVisibleNativeLinksBar(doc)) {
+		clearCurrentInjection(doc);
+		cleanupInjection(doc);
+		return;
+	}
 	const noticeInfo = findNonSteamNotice(doc);
 	if (!noticeInfo) {
-		cleanupInjection(doc);
-		currentInjectedAppId = null;
-		currentInjectedShortcutAppId = null;
+		handleLibraryNavigation(doc);
+		scheduleNavigationCleanup(doc);
 		return;
 	}
-
+	installSteamNavigation(doc);
+	cancelNavigationCleanup(doc);
 	const notice = noticeInfo.element;
 	const gameTitle = noticeInfo.title;
-	const activeShortcutAppId = findActiveShortcutAppId(doc, gameTitle);
-	const steamAppId = findMappingForTitle(gameTitle, activeShortcutAppId);
+	if (Object.keys(mappings).length === 0) {
+		await loadMappings().catch(() => {});
+	}
+	const currentNotice = findNonSteamNotice(doc);
+	if (!notice.isConnected || !currentNotice || currentNotice.element !== notice || currentNotice.title !== gameTitle) {
+		setTimeout(() => { if (isUsableLibraryDocument(doc)) void tryInjectLibraryData(doc); }, 80);
+		return;
+	}
+	const shortcutByName = findShortcutAppIdByName(gameTitle);
+	const routedShortcutAppId = findActiveShortcutAppId(doc, '');
+	const titleMatchedShortcutAppId = findActiveShortcutAppId(doc, gameTitle);
+	const activeShortcutAppId = titleMatchedShortcutAppId || routedShortcutAppId || (shortcutByName ? String(shortcutByName) : null);
+	const activeMapping = findMappingForShortcut(activeShortcutAppId, gameTitle);
+	const steamAppId = activeMapping;
+	const resolvedShortcutAppId = activeShortcutAppId;
 	if (!steamAppId || !/^\d+$/.test(steamAppId)) {
-		const visibleShortcutId = normalizedShortcutAppId(activeShortcutAppId);
-		if (visibleShortcutId) {
-			backendLog(`Visible unlinked shortcut queued for automatic detection: ${gameTitle} (${visibleShortcutId})`);
-			scheduleShortcutInspection({ id: visibleShortcutId, title: gameTitle });
+		let visibleShortcutId = normalizedShortcutAppId(activeShortcutAppId);
+		if (!visibleShortcutId) {
+			visibleShortcutId = findShortcutAppIdByName(gameTitle);
 		}
-		if (currentInjectedAppId) cleanupInjection(doc);
-		currentInjectedAppId = null;
-		currentInjectedShortcutAppId = null;
+		if (!visibleShortcutId) {
+			let hash = 0;
+			for (let i = 0; i < gameTitle.length; i++) hash = (hash * 31 + gameTitle.charCodeAt(i)) >>> 0;
+			visibleShortcutId = 2147483648 + (hash % 1000000000);
+		}
+		void injectPlaytimeFallbackStats(doc, visibleShortcutId, gameTitle, undefined,
+			() => isUsableLibraryDocument(doc) && !doc.getElementById(GDL_INJECTED)
+				&& !findMappingForShortcut(String(visibleShortcutId), gameTitle));
+		if (currentInjectedDocument === doc) clearCurrentInjection(doc);
+		cleanupInjection(doc);
+		if (getPreferences().autoDetectShortcuts && visibleShortcutId && !isShortcutDismissed(visibleShortcutId)) {
+			scheduleShortcutInspection({ id: visibleShortcutId, title: gameTitle }, 120, true, false, true);
+		}
 		return;
 	}
 
-	const linkedShortcutId = normalizedShortcutAppId(activeShortcutAppId);
-	if (linkedShortcutId) scheduleShortcutInspection({ id: linkedShortcutId, title: gameTitle }, 700, true);
-
-	if (activeShortcutAppId && mappings[normalizeTitle(gameTitle)] && !mappings[shortcutMappingKey(activeShortcutAppId)]) {
+	if (activeShortcutAppId && !mappings[shortcutMappingKey(activeShortcutAppId)]) {
 		const activeKey = shortcutMappingKey(activeShortcutAppId);
 		mappings[activeKey] = steamAppId;
 		void saveMappingChecked(activeKey, steamAppId);
-		backendLog(`Recovered mapping for active shortcut ${activeShortcutAppId} from title alias`);
+		backendLog(`Recovered mapping for active shortcut ${activeShortcutAppId}`);
 	}
 
-	if (currentInjectedAppId === steamAppId && doc.getElementById(GDL_INJECTED) && doc.getElementById('gdl-link-bar')) {
-		if (activeShortcutAppId) currentInjectedShortcutAppId = activeShortcutAppId;
+	const existing = doc.getElementById(GDL_INJECTED) as HTMLElement | null;
+	const mountedShortcutAppId = existing?.dataset.gdlShortcutAppId
+		|| (currentInjectedDocument === doc && currentInjectedAppId === steamAppId ? currentInjectedShortcutAppId : null);
+	const shortcutIdentityChanged = Boolean(mountedShortcutAppId && resolvedShortcutAppId && mountedShortcutAppId !== resolvedShortcutAppId);
+	if (existing && doc.getElementById('gdl-link-bar') && !shortcutIdentityChanged
+		&& (!existing.dataset.gdlSteamAppId || existing.dataset.gdlSteamAppId === steamAppId)) {
+		const generation = setCurrentInjection(doc, steamAppId, resolvedShortcutAppId);
+		existing.dataset.gdlSteamAppId = steamAppId;
+		if (resolvedShortcutAppId) existing.dataset.gdlShortcutAppId = resolvedShortcutAppId;
 		const nativeInfo = getCurrentNativeGameInfo();
 		if (nativeInfo?.key === steamAppId) ensureNativeGameChrome(doc, nativeInfo);
 		if (!doc.getElementById('gdl-playbar-achievements')) {
-			finalizeAchievements(doc, steamAppId, gameDataCache[steamAppId]?.achievements?.total || 0);
+			finalizeAchievements(doc, steamAppId, gameDataCache[steamAppId]?.achievements?.total || 0, generation);
 		}
+		const numId = Number(resolvedShortcutAppId || 0);
+		if (numId >= 2147483648) void injectPlaytimeFallbackStats(doc, numId, gameTitle, steamAppId,
+			() => isCurrentRender(doc, steamAppId, generation));
 		return;
 	}
 
-	if (currentInjectedAppId && currentInjectedAppId !== steamAppId) cleanupInjection(doc);
-	currentInjectedAppId = steamAppId;
-	currentInjectedShortcutAppId = activeShortcutAppId;
+	if (existing && existing.dataset.gdlSteamAppId !== steamAppId) {
+		clearCurrentInjection(doc);
+		cleanupInjection(doc);
+	}
+	if (currentInjectedDocument && currentInjectedDocument !== doc) {
+		const previousDoc = currentInjectedDocument;
+		clearCurrentInjection(previousDoc);
+		if (isUsableLibraryDocument(previousDoc)) cleanupInjection(previousDoc);
+	} else if (currentInjectedDocument === doc && currentInjectedAppId && currentInjectedAppId !== steamAppId) {
+		clearCurrentInjection(doc);
+		cleanupInjection(doc);
+	}
+	const generation = setCurrentInjection(doc, steamAppId, resolvedShortcutAppId);
 	hideNoticeQuick(notice);
 	backendLog(`Library page: "${gameTitle}" -> injecting data for ${steamAppId}`);
 
-	const language = await getSteamLanguage(true).catch(() => steamLanguageSync() || 'english');
-	const cachedData = (gameDataCache[`${steamAppId}:${language}`] !== undefined
-		? gameDataCache[`${steamAppId}:${language}`]
-		: cacheGet<SteamGameData>(`gamedata_v2_${steamAppId}_${language}`, CACHE_TTL.gameMetadata)) || null;
+	const numShortcutId = Number(resolvedShortcutAppId || 0);
+	if (numShortcutId >= 2147483648) {
+		void injectPlaytimeFallbackStats(doc, numShortcutId, gameTitle, steamAppId,
+			() => isCurrentRender(doc, steamAppId, generation));
+		void spoofArtwork(numShortcutId, steamAppId, gameTitle)
+			.catch(error => backendLog('Early artwork auto-repair failed: ' + String(error)));
+	}
+
+	const language = steamLanguageSync() || 'spanish';
+	const cachedData = gameDataCache[steamAppId]
+		|| (gameDataCache[`${steamAppId}:${language}`] !== undefined
+			? gameDataCache[`${steamAppId}:${language}`]
+			: cacheGet<SteamGameData>(`gamedata_v2_${steamAppId}_${language}`, CACHE_TTL.gameMetadata))
+		|| cacheGet<SteamGameData>(`gamedata_v2_${steamAppId}_spanish`, CACHE_TTL.gameMetadata)
+		|| cacheGet<SteamGameData>(`gamedata_v2_${steamAppId}_english`, CACHE_TTL.gameMetadata)
+		|| null;
 	let renderedFromCache = false;
-	let cacheMissedSections = false;
-	if (cachedData && !doc.getElementById(GDL_INJECTED)) {
+	if (cachedData) {
 		gameDataCache[steamAppId] = cachedData;
 		const cachedNews = cacheGet<NewsItem[]>(`events8_${language}-en_${steamAppId}`, CACHE_TTL.news) || [];
 		const cachedFriends = cacheGet<FriendCategories>('friends_' + steamAppId, CACHE_TTL.friends) || null;
 		const cachedCommunity = cacheGet<CommunityContentItem[]>(`community6_${language}_${steamAppId}`, CACHE_TTL.communityContent) || [];
-		renderLinkedPage(doc, notice, cachedData, steamAppId, cachedNews, cachedFriends, cachedCommunity);
-		renderedFromCache = true;
-		cacheMissedSections = cachedNews.length === 0 || !cachedFriends || cachedCommunity.length === 0;
+		renderedFromCache = renderLinkedPage(doc, notice, cachedData, steamAppId, cachedNews, cachedFriends, cachedCommunity, generation);
+		if (renderedFromCache) finalizeAchievements(doc, steamAppId, cachedData.achievements?.total || 0, generation);
 	} else if (!cachedData) {
 		insertSkeleton(doc, notice);
 	}
 
-	if (injectionInFlight === steamAppId) return;
-	injectionInFlight = steamAppId;
+	if (injectionInFlight?.doc === doc && injectionInFlight.steamAppId === steamAppId && injectionInFlight.generation === generation) return;
+	const flight = { doc, steamAppId, generation };
+	injectionInFlight = flight;
+
+	// Warm local achievements and finalize achievement UI in parallel with game data fetch
+	void warmLocalAchievements(steamAppId, resolvedShortcutAppId)
+		.then(() => {
+			if (isCurrentRender(doc, steamAppId, generation)) {
+				const total = gameDataCache[steamAppId]?.achievements?.total || cachedData?.achievements?.total || 0;
+				finalizeAchievements(doc, steamAppId, total, generation);
+			}
+		})
+		.catch(() => {});
+
 	let data: SteamGameData | null = null;
-	let newsItems: NewsItem[] = [];
-	let friendData: { html: string; data: FriendCategories | null } = { html: '', data: null };
-	let communityItems: CommunityContentItem[] = [];
 	try {
-		[data, newsItems, friendData, communityItems] = await Promise.all([
-			getGameData(steamAppId),
-			getNews(steamAppId),
-			getFriendData(steamAppId),
-			getCommunityContent(steamAppId),
-		]);
-		await warmLocalAchievements(steamAppId, activeShortcutAppId).catch(() => {});
+		data = await getGameData(steamAppId);
 	} finally {
-		injectionInFlight = null;
+		if (injectionInFlight === flight) injectionInFlight = null;
 	}
 
-	if (!data || currentInjectedAppId !== steamAppId) {
+	if (!data || !isCurrentRender(doc, steamAppId, generation)) {
 		if (!data) backendLog('No game data for: ' + steamAppId);
 		return;
 	}
 
 	void syncLinkedGameNote(gameTitle || data.name, data, steamAppId);
-	const artworkShortcutId = Number(currentInjectedShortcutAppId || activeShortcutAppId || '');
+	const artworkShortcutId = Number(currentInjectedShortcutAppId || resolvedShortcutAppId || '');
 	if (Number.isInteger(artworkShortcutId) && artworkShortcutId >= 2147483648) {
 		void spoofArtwork(artworkShortcutId, steamAppId, data.name || gameTitle)
-			.then(logoApplied => {
-				if (logoApplied && currentInjectedAppId === steamAppId && currentInjectedShortcutAppId === String(artworkShortcutId)) {
-					refreshLibraryArtwork(artworkShortcutId);
-				}
-			})
 			.catch(error => backendLog('Artwork auto-repair failed: ' + String(error)));
 	}
 
-	if (!renderedFromCache || (cacheMissedSections && (newsItems.length > 0 || friendData.data?.totalCount || communityItems.length > 0))) {
-		renderLinkedPage(doc, notice, data, steamAppId, newsItems, friendData.data, communityItems);
-	} else {
-		const feed = doc.getElementById('gdl-activity-feed');
-		if (feed && newsItems.length > 0) {
-			feed.innerHTML = renderUnifiedActivityFeed(steamAppId, currentInjectedShortcutAppId, newsItems, data.header_image || '');
-		}
-	}
+	// Fetch dynamic content streams in parallel so slow endpoints don't block each other
+	const newsPromise = getNews(steamAppId).catch((): NewsItem[] => []);
+	const friendPromise = getFriendData(steamAppId).catch(() => ({ html: '', data: null as FriendCategories | null }));
+	const communityPromise = getCommunityContent(steamAppId).catch((): CommunityContentItem[] => []);
 
-	void hydrateFriendPersonas(doc, friendData.data, steamAppId, data.name);
-	void populateActivityFeed(doc, steamAppId, data.name, data.header_image || '')
-		.catch(error => backendLog('Activity feed error: ' + String(error)));
-	finalizeAchievements(doc, steamAppId, data.achievements?.total || 0);
+	if (!renderedFromCache) {
+		const [newsItems, friendData, communityItems] = await Promise.all([
+			newsPromise,
+			friendPromise,
+			communityPromise,
+		]);
+		if (!isCurrentRender(doc, steamAppId, generation)) return;
+		const latestNotice = findNonSteamNotice(doc);
+		if (!latestNotice || !renderLinkedPage(doc, latestNotice.element, data, steamAppId, newsItems, friendData.data, communityItems, generation)) {
+			// Steam can detach its native notice while a background stream is
+			// resolving. The stable legacy runtime kept the already rendered page;
+			// invalidating it here causes an endless re-render/removal cycle.
+			return;
+		}
+		void hydrateFriendPersonas(doc, friendData.data, steamAppId, data.name);
+		void populateActivityFeed(doc, steamAppId, data.name, data.header_image || '')
+			.catch(error => backendLog('Activity feed error: ' + String(error)));
+		finalizeAchievements(doc, steamAppId, data.achievements?.total || 0, generation);
+	} else {
+		// Keep the cached layout mounted. Rebuilding it when one slow optional
+		// stream arrives tears down Steam's columns and causes the visible flash
+		// seen during startup; individual sections can hydrate in place instead.
+		finalizeAchievements(doc, steamAppId, data.achievements?.total || 0, generation);
+		void newsPromise.then(newsItems => {
+			if (!isCurrentRender(doc, steamAppId, generation) || newsItems.length === 0) return;
+			const feed = doc.getElementById('gdl-activity-feed');
+			if (feed) {
+				feed.innerHTML = renderUnifiedActivityFeed(steamAppId, currentInjectedShortcutAppId, newsItems, data?.header_image || '');
+			}
+			void populateActivityFeed(doc, steamAppId, data?.name || '', data?.header_image || '')
+				.catch(error => backendLog('Activity feed error: ' + String(error)));
+		});
+		void friendPromise.then(friendData => {
+			if (!isCurrentRender(doc, steamAppId, generation) || !friendData.data) return;
+			void hydrateFriendPersonas(doc, friendData.data, steamAppId, data?.name || '');
+		});
+	}
 }
 
 export function getCurrentInjectedAppId(): string | null { return currentInjectedAppId; }
 export function getCurrentInjectedShortcutAppId(): string | null { return currentInjectedShortcutAppId; }
-
-export function resetLibraryInjection(reinject = false): void {
-	const doc = libraryRuntimeHost().getMainWindowDoc();
-	currentInjectedAppId = null;
-	currentInjectedShortcutAppId = null;
-	if (!doc) return;
+export function resetLibraryInjection(reinject = false, targetDoc?: Document | null): void {
+	const liveDoc = libraryRuntimeHost().getMainWindowDoc();
+	const doc = isUsableLibraryDocument(liveDoc) ? liveDoc : targetDoc;
+	if (!doc) {
+		cancelNavigationCleanup();
+		clearCurrentInjection();
+		return;
+	}
+	clearCurrentInjection(doc);
 	cleanupInjection(doc);
 	if (reinject) void tryInjectLibraryData(doc).catch(error => backendLog('Library reinjection failed: ' + error));
 }
-
 export function disposeLibraryRuntime(): void {
-	const doc = configuredLibraryRuntimeHost?.getMainWindowDoc() || null;
+	const doc = currentInjectedDocument || configuredLibraryRuntimeHost?.getMainWindowDoc() || null;
 	if (doc) cleanupInjection(doc);
-	currentInjectedAppId = null;
-	currentInjectedShortcutAppId = null;
-	injectionInFlight = null;
+	cancelNavigationCleanup();
+	clearCurrentInjection();
 	configuredLibraryRuntimeHost = null;
 }

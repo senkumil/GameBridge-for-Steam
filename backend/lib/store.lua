@@ -3,7 +3,7 @@ local logger = deps.logger
 local http = deps.http
 local cjson = deps.cjson
 local util = deps.util
-local USER_AGENT = deps.user_agent or "Steam-Game-Data-Linker-Mod/2.6"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
 local M = {}
 
 function M.fetch_game_data(steam_app_id, language)

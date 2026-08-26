@@ -44,6 +44,10 @@ function cleanupPreviousRender(doc: Document): void {
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunityProgressiveReveal(community);
 	for (const id of INJECTED_SECTION_IDS) doc.getElementById(id)?.remove();
+	doc.querySelectorAll<HTMLElement>('[data-gdl-hidden]').forEach(element => {
+		element.style.display = '';
+		element.removeAttribute('data-gdl-hidden');
+	});
 }
 
 /**
@@ -62,12 +66,17 @@ export function renderLinkedGamePage(
 	friendResult: FriendCategories | null | undefined,
 	communityItems: CommunityContentItem[] | undefined,
 	context: LinkedGameRenderContext,
-): void {
-	cleanupPreviousRender(doc);
-
+): boolean {
+	if (noticeElement.ownerDocument !== doc || !noticeElement.isConnected || !context.isCurrent()) return false;
+	const previousActivity = doc.getElementById(GDL_INJECTED) as HTMLElement | null;
 	const layout = discoverNativeLibraryLayout(doc, noticeElement);
+	if (!layout.anchorRegion?.isConnected || !layout.sidebarColumn?.isConnected
+		|| !layout.twoColumnRow?.isConnected || !layout.contentColumn?.isConnected) {
+		if (previousActivity?.dataset.gdlLayoutComplete !== '1') cleanupPreviousRender(doc);
+		return false;
+	}
+	cleanupPreviousRender(doc);
 	prepareNativeLibraryLayout(layout);
-	hideLinkedShortcutNotice(noticeElement, layout);
 
 	renderLinkedSidebarCore(doc, layout, {
 		steamAppId,
@@ -97,7 +106,20 @@ export function renderLinkedGamePage(
 	});
 
 	insertMainContent(activity, layout, new Set([GDL_INJECTED, 'gdl-community-content']));
+	if (!activity.isConnected || doc.getElementById(GDL_INJECTED) !== activity) {
+		cleanupPreviousRender(doc);
+		return false;
+	}
 	insertPrimaryLinksBar(primaryLinks, layout, activity);
+	const expectsAchievements = (data.achievements?.total || 0) > 0;
+	const expectsFriends = (friendResult?.totalCount || 0) > 0;
+	if (!doc.getElementById('gdl-link-bar') || !doc.getElementById('gdl-activity-feed')
+		|| (expectsAchievements && !doc.getElementById('gdl-achievements-section'))
+		|| (expectsFriends && !doc.getElementById('gdl-friends-section'))) {
+		cleanupPreviousRender(doc);
+		return false;
+	}
+	hideLinkedShortcutNotice(noticeElement, layout);
 	wireActivityView(doc, activity, activityOptions);
 
 	const communityHtml = renderCommunityContentHtml(data, communityItems);
@@ -110,5 +132,9 @@ export function renderLinkedGamePage(
 		ensureNativeGameChrome(doc, steamNativeGameInfo(data, steamAppId, modernAssets));
 	}).catch(() => {});
 
+	activity.dataset.gdlLayoutComplete = '1';
+	activity.dataset.gdlExpectsAchievements = expectsAchievements ? '1' : '0';
+	activity.dataset.gdlExpectsFriends = expectsFriends ? '1' : '0';
 	backendLog(`Injected layout for: ${data.name} (${newsItems.length} news items)`);
+	return true;
 }

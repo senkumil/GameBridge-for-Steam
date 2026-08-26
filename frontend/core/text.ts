@@ -4,8 +4,28 @@ export function escapeHtml(str: string): string {
 	return d.innerHTML;
 }
 
+export function stripSurroundingQuotes(value: string): string {
+	let text = (value || '').trim();
+	// Remove outer matching quotes (e.g. "Game", «Game», “Game”, 'Game')
+	text = text.replace(/^["'«“‘]+|["'»”’]+$/g, '').trim();
+	return text;
+}
+
+export function stripAccents(str: string): string {
+	return (str || '')
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '');
+}
+
 export function normalizeTitle(title: string): string {
-	return title.trim().toLowerCase();
+	return stripAccents(title || '')
+		.trim()
+		.toLowerCase()
+		.replace(/[™®©]/g, '')
+		.replace(/["'«»“”‘’]/g, '')
+		.replace(/[–—_:|/\\\[\](){}+-]+/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
 }
 
 export function escapeRegex(str: string): string {

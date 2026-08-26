@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.5.0 - Stable Release & Performance / Cache Parity
+
+- **Instant Cache Rendering (0ms):** Synchronous localized metadata retrieval without IPC delays on library navigation.
+- **Cross-Game Cache Bug Fix:** Stale URL shortcut AppIDs are validated against the active document's title to prevent wrong-game metadata flashing on cold start.
+- **Immediate Achievement Rendering:** Local achievements and playbar stats render immediately from cache upon navigation.
+- **Parallelized Dynamic Streams:** News, friend activity, community items, and achievements load asynchronously in parallel without blocking each other.
+- **Native Steam UI Parity & Bug Fixes:** Cloned native `<h2>` heading for Activity section, fixed styling for status composer and major event cards, responsive quick-link bar, and cleaned community section header.
+
 ## v2.6.0-alpha.2 - Native UI parity pass
 
 - Calibrates the Steam desktop Library reference against 1920×1080 maximized-client captures; the screenshots are taskbar-cropped only and are not treated as a smaller viewport.
@@ -46,7 +54,7 @@
 - Refreshes repository configuration files for the Steam-only project and removes obsolete Epic/Xbox secret entries.
 - Recognizes Steam's newer Spanish **NO DE STEAM** label in Big Picture.
 - Hides the non-Steam category on every Big Picture refresh, including when Steam recreates an empty tab after shortcut changes.
-- Keeps the internal plugin identifier `game-data-linker` unchanged for installation and IPC compatibility.
+- Unifica la identidad de instalación e IPC bajo `GameBridge for Steam`.
 
 ## v2.3.0 - Instant startup and native logo placement
 

@@ -194,7 +194,7 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 			button.dataset.gdlGameInfoButton = '1';
 			button.dataset.gameKey = model.key;
 			if (!button.className) button.className = playbarModule.native ? `${classes.MenuButton || ''}` : 'gdl-info-button-fallback';
-			if (!button.firstElementChild) button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
+			button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
 			button.setAttribute('type', 'button');
 			button.addEventListener('click', event => {
 				event.preventDefault();
@@ -205,6 +205,8 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 			let favorite = elementsWithCssModuleClass(container, classes.FavoriteButton)[0] || null;
 			while (favorite && favorite.parentElement !== container) favorite = favorite.parentElement;
 			container.insertBefore(button, favorite);
+		} else if (!button.querySelector('.SVGIcon_Information')) {
+			button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
 		}
 		button.dataset.gameKey = model.key;
 	}

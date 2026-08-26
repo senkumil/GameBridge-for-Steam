@@ -90,23 +90,6 @@ export function isRenderedElement(doc: Document, element: HTMLElement): boolean 
 		&& style?.display !== 'none' && style?.visibility !== 'hidden');
 }
 
-export function findAllVisibleTextElements(doc: Document, wanted: string): HTMLElement[] {
-	const target = normalizedUiText(wanted);
-	if (!target) return [];
-	const result: HTMLElement[] = [];
-	const seen = new Set<HTMLElement>();
-	const walker = doc.createTreeWalker(doc.body || doc.documentElement, NodeFilter.SHOW_TEXT, null);
-	let node: Text | null;
-	while ((node = walker.nextNode() as Text | null)) {
-		const el = node.parentElement;
-		if (!el || seen.has(el) || normalizedUiText(node.textContent || '') !== target) continue;
-		if (!isRenderedElement(doc, el)) continue;
-		seen.add(el);
-		result.push(el);
-	}
-	return result;
-}
-
 export interface CaptureNativeUiBlueprintOptions {
 	skip?: () => boolean;
 }
@@ -144,8 +127,13 @@ export function captureNativeUiBlueprints(doc: Document, options: CaptureNativeU
 				return !!text && (text === showInfo || text === hideInfo);
 			}) || null;
 			if (!nativeInfoButton) {
-				const menus = candidates.filter(button => hasCssModuleClass(button, ps.MenuButton)
-					&& !hasCssModuleClass(button, ps.FavoriteButton));
+				const menus = candidates.filter(button => {
+					if (!hasCssModuleClass(button, ps.MenuButton) || hasCssModuleClass(button, ps.FavoriteButton)) return false;
+					const text = normalizedUiText(button.getAttribute('aria-label') || button.getAttribute('title') || '');
+					if (/controller|gamepad|mando|manette|steuer|joystick/i.test(text)) return false;
+					if (button.querySelector('svg[class*="Controller"], svg[class*="Gamepad"], [class*="Controller"]')) return false;
+					return true;
+				});
 				nativeInfoButton = menus.length >= 2 ? menus[menus.length - 1] : null;
 			}
 			if (nativeInfoButton) {
@@ -158,7 +146,7 @@ export function captureNativeUiBlueprints(doc: Document, options: CaptureNativeU
 	try {
 		const ls = LINKS_BAR_CLASSES();
 		const nativeLinksBar = elementsWithCssModuleClass(doc, ls.LinksSection)
-			.find(el => !el.closest('[data-gdl-injected]') && !el.id?.includes('gdl') && isRenderedElement(doc, el));
+			.find(el => !el.closest('#gdl-library-injected') && !el.id?.startsWith('gdl-') && isRenderedElement(doc, el));
 		if (nativeLinksBar) saveNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.primaryLinks, nativeLinksBar);
 	} catch {}
 }

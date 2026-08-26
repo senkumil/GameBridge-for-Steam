@@ -1,105 +1,143 @@
-import type { ShortcutDetectionContext, ShortcutDetectionResult } from '../../domain/types';
-import { backendLog } from '../../api/backend';
+import type { ShortcutDetectionCandidate, ShortcutDetectionContext, ShortcutDetectionResult } from '../../domain/types';
+import { backendLog, clearArtworkBackend } from '../../api/backend';
 import { getGameData } from '../../core/game-data';
-import { mappings, findMappingForTitle, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
+import {
+	mappings,
+	findMappingForTitle,
+	removeMappingChecked,
+	saveMappingChecked,
+	shortcutMappingKey,
+} from '../../core/mappings';
 import { escapeHtml, normalizeTitle } from '../../core/text';
 import { gdlText } from '../../steam/localization';
-import { shortcutPathBasename } from '../../steam/shortcuts';
+import { getSteamAppStore, shortcutPathBasename } from '../../steam/shortcuts';
+import { clearArtworkSaved } from '../library/artwork';
 import { clearLinkedNoteSyncState } from './linked-notes';
 import { shortcutRuntimeHost } from './host';
-import { findMappingForDuplicateShortcut, getAllShortcutRecords, isUnrealShippingExecutable, shortcutAlreadyLinked } from './registry';
+import { findMappingForDuplicateShortcut, findMappingForShortcut, getAllShortcutRecords, isUnrealShippingExecutable, shortcutAlreadyLinked } from './registry';
 import { buildShortcutDetectionContext, clearShortcutDetectionCache, detectShortcutCandidates } from './detection';
 import {
-	applyNoLauncherOption,
-	hasNoLauncherOption,
+	isShortcutIdentityMutationInProgress,
 	linkShortcutToSteam,
-	mergeNoLauncherOption,
-	shouldAutoApplyNoLauncher,
 	synchronizeShortcutOfficialIdentity,
 } from './linking';
-import type { ShortcutIdentitySyncResult } from './linking';
 import { getPreferences } from '../../core/preferences';
 
-const DISMISSED_SHORTCUTS_STORAGE_KEY = 'gdl_dismissed_shortcuts_v1';
-const KNOWN_SHORTCUTS_STORAGE_KEY = 'gdl_known_shortcuts_v1';
+const DISMISSED_SHORTCUTS_KEY = 'gdl_dismissed_shortcuts_v3';
+// An automatic modal needs to earn the user's trust.  A manual picker can
+// expose weaker search results, but background detection must never interrupt
+// the user for a loose keyword hit such as "re9" -> an unrelated title.
+const AUTO_LINK_MIN_CONFIDENCE = 70;
 
-function readStoredNumberSet(key: string): Set<number> {
+function loadDismissedShortcuts(): Set<number> {
 	try {
-		const raw = localStorage.getItem(key);
-		const parsed = raw ? JSON.parse(raw) : null;
-		if (Array.isArray(parsed)) {
-			return new Set(parsed.map(Number).filter(n => Number.isFinite(n) && n > 0));
+		const raw = localStorage.getItem(DISMISSED_SHORTCUTS_KEY);
+		if (raw) {
+			const parsed = JSON.parse(raw);
+			if (Array.isArray(parsed)) return new Set(parsed.map(Number).filter(n => Number.isFinite(n)));
 		}
 	} catch {}
-	return new Set<number>();
+	return new Set();
 }
 
-function persistStoredNumberSet(key: string, set: Set<number>): void {
+function saveDismissedShortcuts(set: Set<number>): void {
 	try {
-		localStorage.setItem(key, JSON.stringify(Array.from(set)));
+		localStorage.setItem(DISMISSED_SHORTCUTS_KEY, JSON.stringify(Array.from(set)));
 	} catch {}
 }
+
+const dismissedShortcutIds = loadDismissedShortcuts();
 
 let shortcutAutoDetectorTimer: ReturnType<typeof setInterval> | null = null;
 let shortcutAutoDetectorInitialized = false;
 let shortcutAutoDetectorModalOpen = false;
+let shortcutLinkInProgress = false;
 let shortcutAutoDetectorStartedAt = 0;
-const knownShortcutIds = readStoredNumberSet(KNOWN_SHORTCUTS_STORAGE_KEY);
+const knownShortcutIds = new Set<number>();
 const shortcutDetectionInFlight = new Set<number>();
-const shortcutDetectionDismissed = readStoredNumberSet(DISMISSED_SHORTCUTS_STORAGE_KEY);
 const shortcutDetectionScheduled = new Set<number>();
+const deferredShortcutInspections = new Map<number, { record: { id: number; title: string }; force: boolean; isNewlyAdded: boolean }>();
 
-function dismissShortcut(shortcutAppId: number): void {
-	shortcutDetectionDismissed.add(shortcutAppId);
-	persistStoredNumberSet(DISMISSED_SHORTCUTS_STORAGE_KEY, shortcutDetectionDismissed);
+function shortcutMutationInProgress(): boolean {
+	return shortcutLinkInProgress || isShortcutIdentityMutationInProgress();
 }
 
-function undismissShortcut(shortcutAppId: number): void {
-	if (shortcutDetectionDismissed.delete(shortcutAppId)) {
-		persistStoredNumberSet(DISMISSED_SHORTCUTS_STORAGE_KEY, shortcutDetectionDismissed);
+function deferShortcutInspection(record: { id: number; title: string }, force: boolean, isNewlyAdded: boolean): void {
+	deferredShortcutInspections.set(record.id, { record, force, isNewlyAdded });
+}
+
+export function dismissShortcut(shortcutAppId: number): void {
+	if (!shortcutAppId) return;
+	dismissedShortcutIds.add(shortcutAppId);
+	saveDismissedShortcuts(dismissedShortcutIds);
+	backendLog(`Shortcut ${shortcutAppId} permanently dismissed from auto-link modal.`);
+}
+
+export function undismissShortcut(shortcutAppId: number): void {
+	if (!shortcutAppId) return;
+	if (dismissedShortcutIds.has(shortcutAppId)) {
+		dismissedShortcutIds.delete(shortcutAppId);
+		saveDismissedShortcuts(dismissedShortcutIds);
 	}
+}
+
+export function isShortcutDismissed(shortcutAppId: number): boolean {
+	return dismissedShortcutIds.has(shortcutAppId);
 }
 
 function recordKnownShortcut(shortcutAppId: number): void {
 	knownShortcutIds.add(shortcutAppId);
-	persistStoredNumberSet(KNOWN_SHORTCUTS_STORAGE_KEY, knownShortcutIds);
 }
 
+let activeModalEscapeHandler: ((e: KeyboardEvent) => void) | null = null;
+
 function closeShortcutAutoLinkModal(doc: Document, shortcutAppId: number, dismiss: boolean): void {
+	if (activeModalEscapeHandler) {
+		try { doc.removeEventListener('keydown', activeModalEscapeHandler); } catch {}
+		try { document.removeEventListener('keydown', activeModalEscapeHandler); } catch {}
+		activeModalEscapeHandler = null;
+	}
 	doc.getElementById('gdl-auto-link-modal')?.remove();
+	try { document.getElementById('gdl-auto-link-modal')?.remove(); } catch {}
 	shortcutAutoDetectorModalOpen = false;
 	if (dismiss) dismissShortcut(shortcutAppId);
 }
 
-function showShortcutAutoLinkModal(
+export function showShortcutAutoLinkModal(
 	doc: Document,
 	context: ShortcutDetectionContext,
 	detection: ShortcutDetectionResult,
 ): void {
-	if (!doc.body || shortcutAutoDetectorModalOpen || doc.getElementById('gdl-auto-link-modal')) return;
-	const candidates = detection.candidates.filter(candidate => candidate.score >= 48).slice(0, 6);
+	const targetDoc = (doc && doc.body) ? doc : (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' && document.body ? document : null));
+	if (!targetDoc || !targetDoc.body) return;
+	if (targetDoc.getElementById('gdl-auto-link-modal')) return;
+	try { targetDoc.getElementById('gdl-auto-link-modal')?.remove(); } catch {}
+	const candidates = (detection.candidates || [])
+		.filter(candidate => candidate.direct || candidate.score >= AUTO_LINK_MIN_CONFIDENCE)
+		.slice(0, 6);
 	if (!candidates.length) return;
 	const hasTrackingRecommendation = !!(context.bootstrapDetected && context.recommendedExePath);
+	const exeName = context.exePath ? (shortcutPathBasename(context.exePath) || context.exePath) : context.title;
 	const executableSummary = hasTrackingRecommendation
-		? gdlText('selected_executable', 'Selected executable: {exe}', { exe: shortcutPathBasename(context.exePath) || context.exePath })
-		: gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: shortcutPathBasename(context.exePath) || context.exePath });
+		? gdlText('selected_executable', 'Selected executable: {exe}', { exe: exeName })
+		: gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: exeName });
 	shortcutAutoDetectorModalOpen = true;
 
-	const overlay = doc.createElement('div');
+	const overlay = targetDoc.createElement('div');
 	overlay.id = 'gdl-auto-link-modal';
-	overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483600;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.72);font-family:Arial,Helvetica,sans-serif;color:#dcdedf;';
+	overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100vw;height:100vh;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.72);font-family:Arial,Helvetica,sans-serif;color:#dcdedf;pointer-events:auto;';
 	overlay.innerHTML = `
-		<div role="dialog" aria-modal="true" style="width:min(590px,calc(100vw - 48px));background:#171d25;border:1px solid #3d4450;box-shadow:0 18px 60px rgba(0,0,0,.72);">
-			<div style="display:flex;align-items:center;justify-content:space-between;padding:17px 20px;background:linear-gradient(90deg,#202a36,#171d25);border-bottom:1px solid rgba(255,255,255,.07);">
-				<div style="font-size:20px;font-weight:500;color:#fff;">${escapeHtml(gdlText('auto_link_title', 'Steam game detected'))}</div>
+		<div role="dialog" aria-modal="true" style="width:min(620px,calc(100vw - 40px));overflow:hidden;border-radius:6px;background:linear-gradient(145deg,#1b2531,#121922);border:1px solid rgba(102,192,244,.30);box-shadow:0 24px 80px rgba(0,0,0,.78);">
+			<div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;background:linear-gradient(90deg,rgba(39,65,84,.95),rgba(24,31,41,.96));border-bottom:1px solid rgba(255,255,255,.09);">
+				<div><div style="font-size:20px;font-weight:600;color:#fff;">${escapeHtml(gdlText('auto_link_title', 'Steam game detected'))}</div><div style="margin-top:4px;font-size:11px;letter-spacing:.8px;color:#66c0f4;text-transform:uppercase;">Coincidencia lista para revisar</div></div>
 				<button class="gdl-auto-link-close" aria-label="${escapeHtml(gdlText('close', 'Close'))}" style="border:0;background:transparent;color:#8f98a0;font-size:24px;line-height:1;cursor:pointer;padding:0 3px;">×</button>
 			</div>
-			<div style="padding:20px;">
-				<div style="font-size:13px;line-height:1.45;color:#acb2b8;margin-bottom:15px;">${escapeHtml(gdlText('auto_link_message', 'A likely Steam match was found for “{name}”. Confirm it before the plugin loads the game data.', { name: context.title }))}</div>
-				<div style="display:flex;gap:15px;align-items:stretch;margin-bottom:15px;">
-					<img class="gdl-auto-link-image" alt="" style="width:184px;height:86px;object-fit:cover;background:#10141a;border:1px solid rgba(255,255,255,.08);" />
+			<div style="padding:20px 22px 22px;">
+				<div style="font-size:13px;line-height:1.5;color:#acb2b8;margin-bottom:17px;">${escapeHtml(gdlText('auto_link_message', 'A likely Steam match was found for “{name}”. Confirm it before the plugin loads the game data.', { name: context.title }))}</div>
+				<div style="display:flex;gap:16px;align-items:stretch;margin-bottom:16px;padding:12px;background:rgba(0,0,0,.16);border:1px solid rgba(255,255,255,.06);border-radius:4px;">
+					<img class="gdl-auto-link-image" alt="" style="width:194px;height:91px;object-fit:cover;background:#10141a;border:1px solid rgba(255,255,255,.10);border-radius:2px;" />
 					<div style="display:flex;flex:1;min-width:0;flex-direction:column;justify-content:center;gap:7px;">
-						<div class="gdl-auto-link-name" style="font-size:17px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+						<div class="gdl-auto-link-name" style="font-size:17px;font-weight:500;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
 						<div class="gdl-auto-link-id" style="font-size:12px;color:#66c0f4;"></div>
 						<select class="gdl-auto-link-select" style="width:100%;padding:7px 9px;background:#20242b;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;"></select>
 					</div>
@@ -113,9 +151,11 @@ function showShortcutAutoLinkModal(
 					<input class="gdl-auto-link-launcher-input" type="checkbox" style="margin-top:2px;" />
 					<span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('launcher_detected', 'This target looks like a game launcher. You may optionally add -nolauncher.'))}</span>
 				</label>
-				<div class="gdl-auto-link-status" style="min-height:17px;margin-top:11px;font-size:12px;color:#8f98a0;"></div>
+				<div class="gdl-auto-link-progress" style="display:flex;gap:7px;margin-top:15px;color:#8f98a0;font-size:11px;"><span data-step="link" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">1 · Vincular</span><span data-step="identity" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">2 · Identidad</span><span data-step="assets" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">3 · Recursos</span></div>
+				<div class="gdl-auto-link-status" aria-live="polite" style="min-height:18px;margin-top:11px;font-size:12px;color:#8f98a0;"></div>
+				<div class="gdl-auto-link-result" aria-live="polite" style="display:none;margin-top:12px;padding:11px 12px;border-radius:3px;font-size:12px;line-height:1.45;"></div>
 				<div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px;">
-					<button class="gdl-auto-link-cancel" style="padding:9px 17px;border:0;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(gdlText('not_now', 'Not now'))}</button>
+					<button class="gdl-auto-link-cancel" style="padding:9px 17px;border:0;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(gdlText('reject_link', 'Rechazar'))}</button>
 					<button class="gdl-auto-link-confirm" style="padding:9px 18px;border:0;border-radius:2px;background:linear-gradient(90deg,#06bfff,#2d73ff);color:#fff;cursor:pointer;">${escapeHtml(gdlText('link_game', 'Link game'))}</button>
 				</div>
 			</div>
@@ -130,26 +170,38 @@ function showShortcutAutoLinkModal(
 	const launcherLabel = overlay.querySelector('.gdl-auto-link-launcher') as HTMLElement;
 	const launcherInput = overlay.querySelector('.gdl-auto-link-launcher-input') as HTMLInputElement;
 	const status = overlay.querySelector('.gdl-auto-link-status') as HTMLElement;
+	const progress = overlay.querySelector('.gdl-auto-link-progress') as HTMLElement;
+	const resultPanel = overlay.querySelector('.gdl-auto-link-result') as HTMLElement;
 	const confirm = overlay.querySelector('.gdl-auto-link-confirm') as HTMLButtonElement;
 	const cancel = overlay.querySelector('.gdl-auto-link-cancel') as HTMLButtonElement;
 
 	for (const candidate of candidates) {
-		const option = doc.createElement('option');
+		const option = targetDoc.createElement('option');
 		option.value = candidate.appid;
 		option.textContent = `${candidate.name} — AppID ${candidate.appid} (${Math.round(candidate.score)}%)`;
 		select.appendChild(option);
 	}
+	let imageRequestRevision = 0;
 	const renderCandidate = () => {
 		const candidate = candidates.find(item => item.appid === select.value) || candidates[0];
+		const requestRevision = ++imageRequestRevision;
 		name.textContent = candidate.name;
 		appId.textContent = `Steam AppID ${candidate.appid} · ${Math.round(candidate.score)}%`;
-		if (candidate.image) {
-			image.src = candidate.image;
+		// Store-search thumbnails and guessed static CDN paths are not stable for
+		// every Steam game. Show the candidate image immediately, then reconcile
+		// it with the authoritative appdetails header for the selected AppID.
+		image.onerror = () => { image.style.visibility = 'hidden'; };
+		image.src = candidate.image || '';
+		image.style.visibility = candidate.image ? 'visible' : 'hidden';
+		void getGameData(candidate.appid).then(official => {
+			if (requestRevision !== imageRequestRevision || select.value !== candidate.appid) return;
+			const officialImage = String(official?.header_image || official?.capsule_image || official?.capsule_imagev5 || '').trim();
+			if (!officialImage) return;
+			candidate.image = officialImage;
+			image.onerror = () => { image.style.visibility = 'hidden'; };
+			if (image.src !== officialImage) image.src = officialImage;
 			image.style.visibility = 'visible';
-		} else {
-			image.removeAttribute('src');
-			image.style.visibility = 'hidden';
-		}
+		}).catch(() => {});
 	};
 	select.addEventListener('change', renderCandidate);
 	renderCandidate();
@@ -157,253 +209,325 @@ function showShortcutAutoLinkModal(
 
 	const allowNoLauncher = detection.launcher_detected
 		&& !detection.generic_launcher
-		&& !isUnrealShippingExecutable(context.exePath);
+		&& !isUnrealShippingExecutable(context.exePath || '');
 	if (allowNoLauncher) launcherLabel.style.display = 'flex';
 
-	const dismiss = () => closeShortcutAutoLinkModal(doc, context.shortcutAppId, true);
+	let modalSubmitting = false;
+	let linkSucceeded = false;
+	const setProgress = (completed: number, warning = false) => {
+		for (const step of Array.from(progress.querySelectorAll<HTMLElement>('[data-step]'))) {
+			const index = ['link', 'identity', 'assets'].indexOf(String(step.dataset.step)) + 1;
+			step.style.background = index <= completed ? (warning && index === 3 ? 'rgba(229,173,55,.18)' : 'rgba(91,163,43,.18)') : 'rgba(255,255,255,.05)';
+			step.style.color = index <= completed ? (warning && index === 3 ? '#e5ad37' : '#a4d007') : '#8f98a0';
+		}
+	};
+	const dismiss = () => {
+		if (!modalSubmitting) closeShortcutAutoLinkModal(targetDoc, context.shortcutAppId, !linkSucceeded);
+	};
 	overlay.querySelector('.gdl-auto-link-close')?.addEventListener('click', dismiss);
 	cancel.addEventListener('click', dismiss);
 	overlay.addEventListener('click', event => { if (event.target === overlay) dismiss(); });
+
+	if (activeModalEscapeHandler) {
+		try { targetDoc.removeEventListener('keydown', activeModalEscapeHandler); } catch {}
+		try { document.removeEventListener('keydown', activeModalEscapeHandler); } catch {}
+	}
+	activeModalEscapeHandler = (event: KeyboardEvent) => {
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			event.stopPropagation();
+			dismiss();
+		}
+	};
+	targetDoc.addEventListener('keydown', activeModalEscapeHandler);
 	confirm.addEventListener('click', async () => {
+		if (modalSubmitting) return;
 		const selected = candidates.find(candidate => candidate.appid === select.value) || candidates[0];
+		modalSubmitting = true;
+		shortcutLinkInProgress = true;
+		setProgress(1);
 		confirm.disabled = true;
 		cancel.disabled = true;
 		confirm.style.opacity = '.65';
-		const result = await linkShortcutToSteam({
-			title: context.title,
-			shortcutAppId: context.shortcutAppId,
-			steamAppId: selected.appid,
-			skipLauncher: allowNoLauncher && launcherInput.checked,
-			existingLaunchOptions: context.launchOptions,
-			trackingExecutable: hasTrackingRecommendation && trackingInput.checked ? context.recommendedExePath : '',
-			trackingStartDir: hasTrackingRecommendation && trackingInput.checked ? context.recommendedStartDir : '',
-			onStatus: (message, color = '#8f98a0') => {
-				status.textContent = message;
-				status.style.color = color;
-			},
-		});
-		if (result.ok) {
-			undismissShortcut(context.shortcutAppId);
-			if (result.shortcutAppId) recordKnownShortcut(result.shortcutAppId);
-			setTimeout(() => closeShortcutAutoLinkModal(doc, context.shortcutAppId, false), 1100);
-			return;
-		}
-		confirm.disabled = false;
-		cancel.disabled = false;
-		confirm.style.opacity = '1';
-	});
+		undismissShortcut(context.shortcutAppId);
+		recordKnownShortcut(context.shortcutAppId);
 
-	doc.body.appendChild(overlay);
-}
-
-function showShortcutTrackingRepairModal(doc: Document, context: ShortcutDetectionContext, steamAppId: string): void {
-	if (!context.recommendedExePath || !doc.body || shortcutAutoDetectorModalOpen || doc.getElementById('gdl-auto-link-modal')) return;
-	shortcutAutoDetectorModalOpen = true;
-	const currentName = shortcutPathBasename(context.exePath) || context.exePath;
-	const recommendedName = shortcutPathBasename(context.recommendedExePath) || context.recommendedExePath;
-	const overlay = doc.createElement('div');
-	overlay.id = 'gdl-auto-link-modal';
-	overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483600;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.72);font-family:Arial,Helvetica,sans-serif;color:#dcdedf;';
-	overlay.innerHTML = `
-		<div role="dialog" aria-modal="true" style="width:min(570px,calc(100vw - 48px));background:#171d25;border:1px solid #3d4450;box-shadow:0 18px 60px rgba(0,0,0,.72);">
-			<div style="display:flex;align-items:center;justify-content:space-between;padding:17px 20px;background:linear-gradient(90deg,#202a36,#171d25);border-bottom:1px solid rgba(255,255,255,.07);">
-				<div style="font-size:20px;font-weight:500;color:#fff;">${escapeHtml(gdlText('tracking_repair_title', 'Fix Steam playtime tracking'))}</div>
-				<button class="gdl-tracking-close" aria-label="${escapeHtml(gdlText('close', 'Close'))}" style="border:0;background:transparent;color:#8f98a0;font-size:24px;line-height:1;cursor:pointer;padding:0 3px;">×</button>
-			</div>
-			<div style="padding:20px;">
-				<div style="font-size:13px;line-height:1.5;color:#acb2b8;">${escapeHtml(gdlText('tracking_repair_message', '{bootstrap} closes after starting {game}, so Steam stops its timer. The plugin can make the shortcut launch {game} directly.', { bootstrap: currentName, game: recommendedName }))}</div>
-				<div style="margin-top:15px;padding:11px;background:rgba(91,163,43,.10);border:1px solid rgba(91,163,43,.28);font-size:11px;line-height:1.45;color:#acb2b8;overflow-wrap:anywhere;">
-					<div><span style="color:#8f98a0;">${escapeHtml(gdlText('current_executable', 'Current:'))}</span> ${escapeHtml(context.exePath)}</div>
-					<div style="margin-top:5px;"><span style="color:#8f98a0;">${escapeHtml(gdlText('recommended_executable', 'Recommended:'))}</span> ${escapeHtml(context.recommendedExePath)}</div>
-				</div>
-				<div class="gdl-tracking-status" style="min-height:17px;margin-top:11px;font-size:12px;color:#8f98a0;"></div>
-				<div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px;">
-					<button class="gdl-tracking-cancel" style="padding:9px 17px;border:0;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(gdlText('not_now', 'Not now'))}</button>
-					<button class="gdl-tracking-confirm" style="padding:9px 18px;border:0;border-radius:2px;background:linear-gradient(90deg,#75b022,#588a1b);color:#fff;cursor:pointer;">${escapeHtml(gdlText('use_recommended_executable', 'Use {game}', { game: recommendedName }))}</button>
-				</div>
-			</div>
-		</div>`;
-
-	const status = overlay.querySelector('.gdl-tracking-status') as HTMLElement;
-	const confirm = overlay.querySelector('.gdl-tracking-confirm') as HTMLButtonElement;
-	const cancel = overlay.querySelector('.gdl-tracking-cancel') as HTMLButtonElement;
-	const dismiss = () => closeShortcutAutoLinkModal(doc, context.shortcutAppId, true);
-	overlay.querySelector('.gdl-tracking-close')?.addEventListener('click', dismiss);
-	cancel.addEventListener('click', dismiss);
-	overlay.addEventListener('click', event => { if (event.target === overlay) dismiss(); });
-	confirm.addEventListener('click', async () => {
-		confirm.disabled = true;
-		cancel.disabled = true;
-		confirm.style.opacity = '.65';
-		let synced: ShortcutIdentitySyncResult;
 		try {
-			synced = await synchronizeShortcutOfficialIdentity({
+			const result = await linkShortcutToSteam({
+				doc: targetDoc,
+				title: context.title,
 				shortcutAppId: context.shortcutAppId,
-				currentTitle: context.title,
-				steamAppId,
-				trackingExecutable: context.recommendedExePath || '',
-				trackingStartDir: context.recommendedStartDir || '',
+				steamAppId: selected.appid,
+				skipLauncher: allowNoLauncher && launcherInput.checked,
 				existingLaunchOptions: context.launchOptions,
+				trackingExecutable: hasTrackingRecommendation && trackingInput.checked ? context.recommendedExePath : '',
+				trackingStartDir: hasTrackingRecommendation && trackingInput.checked ? context.recommendedStartDir : '',
+				onStatus: (message, color = '#8f98a0') => {
+					status.textContent = message;
+					status.style.color = color;
+					if (/actualizando nombre|updating name/i.test(message)) setProgress(2);
+				},
 			});
-		} catch (e) {
-			backendLog('Tracking repair synchronization failed: ' + e);
-			status.textContent = gdlText('tracking_repair_failed', 'The shortcut target could not be updated. You can still select the recommended EXE manually in Properties.');
-			status.style.color = '#ff6b6b';
-			confirm.disabled = false;
-			cancel.disabled = false;
-			confirm.style.opacity = '1';
-			return;
+			if (result.ok && result.shortcutAppId) {
+				recordKnownShortcut(result.shortcutAppId);
+			}
+			if (result.ok) {
+				linkSucceeded = true;
+				const setup = result.setup;
+				const complete = Boolean(setup?.nameReady && setup?.iconApplied && setup?.artworkComplete);
+				setProgress(3, !complete);
+				resultPanel.style.display = 'block';
+				resultPanel.style.border = `1px solid ${complete ? 'rgba(91,163,43,.48)' : 'rgba(229,173,55,.48)'}`;
+				resultPanel.style.background = complete ? 'rgba(91,163,43,.12)' : 'rgba(229,173,55,.10)';
+				resultPanel.style.color = complete ? '#b4d99a' : '#e5c07b';
+				if (complete) {
+					const community = setup?.communityArtwork?.length
+						? ` SteamGridDB aportó: ${setup.communityArtwork.join(', ')}.` : '';
+					resultPanel.innerHTML = `<strong style="color:#a4d007;">✓ Vinculación completada.</strong><br>Nombre oficial, icono y las cuatro imágenes de biblioteca se aplicaron correctamente.${community}`;
+					status.textContent = 'El juego ya está listo en tu biblioteca.';
+				} else {
+					const missing = setup?.missingArtwork?.length ? ` Faltan: ${setup.missingArtwork.join(', ')}.` : '';
+					resultPanel.innerHTML = `<strong style="color:#e5ad37;">Vinculado con avisos.</strong><br>${setup?.iconApplied ? '' : 'No se pudo aplicar el icono oficial. '}${missing} Cuando Steam no publica una pieza de biblioteca, se conserva su arte oficial disponible como alternativa.`;
+					status.textContent = 'La vinculación se guardó; revisa los recursos indicados.';
+				}
+				confirm.style.display = 'none';
+				cancel.textContent = 'Listo';
+				cancel.disabled = false;
+				confirm.disabled = true;
+				// The completion view stays open for the user to read, but it is no
+				// longer submitting. This lets both “Listo” and Escape close it.
+				modalSubmitting = false;
+				const liveDoc = shortcutRuntimeHost().getMainWindowDoc() || targetDoc;
+				shortcutRuntimeHost().resetLibraryInjection?.(true, liveDoc);
+				return;
+			}
+			if (!result.ok) {
+				deferShortcutInspection({ id: context.shortcutAppId, title: context.title }, false, true);
+				backendLog(`Link did not complete for ${context.title}: ${result.error || 'unknown_error'}`);
+			}
+		} catch (error) {
+			deferShortcutInspection({ id: context.shortcutAppId, title: context.title }, false, true);
+			backendLog(`Background link failed for ${context.title}: ${error}`);
+		} finally {
+			shortcutLinkInProgress = false;
+			if (targetDoc.getElementById('gdl-auto-link-modal') && !linkSucceeded) {
+				modalSubmitting = false;
+				confirm.disabled = false;
+				cancel.disabled = false;
+				confirm.style.opacity = '1';
+			}
 		}
-		if (!synced.trackingApplied) {
-			status.textContent = gdlText('tracking_repair_failed', 'The shortcut target could not be updated. You can still select the recommended EXE manually in Properties.');
-			status.style.color = '#ff6b6b';
-			confirm.disabled = false;
-			cancel.disabled = false;
-			confirm.style.opacity = '1';
-			return;
-		}
-		const finalShortcutId = synced.shortcutAppId;
-		recordKnownShortcut(finalShortcutId);
-		dismissShortcut(context.shortcutAppId);
-		status.textContent = gdlText('tracking_repair_success', '✓ The shortcut now launches the long-running game process. Steam can keep counting playtime.');
-		status.style.color = '#66c0f4';
-		shortcutRuntimeHost().refreshLibraryArtwork(finalShortcutId);
-		setTimeout(() => closeShortcutAutoLinkModal(doc, context.shortcutAppId, false), 1400);
 	});
-	doc.body.appendChild(overlay);
+
+	targetDoc.body.appendChild(overlay);
 }
 
-async function inspectNewShortcut(record: { id: number; title: string }): Promise<void> {
-	if (shortcutDetectionInFlight.has(record.id) || shortcutDetectionDismissed.has(record.id)) return;
-	shortcutDetectionInFlight.add(record.id);
-	try {
-		let context: ShortcutDetectionContext | null = null;
-		for (let attempt = 0; attempt < 5; attempt++) {
-			context = await buildShortcutDetectionContext(null, record.title, record.id);
-			if (context?.exePath) break;
-			await new Promise(resolve => setTimeout(resolve, 700));
-		}
-		if (!context?.exePath) {
-			dismissShortcut(record.id);
-			backendLog(`Automatic detection could not read the executable for new shortcut ${record.title}`);
-			return;
-		}
+async function inspectNewShortcut(record: { id: number; title: string }, force = false, isNewlyAdded = false): Promise<void> {
+	if (shortcutMutationInProgress()) {
+		deferShortcutInspection(record, force, isNewlyAdded);
+		shortcutDetectionScheduled.delete(record.id);
+		return;
+	}
+	if (shortcutDetectionInFlight.has(record.id)) return;
+	if (!force && isShortcutDismissed(record.id)) return;
+	if (!isNewlyAdded && !force) {
+		// Existing shortcuts on startup or navigation only sync if already mapped
 		const exactLinkedSteamAppId = mappings[shortcutMappingKey(record.id)] || '';
 		const duplicateLinkedSteamAppId = findMappingForDuplicateShortcut(record.id) || '';
-		const linkedSteamAppId = exactLinkedSteamAppId || duplicateLinkedSteamAppId || findMappingForTitle(record.title, String(record.id));
+		const titleLinkedSteamAppId = findMappingForTitle(record.title, String(record.id));
+		const linkedSteamAppId = exactLinkedSteamAppId || duplicateLinkedSteamAppId || titleLinkedSteamAppId;
 		if (/^\d+$/.test(String(linkedSteamAppId || ''))) {
 			const data = await getGameData(String(linkedSteamAppId));
 			const officialName = String(data?.name || record.title).trim();
 			if (data && (!exactLinkedSteamAppId || normalizeTitle(record.title) !== normalizeTitle(officialName))) {
-				const synced = await synchronizeShortcutOfficialIdentity({
+				await synchronizeShortcutOfficialIdentity({
 					shortcutAppId: record.id,
 					currentTitle: record.title,
 					steamAppId: String(linkedSteamAppId),
 					data,
-					existingLaunchOptions: context.launchOptions,
 				});
-				const refreshed = await buildShortcutDetectionContext(null, synced.officialName, synced.shortcutAppId);
-				if (refreshed) context = refreshed;
-				backendLog(`Recovered official identity for linked shortcut ${record.title} (${record.id} -> ${synced.shortcutAppId})`);
 			} else if (!exactLinkedSteamAppId) {
 				const exactKey = shortcutMappingKey(record.id);
 				if (await saveMappingChecked(exactKey, String(linkedSteamAppId))) mappings[exactKey] = String(linkedSteamAppId);
 			}
-			// Repair known compatible launchers for shortcuts that were linked
-			// before the automatic rule existed. This remains strictly scoped to
-			// non-Steam shortcut IDs and never mutates native Steam applications.
-			if (shouldAutoApplyNoLauncher(String(linkedSteamAppId))
-				&& !hasNoLauncherOption(context.launchOptions)) {
-				if (applyNoLauncherOption(context.shortcutAppId, context.launchOptions, true)) {
-					context.launchOptions = mergeNoLauncherOption(context.launchOptions);
-					backendLog(`Repaired launch options for linked shortcut ${record.title} (${context.shortcutAppId})`);
-				}
-			}
-			if (context.bootstrapDetected && context.recommendedExePath) {
-				while (shortcutAutoDetectorModalOpen && !shortcutDetectionDismissed.has(context.shortcutAppId)) {
-					await new Promise(resolve => setTimeout(resolve, 900));
-				}
-				const doc = shortcutRuntimeHost().getMainWindowDoc();
-				if (doc?.body && !shortcutDetectionDismissed.has(context.shortcutAppId)) {
-					showShortcutTrackingRepairModal(doc, context, String(linkedSteamAppId));
-				}
-			}
+		}
+		return;
+	}
+
+	shortcutDetectionInFlight.add(record.id);
+	try {
+		let context: ShortcutDetectionContext | null = null;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			context = await buildShortcutDetectionContext(null, record.title, record.id);
+			if (context?.exePath || context?.title) break;
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		if (!context) {
+			context = {
+				shortcutAppId: record.id,
+				title: record.title,
+				exePath: '',
+				startDir: '',
+				launchOptions: '',
+				bootstrapDetected: false,
+				recommendedExePath: '',
+				recommendedStartDir: '',
+			};
+		}
+		if (!context.title && !context.exePath) {
+			backendLog(`Automatic detection has no title or executable for shortcut ${record.title} (${record.id})`);
 			return;
 		}
+
 		if (!getPreferences().autoDetectShortcuts) {
-			dismissShortcut(record.id);
 			return;
 		}
 		const detection = await detectShortcutCandidates(context);
-		const best = detection?.candidates?.[0];
-		if (!detection || !best || best.score < 58) {
-			dismissShortcut(record.id);
-			backendLog(`Automatic detection found no reliable match for new shortcut ${record.title}`);
+
+		// If this game was previously mapped/repeated, ensure the mapped Steam AppID is included at top with score 100
+		const existingMappedId = findMappingForShortcut(record.id, record.title, context.exePath);
+		if (existingMappedId && /^\d+$/.test(existingMappedId)) {
+			const mappedData = await getGameData(existingMappedId);
+			if (mappedData) {
+				const existingIndex = detection.candidates.findIndex(c => c.appid === existingMappedId);
+				if (existingIndex >= 0) {
+					const [item] = detection.candidates.splice(existingIndex, 1);
+					item.score = 100;
+					detection.candidates.unshift(item);
+				} else {
+					const candidate: ShortcutDetectionCandidate = {
+						appid: existingMappedId,
+						name: mappedData.name || record.title,
+						score: 100,
+						direct: true,
+						confidence: 'high',
+						image: mappedData.header_image,
+					};
+					detection.candidates.unshift(candidate);
+				}
+			}
+		}
+
+		const viable = (detection?.candidates || [])
+			.filter(candidate => candidate.direct || candidate.score >= AUTO_LINK_MIN_CONFIDENCE);
+		if (!detection || !viable.length) {
+			backendLog(`Automatic detection found no reliable match for shortcut ${record.title}`);
 			return;
 		}
-		while (shortcutAutoDetectorModalOpen && !shortcutDetectionDismissed.has(record.id)) {
-			await new Promise(resolve => setTimeout(resolve, 900));
+		while (shortcutAutoDetectorModalOpen && document.getElementById('gdl-auto-link-modal')) {
+			await new Promise(resolve => setTimeout(resolve, 300));
 		}
-		const doc = shortcutRuntimeHost().getMainWindowDoc();
-		if (!doc?.body || shortcutDetectionDismissed.has(record.id)) return;
+		const host = shortcutRuntimeHost();
+		const doc = host.getMainWindowDoc() || (typeof document !== 'undefined' ? document : null);
+		if (!doc?.body || (!force && isShortcutDismissed(record.id))) {
+			backendLog(`Cannot show auto link modal: document is null or shortcut is dismissed (${record.title})`);
+			return;
+		}
+
+		if (shortcutMutationInProgress()) {
+			deferShortcutInspection(record, force, isNewlyAdded);
+			return;
+		}
+		backendLog(`Showing auto link modal for newly added shortcut ${record.title} with ${viable.length} candidate(s)`);
 		showShortcutAutoLinkModal(doc, context, detection);
 	} catch (e) {
 		backendLog(`New shortcut detection failed for ${record.title}: ${e}`);
 	} finally {
+		shortcutDetectionScheduled.delete(record.id);
 		shortcutDetectionInFlight.delete(record.id);
 	}
 }
 
-export function scheduleShortcutInspection(record: { id: number; title: string }, delay = 350, includeLinked = false): void {
+export function scheduleShortcutInspection(
+	record: { id: number; title: string },
+	delay = 350,
+	includeLinked = false,
+	force = false,
+	isNewlyAdded = false,
+): void {
 	if (!Number.isFinite(record.id) || record.id < 2147483648 || !record.title.trim()) return;
-	if (shortcutDetectionScheduled.has(record.id)
-		|| shortcutDetectionInFlight.has(record.id)
-		|| shortcutDetectionDismissed.has(record.id)
-		|| (!includeLinked && shortcutAlreadyLinked(record.id))) return;
+	if (shortcutMutationInProgress()) {
+		deferShortcutInspection(record, force, isNewlyAdded);
+		return;
+	}
+	if (shortcutDetectionScheduled.has(record.id) || shortcutDetectionInFlight.has(record.id)) return;
+	if (!force && isShortcutDismissed(record.id)) return;
+	if (!includeLinked && !isNewlyAdded && shortcutAlreadyLinked(record.id)) return;
 	shortcutDetectionScheduled.add(record.id);
-	setTimeout(() => { void inspectNewShortcut(record); }, delay);
+	setTimeout(() => {
+		void inspectNewShortcut(record, force, isNewlyAdded)
+			.catch(error => backendLog(`Scheduled shortcut inspection failed for ${record.title}: ${error}`))
+			.finally(() => shortcutDetectionScheduled.delete(record.id));
+	}, delay);
 }
 
 function scanForNewShortcuts(): void {
-	const appStore = (window as any).appStore;
+	if (shortcutMutationInProgress()) return;
+	for (const pending of Array.from(deferredShortcutInspections.values())) {
+		deferredShortcutInspections.delete(pending.record.id);
+		const liveRecord = getAllShortcutRecords().find(record => record.id === pending.record.id);
+		if (liveRecord && !shortcutAlreadyLinked(liveRecord.id)) {
+			scheduleShortcutInspection(liveRecord, 100, true, pending.force, pending.isNewlyAdded);
+		}
+	}
+	const appStore = getSteamAppStore();
 	if (!appStore?.m_mapApps) return;
 	const records = getAllShortcutRecords();
-
-	// Record all records currently in library as known
-	for (const record of records) {
-		knownShortcutIds.add(record.id);
-	}
-	persistStoredNumberSet(KNOWN_SHORTCUTS_STORAGE_KEY, knownShortcutIds);
+	const currentIds = new Set(records.map(r => r.id));
 
 	if (!shortcutAutoDetectorInitialized) {
-		// Wait for Steam's app overview map to be populated before taking the
-		// baseline. Otherwise every pre-existing shortcut would look newly added.
 		const appCount = Number(appStore.m_mapApps?.size || 0);
 		if (appCount <= 0 && Date.now() - shortcutAutoDetectorStartedAt < 8000) return;
-		const linkedShortcutRepairs: Array<{ id: number; title: string }> = [];
+		if (Date.now() - shortcutAutoDetectorStartedAt < 1500) return;
+		shortcutAutoDetectorInitialized = true;
 		for (const record of records) {
-			const linkedSteamAppId = findMappingForDuplicateShortcut(record.id)
-				|| findMappingForTitle(record.title, String(record.id));
-			if (/^\d+$/.test(String(linkedSteamAppId || ''))
-				&& (!mappings[shortcutMappingKey(record.id)] || shouldAutoApplyNoLauncher(String(linkedSteamAppId)))) {
-				linkedShortcutRepairs.push(record);
+			knownShortcutIds.add(record.id);
+			if (!shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id)) {
+				backendLog(`Startup unlinked shortcut found: ${record.title} (${record.id})`);
+				scheduleShortcutInspection(record, 500, true, false, true);
 			}
 		}
-		shortcutAutoDetectorInitialized = true;
-		linkedShortcutRepairs.forEach((record, index) => {
-			scheduleShortcutInspection(record, 250 + index * 150, true);
-		});
-		backendLog(`Automatic shortcut detector ready; ${records.length} existing shortcut(s) indexed and ${linkedShortcutRepairs.length} linked shortcut repair(s) queued.`);
+
+		backendLog(`Automatic shortcut detector ready; ${records.length} existing shortcut(s) indexed.`);
 		return;
+	}
+
+	// Detect deleted shortcuts in real-time
+	const deletedShortcutIds = new Set<number>();
+	for (const knownId of Array.from(knownShortcutIds)) {
+		if (!currentIds.has(knownId)) {
+			deletedShortcutIds.add(knownId);
+			knownShortcutIds.delete(knownId);
+		}
+	}
+
+	for (const deletedId of Array.from(deletedShortcutIds)) {
+		clearArtworkSaved(deletedId);
+		undismissShortcut(deletedId);
+		const exactKey = shortcutMappingKey(deletedId);
+		if (mappings[exactKey]) {
+			delete mappings[exactKey];
+			void removeMappingChecked(exactKey);
+		}
+		try {
+			const apps = (window as any).SteamClient?.Apps;
+			if (typeof apps?.ClearCustomArtworkForApp === 'function') {
+				for (let t = 0; t < 5; t++) apps.ClearCustomArtworkForApp(deletedId, t);
+			}
+			if (typeof apps?.SetShortcutIcon === 'function') {
+				try { apps.SetShortcutIcon(deletedId, ''); } catch {}
+			}
+			void clearArtworkBackend({ shortcut_app_id: String(deletedId) });
+		} catch {}
 	}
 
 	for (const record of records) {
 		if (knownShortcutIds.has(record.id)) continue;
 		recordKnownShortcut(record.id);
-		if (shortcutAlreadyLinked(record.id) || shortcutDetectionDismissed.has(record.id)) continue;
-		if (!getPreferences().autoDetectShortcuts) continue;
-		backendLog(`New non-Steam shortcut detected: ${record.title} (${record.id})`);
-		scheduleShortcutInspection(record, 1000);
+		if (!shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id)) {
+			backendLog(`New shortcut added: ${record.title} (${record.id})`);
+			scheduleShortcutInspection(record, 300, true, false, true);
+		}
 	}
 }
 
@@ -419,10 +543,11 @@ export function stopShortcutAutoDetector(): void {
 	shortcutAutoDetectorTimer = null;
 	shortcutAutoDetectorInitialized = false;
 	shortcutAutoDetectorModalOpen = false;
+	shortcutLinkInProgress = false;
 	shortcutDetectionInFlight.clear();
 	shortcutDetectionScheduled.clear();
+	deferredShortcutInspections.clear();
 	clearShortcutDetectionCache();
 	clearLinkedNoteSyncState();
 	try { shortcutRuntimeHost().getMainWindowDoc()?.getElementById('gdl-auto-link-modal')?.remove(); } catch {}
 }
-

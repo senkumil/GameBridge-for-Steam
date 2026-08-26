@@ -22,7 +22,7 @@ const syntax = spawnSync(process.execPath, ['--check', dist], { stdio: 'inherit'
 if (syntax.status !== 0) process.exit(syntax.status ?? 1);
 
 const source = await fs.readFile(dist, 'utf8');
-if (!source.includes('game-data-linker')) {
+if (!source.includes('GameBridge for Steam')) {
   console.error('Generated frontend bundle does not contain the expected plugin identifier.');
   process.exit(1);
 }

@@ -1,27 +1,34 @@
 export interface GdlPreferences {
-	developerMode: boolean;
 	simulateAchievements: boolean;
 	autoDetectShortcuts: boolean;
+	trackNonSteamPlaytime: boolean;
+	autoCommunityArtwork: boolean;
+	steamGridDbApiKey: string;
 }
 
 const STORAGE_KEY = 'gdl_preferences_v1';
 const EVENT_NAME = 'gdl:preferences-changed';
 
 const DEFAULT_PREFERENCES: GdlPreferences = {
-	developerMode: false,
 	simulateAchievements: false,
 	autoDetectShortcuts: true,
+	trackNonSteamPlaytime: true,
+	autoCommunityArtwork: true,
+	steamGridDbApiKey: '',
 };
 
 function sanitizePreferences(value: unknown): GdlPreferences {
 	const record = value && typeof value === 'object' ? value as Partial<GdlPreferences> : {};
-	const developerMode = record.developerMode === true;
 	return {
-		developerMode,
-		// Simulation is a developer-only capability. Keep this invariant even if
-		// an older build left an inconsistent localStorage value behind.
-		simulateAchievements: developerMode && record.simulateAchievements === true,
+		// This remains disabled by default, but no longer depends on a separate
+		// developer-mode switch that did not provide any independent behavior.
+		simulateAchievements: record.simulateAchievements === true,
 		autoDetectShortcuts: record.autoDetectShortcuts !== false,
+		trackNonSteamPlaytime: record.trackNonSteamPlaytime !== false,
+		autoCommunityArtwork: record.autoCommunityArtwork !== false,
+		// Stored locally only. It is never logged or included in diagnostics.
+		steamGridDbApiKey: typeof record.steamGridDbApiKey === 'string'
+			? record.steamGridDbApiKey.trim().slice(0, 160) : '',
 	};
 }
 
@@ -52,6 +59,5 @@ export function subscribePreferences(listener: (preferences: GdlPreferences) => 
 }
 
 export function simulatedAchievementsEnabled(): boolean {
-	const preferences = getPreferences();
-	return preferences.developerMode && preferences.simulateAchievements;
+	return getPreferences().simulateAchievements;
 }

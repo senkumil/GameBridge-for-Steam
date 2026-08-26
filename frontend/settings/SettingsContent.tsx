@@ -1,4 +1,5 @@
 import React from 'react';
+import { Toggle } from '@steambrew/client';
 import type { LocalAchievementItem } from '../domain/types';
 import {
 	backendLog,
@@ -8,14 +9,39 @@ import {
 } from '../api/backend';
 import { gdlText, subscribeSteamLanguageChange } from '../steam/localization';
 import { fetchLocalAchievementData } from '../features/achievements/service';
+import { clearLibraryAssetCaches } from '../features/library/artwork';
 import { getPreferences, setPreferences, subscribePreferences } from '../core/preferences';
 
-const DEFAULT_ACHIEVEMENT_BASE_PATH = '%APPDATA%\\Goldberg SteamEmu Saves';
+const DEFAULT_ACHIEVEMENT_BASE_PATH = '%APPDATA%\\GSE Saves';
 
 export interface SettingsContentProps {
 	clearAchievementCache: () => void;
 	showAchievementToast: (appid: string, achievement: LocalAchievementItem) => Promise<void>;
 }
+
+interface SettingsToggleProps {
+	checked: boolean;
+	label: string;
+	onChange: (checked: boolean) => void;
+}
+
+/** Use Steam's own control: it participates in the CEF focus/input system. */
+const SettingsToggle = ({ checked, label, onChange }: SettingsToggleProps): React.ReactElement => {
+	const handleChange = (value: boolean | { target?: { checked?: boolean }; currentTarget?: { checked?: boolean } }): void => {
+		// Steam has shipped both Toggle(onChange: boolean) and Toggle(onChange:
+		// event) implementations. Supporting both prevents an event object from
+		// being sanitized to false by the preference store.
+		const fromEvent = typeof value === 'object'
+			? (value.currentTarget?.checked ?? value.target?.checked)
+			: undefined;
+		onChange(typeof value === 'boolean' ? value : (typeof fromEvent === 'boolean' ? fromEvent : !checked));
+	};
+	return (
+		<div title={label} style={{ display: 'inline-flex', flex: '0 0 auto', alignItems: 'center' }}>
+			<Toggle value={checked} onChange={handleChange} />
+		</div>
+	);
+};
 
 export const SettingsContent = ({ clearAchievementCache, showAchievementToast }: SettingsContentProps) => {
 	const [, setLanguageRevision] = React.useState(0);
@@ -30,6 +56,7 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 	const updatePreferences = (patch: Parameters<typeof setPreferences>[0]): void => {
 		const next = setPreferences(patch);
 		setPreferencesState(next);
+		if ('steamGridDbApiKey' in patch || 'autoCommunityArtwork' in patch) clearLibraryAssetCaches();
 		clearAchievementCache();
 	};
 
@@ -156,9 +183,9 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 	const disabled = loadingPath || savingPath;
 	return (
 		<div style={{
-			fontSize: '13px',
+			fontSize: '12px',
 			color: '#acb2b8',
-			lineHeight: '1.6',
+			lineHeight: '1.45',
 			width: '100%',
 			maxWidth: '100%',
 			minWidth: 0,
@@ -167,109 +194,212 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 			overflowWrap: 'anywhere',
 			paddingRight: '2px',
 		}}>
-			<div style={{ marginBottom: '8px', fontWeight: 600, color: '#dcdedf' }}>
-				{gdlText('settings_title', 'GameBridge for Steam')}
-			</div>
-			<div style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
-				{gdlText('settings_description', 'Right-click any non-Steam game → Properties → enter a linked Steam AppID. The library page will show its description, screenshots and metadata.')}
-			</div>
-			<div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
-				<div style={{ marginBottom: '4px', fontWeight: 600, color: '#dcdedf' }}>
-					{gdlText('achievement_path_title', 'Local achievement folder')}
+			{/* ── Tarjeta Guía Rápida Paso a Paso ──────────────────────── */}
+			<div style={{
+				background: 'linear-gradient(180deg, rgba(27,40,56,0.7) 0%, rgba(20,29,42,0.85) 100%)',
+				border: '1px solid rgba(102, 192, 244, 0.2)',
+				borderRadius: '4px',
+				padding: '10px 12px',
+				marginBottom: '12px'
+			}}>
+				<div style={{ marginBottom: '6px', fontWeight: 600, color: '#66c0f4', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+					<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z"/></svg>
+					{gdlText('settings_guide_title', '¿Cómo vincular tus juegos a Steam?')}
 				</div>
-				<div style={{ marginBottom: '10px', color: '#8f98a0', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
-					{gdlText('achievement_path_description', 'Choose the base folder that contains one subfolder per game: <folder>\\<Steam AppID>\\achievements.json. The official linked AppID is checked first.')}
+				<div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11.5px', color: '#c6d4df', lineHeight: '1.4' }}>
+					<div><b style={{ color: '#fff' }}>1.</b> {gdlText('settings_step_1', 'Añade tu juego en Steam (+ Añadir un producto → Añadir un producto que no es de Steam).')}</div>
+					<div><b style={{ color: '#fff' }}>2.</b> {gdlText('settings_step_2', 'Haz clic derecho en el juego en tu biblioteca de Steam → Propiedades.')}</div>
+					<div><b style={{ color: '#fff' }}>3.</b> {gdlText('settings_step_3', 'En el campo "Juego vinculado", pega el Steam AppID o URL de la tienda (ej: 1245620 para Elden Ring).')}</div>
+					<div><b style={{ color: '#59bf40' }}>✓</b> {gdlText('settings_step_4', '¡Listo! Tu juego cargará portadas oficiales, noticias, capturas, logros locales y compatibilidad con Big Picture.')}</div>
 				</div>
-				<div style={{ display: 'flex', gap: '8px', alignItems: 'stretch', flexWrap: 'wrap', width: '100%', minWidth: 0 }}>
-					<input
-						value={achievementPath}
-						onChange={(event: React.ChangeEvent<HTMLInputElement>) => setAchievementPath(event.currentTarget.value)}
-						onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => { if (event.key === 'Enter' && !disabled) void saveAchievementPath(achievementPath); }}
-						placeholder={gdlText('achievement_path_placeholder', 'Example: %APPDATA%\\Goldberg SteamEmu Saves')}
-						disabled={disabled}
-						spellCheck={false}
-						style={{ flex: '1 1 100%', width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '8px 10px', color: '#dcdedf', background: '#1b2838', border: '1px solid #3d4450', borderRadius: '2px', outline: 'none' }}
-					/>
+			</div>
+
+			{/* ── Carpeta local de logros ─────────────────────────────── */}
+			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
+				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
+					{gdlText('achievement_path_title', 'Carpeta local de logros')}
+				</div>
+				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
+					{gdlText('achievement_path_description', 'Carpeta base con subcarpetas por AppID: <carpeta>\\<AppID>\\achievements.json.')}
+				</div>
+				<input
+					value={achievementPath}
+					onChange={(event: React.ChangeEvent<HTMLInputElement>) => setAchievementPath(event.currentTarget.value)}
+					onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => { if (event.key === 'Enter' && !disabled) void saveAchievementPath(achievementPath); }}
+					placeholder={gdlText('achievement_path_placeholder', 'Ejemplo: %APPDATA%\\GSE Saves')}
+					disabled={disabled}
+					spellCheck={false}
+					style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '6px 9px', color: '#dcdedf', background: '#1b2838', border: '1px solid #3d4450', borderRadius: '2px', outline: 'none', fontSize: '12px', marginBottom: '6px' }}
+				/>
+				<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', width: '100%' }}>
 					<button
 						type="button"
 						disabled={disabled}
 						onClick={(): void => { void saveAchievementPath(achievementPath); }}
-						style={{ flex: '1 1 145px', minWidth: 0, padding: '7px 13px', color: '#fff', background: disabled ? '#3d4450' : 'linear-gradient(90deg,#06bfff,#2d73ff)', border: 0, borderRadius: '2px', cursor: disabled ? 'default' : 'pointer', whiteSpace: 'normal' }}
+						style={{ padding: '6px 9px', color: '#fff', background: disabled ? '#3d4450' : 'linear-gradient(90deg,#06bfff,#2d73ff)', border: 0, borderRadius: '2px', cursor: disabled ? 'default' : 'pointer', fontSize: '12px', fontWeight: 500 }}
 					>
-						{loadingPath ? gdlText('achievement_path_loading', 'Loading current folder...') : gdlText('achievement_path_save', 'Save folder')}
+						{loadingPath ? gdlText('achievement_path_loading', 'Cargando...') : gdlText('achievement_path_save', 'Guardar')}
 					</button>
 					<button
 						type="button"
 						disabled={disabled}
 						onClick={(): void => { void saveAchievementPath(DEFAULT_ACHIEVEMENT_BASE_PATH); }}
-						style={{ flex: '1 1 180px', minWidth: 0, padding: '7px 13px', color: '#dcdedf', background: '#3d4450', border: 0, borderRadius: '2px', cursor: disabled ? 'default' : 'pointer', whiteSpace: 'normal' }}
+						style={{ padding: '6px 9px', color: '#dcdedf', background: '#3d4450', border: 0, borderRadius: '2px', cursor: disabled ? 'default' : 'pointer', fontSize: '12px' }}
 					>
-						{gdlText('achievement_path_reset', 'Restore default')}
+						{gdlText('achievement_path_reset', 'Predeterminado')}
 					</button>
 				</div>
-				{pathStatus && <div style={{ marginTop: '8px', color: pathStatus.color }}>{pathStatus.text}</div>}
-			</div>
-			<div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
-				<div style={{ marginBottom: '4px', fontWeight: 600, color: '#dcdedf' }}>
-					{gdlText('achievement_test_title', 'Test achievement notifications')}
+				{pathStatus && <div style={{ marginTop: '6px', color: pathStatus.color, fontSize: '11.5px' }}>{pathStatus.text}</div>}
+				<div style={{
+					marginTop: '8px',
+					padding: '8px 10px',
+					background: 'rgba(45, 115, 255, 0.08)',
+					border: '1px solid rgba(45, 115, 255, 0.25)',
+					borderRadius: '3px',
+					fontSize: '11.5px',
+					lineHeight: '1.4',
+					color: '#a8c0d6'
+				}}>
+					<div style={{ fontWeight: 600, color: '#66c0f4', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+						<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }}>
+							<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+						</svg>
+						{gdlText('achievement_autocrack_title', 'Generación de logros en juegos externos')}
+					</div>
+					<div style={{ marginBottom: '6px' }}>
+						{gdlText('achievement_autocrack_note', 'Para que los juegos no oficiales registren logros en tiempo real, deben usar un emulador como SteamAutoCrack (Goldberg Emulator). El emulador generará automáticamente las carpetas y el archivo achievements.json a medida que juegas y consigues logros.')}
+					</div>
+					<div>
+						<span
+							role="button"
+							tabIndex={0}
+							onClick={(event: React.MouseEvent<HTMLSpanElement>) => {
+								event.preventDefault();
+								event.stopPropagation();
+								const url = 'https://github.com/SteamAutoCracks/Steam-auto-crack/releases';
+								const sc = (window as any).SteamClient;
+								if (typeof sc?.System?.OpenInSystemBrowser === 'function') {
+									try {
+										sc.System.OpenInSystemBrowser(url);
+										return;
+									} catch {}
+								}
+								window.open(url, '_blank', 'noopener,noreferrer');
+							}}
+							onKeyDown={(event: React.KeyboardEvent<HTMLSpanElement>) => {
+								if (event.key === 'Enter' || event.key === ' ') {
+									event.preventDefault();
+									const url = 'https://github.com/SteamAutoCracks/Steam-auto-crack/releases';
+									const sc = (window as any).SteamClient;
+									if (typeof sc?.System?.OpenInSystemBrowser === 'function') {
+										try {
+											sc.System.OpenInSystemBrowser(url);
+											return;
+										} catch {}
+									}
+									window.open(url, '_blank', 'noopener,noreferrer');
+								}
+							}}
+							style={{
+								color: '#66c0f4',
+								textDecoration: 'underline',
+								fontWeight: 500,
+								cursor: 'pointer',
+								display: 'inline-flex',
+								alignItems: 'center',
+								gap: '4px',
+							}}
+						>
+							<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }}>
+								<path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/>
+							</svg>
+							{gdlText('achievement_autocrack_download_link', 'Descargar SteamAutoCrack en GitHub (Releases)')}
+						</span>
+					</div>
 				</div>
-				<div style={{ marginBottom: '10px', color: '#8f98a0', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
-					{gdlText('achievement_test_description', 'Send a random achievement notification with sound to test that notifications are working.')}
+			</div>
+
+			{/* ── Probar notificaciones ────────────────────────────────── */}
+			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
+				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
+					{gdlText('achievement_test_title', 'Probar notificaciones de logros')}
+				</div>
+				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
+					{gdlText('achievement_test_description', 'Envía una notificación de logro aleatoria para comprobar que las notificaciones funcionan.')}
 				</div>
 				<button
 					type="button"
 					disabled={testingAchievement}
 					onClick={(): void => { void testRandomAchievement(); }}
-					style={{ width: '100%', maxWidth: '290px', minWidth: 0, padding: '8px 15px', color: '#fff', background: testingAchievement ? '#3d4450' : 'linear-gradient(90deg,#06bfff,#2d73ff)', border: 0, borderRadius: '2px', cursor: testingAchievement ? 'default' : 'pointer', fontWeight: 500, whiteSpace: 'normal' }}
+					style={{ width: '100%', maxWidth: '280px', minWidth: 0, padding: '7px 12px', color: '#fff', background: testingAchievement ? '#3d4450' : 'linear-gradient(90deg,#06bfff,#2d73ff)', border: 0, borderRadius: '2px', cursor: testingAchievement ? 'default' : 'pointer', fontWeight: 500, fontSize: '12px' }}
 				>
 					{testingAchievement
-						? gdlText('achievement_test_loading', 'Sending test notification...')
-						: gdlText('achievement_test_button', 'Test notification (with sound)')}
+						? gdlText('achievement_test_loading', 'Enviando notificación de prueba...')
+						: gdlText('achievement_test_button', 'Probar notificación')}
 				</button>
-				{testStatus && <div style={{ marginTop: '8px', color: testStatus.color, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{testStatus.text}</div>}
+				{testStatus && <div style={{ marginTop: '6px', color: testStatus.color, fontSize: '11.5px' }}>{testStatus.text}</div>}
 			</div>
-			<div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
-				<div style={{ marginBottom: '4px', fontWeight: 600, color: '#dcdedf' }}>
-					{gdlText('auto_detect_title', 'Automatic shortcut detection')}
+
+			{/* ── Detección automática de accesos directos ─────────────── */}
+			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
+				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
+					{gdlText('auto_detect_title', 'Detección automática de accesos directos')}
 				</div>
-				<div style={{ marginBottom: '10px', color: '#8f98a0' }}>
-					{gdlText('auto_detect_description', 'Suggest linking when new non-Steam games are added to your library.')}
+				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
+					{gdlText('auto_detect_description', 'Sugiere vincular cuando se añaden nuevos juegos que no son de Steam a tu biblioteca.')}
 				</div>
-				<label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer', marginBottom: '8px' }}>
+				<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
+					<SettingsToggle checked={preferences.autoDetectShortcuts} onChange={checked => updatePreferences({ autoDetectShortcuts: checked })} label={gdlText('auto_detect_shortcuts_toggle', 'Mostrar sugerencia de vinculación al añadir un juego que no sea de Steam')} />
+					<span style={{ fontSize: '12px' }}>{gdlText('auto_detect_shortcuts_toggle', 'Mostrar sugerencia de vinculación al añadir un juego que no sea de Steam')}</span>
+				</div>
+				<div style={{ marginTop: '12px', padding: '10px 11px', background: 'rgba(102,192,244,.06)', border: '1px solid rgba(102,192,244,.16)', borderRadius: '3px' }}>
+					<div style={{ fontWeight: 600, color: '#dcdedf', fontSize: '12px' }}>Artwork comunitario (SteamGridDB)</div>
+					<div style={{ marginTop: '4px', color: '#8f98a0', fontSize: '11.5px', lineHeight: 1.4 }}>
+						Sólo se consulta si Steam no publicó una portada, fondo, logo o cápsula. Nunca reemplaza artwork oficial.
+					</div>
+					<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '9px', fontSize: '12px' }}>
+						<SettingsToggle checked={preferences.autoCommunityArtwork} onChange={checked => updatePreferences({ autoCommunityArtwork: checked })} label="Aplicar automáticamente recursos de SteamGridDB que falten" />
+						Aplicar automáticamente recursos de SteamGridDB que falten
+					</div>
 					<input
-						type="checkbox"
-						checked={preferences.autoDetectShortcuts}
-						onChange={(event: React.ChangeEvent<HTMLInputElement>) => updatePreferences({ autoDetectShortcuts: event.currentTarget.checked })}
+						type="password"
+						autoComplete="off"
+						spellCheck={false}
+						value={preferences.steamGridDbApiKey}
+						onChange={(event: React.ChangeEvent<HTMLInputElement>) => updatePreferences({ steamGridDbApiKey: event.currentTarget.value })}
+						placeholder="API key de SteamGridDB (se guarda sólo localmente)"
+						style={{ boxSizing: 'border-box', width: '100%', marginTop: '9px', padding: '7px 9px', color: '#dcdedf', background: '#171d25', border: '1px solid #3d4450', borderRadius: '2px', fontSize: '12px' }}
 					/>
-					<span>{gdlText('auto_detect_shortcuts_toggle', 'Show link suggestion prompt when adding a non-Steam game')}</span>
-				</label>
+				</div>
 			</div>
-			<div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
-				<div style={{ marginBottom: '4px', fontWeight: 600, color: '#dcdedf' }}>
-					{gdlText('developer_tools_title', 'Developer tools')}
+
+			{/* ── Seguimiento de tiempo de juego (Fallback) ───────────── */}
+			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
+				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
+					{gdlText('playtime_tracking_title', 'Seguimiento de tiempo de juego (Fallback)')}
 				</div>
-				<div style={{ marginBottom: '10px', color: '#8f98a0' }}>
-					{gdlText('developer_tools_description', 'Testing options are disabled by default for public installations.')}
+				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
+					{gdlText('playtime_tracking_description', 'Registra y muestra las horas jugadas en juegos que no son de Steam si tu cliente de Steam no incluye seguimiento nativo.')}
 				</div>
-				<label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer', marginBottom: '8px' }}>
-					<input
-						type="checkbox"
-						checked={preferences.developerMode}
-						onChange={(event: React.ChangeEvent<HTMLInputElement>) => updatePreferences({ developerMode: event.currentTarget.checked })}
-					/>
-					<span>{gdlText('developer_mode', 'Enable developer mode')}</span>
-				</label>
-				<label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: preferences.developerMode ? 'pointer' : 'default', opacity: preferences.developerMode ? 1 : 0.55 }}>
-					<input
-						type="checkbox"
-						disabled={!preferences.developerMode}
-						checked={preferences.simulateAchievements}
-						onChange={(event: React.ChangeEvent<HTMLInputElement>) => updatePreferences({ simulateAchievements: event.currentTarget.checked })}
-					/>
-					<span>{gdlText('simulate_achievements', 'Show deterministic test achievements when no local progress file exists')}</span>
-				</label>
+				<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
+					<SettingsToggle checked={preferences.trackNonSteamPlaytime} onChange={checked => updatePreferences({ trackNonSteamPlaytime: checked })} label={gdlText('playtime_tracking_toggle', 'Activar seguimiento y estadísticas de tiempo de juego para juegos externos')} />
+					<span style={{ fontSize: '12px' }}>{gdlText('playtime_tracking_toggle', 'Activar seguimiento y estadísticas de tiempo de juego para juegos externos')}</span>
+				</div>
+			</div>
+
+			{/* ── Logros de prueba ───────────────────────────────────────── */}
+			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
+				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
+					{gdlText('simulated_achievements_title', 'Logros de prueba')}
+				</div>
+				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
+					{gdlText('simulated_achievements_description', 'Úsalo solo para comprobar la interfaz cuando el juego no tenga un archivo local de progreso.')}
+				</div>
+				<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+					<SettingsToggle checked={preferences.simulateAchievements} onChange={checked => updatePreferences({ simulateAchievements: checked })} label={gdlText('simulate_achievements', 'Mostrar logros de prueba deterministas cuando no existe un archivo de progreso local')} />
+					<span style={{ fontSize: '12px' }}>{gdlText('simulate_achievements', 'Mostrar logros de prueba deterministas cuando no existe un archivo de progreso local')}</span>
+				</div>
 			</div>
 		</div>
 	);
 };
-

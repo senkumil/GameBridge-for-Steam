@@ -18,7 +18,7 @@
 	},
 	"type": "module",
 	"name": "gamebridge-for-steam",
-	"version": "2.6.0-alpha.2",
+	"version": "1.5.0",
 	"description": "Vincula juegos no-Steam con metadatos oficiales de Steam para mostrar datos reales en la biblioteca.",
 	"main": "./frontend/index.tsx",
 	"author": "David Miranda (Davidjarod11)",
@@ -26,7 +26,7 @@
 	"dependencies": {
 		"@steambrew/api": "^5.5.3",
 		"@steambrew/client": "^5.5.3",
-		"@steambrew/ttc": "^2.7.3",
+		"@steambrew/ttc": "^3.3.7",
 		"@steambrew/webkit": "^5.5.3"
 	}
 }

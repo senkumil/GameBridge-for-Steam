@@ -1,8 +1,9 @@
 export interface ShortcutRuntimeHost {
 	getMainWindowDoc: () => Document | null;
+	refreshLibraryArtwork?: (appId: number) => void;
+	resetLibraryInjection?: (reinject?: boolean, targetDoc?: Document | null) => void;
 	findNonSteamNotice: (doc: Document) => { title: string } | null;
-	resetLibraryInjection: (reinject: boolean) => void;
-	refreshLibraryArtwork: (appId: number) => void;
+	isLibraryActive?: (doc?: Document | null) => boolean;
 }
 
 let configuredHost: ShortcutRuntimeHost | null = null;

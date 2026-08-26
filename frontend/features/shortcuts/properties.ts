@@ -1,12 +1,11 @@
 import type { ShortcutDetectionContext } from '../../domain/types';
-import { backendLog, clearArtworkBackend, getGameAchievementPathBackend, setGameAchievementPathBackend } from '../../api/backend';
-import { mappings, findMappingForTitle, removeMappingChecked, shortcutMappingKey } from '../../core/mappings';
+import { backendLog, getGameAchievementPathBackend, setGameAchievementPathBackend } from '../../api/backend';
+import { shortcutMappingKey } from '../../core/mappings';
 import { escapeHtml, normalizeTitle, templateToRegex } from '../../core/text';
 import { gdlText, loc } from '../../steam/localization';
 import { findActiveShortcutAppId, findShortcutAppIdByName, shortcutPathBasename } from '../../steam/shortcuts';
-import { clearArtworkSaved } from '../library/artwork';
 import { shortcutRuntimeHost } from './host';
-import { isUnrealShippingExecutable } from './registry';
+import { findMappingForShortcut, isUnrealShippingExecutable } from './registry';
 import { buildShortcutDetectionContext, detectShortcutCandidates } from './detection';
 import { linkShortcutToSteam } from './linking';
 
@@ -15,11 +14,18 @@ const GDL_PROP = 'gdl-properties-injected';
 export function tryInjectPropertiesField(doc: Document, popupTitle: string): void {
 	if (!doc || !doc.body || doc.querySelector(`.${GDL_PROP}`)) return;
 
-	// Confirm we're on Steam's Shortcut tab using official localization tokens.
-	// If Steam does not expose a token on a future build, English is the only
-	// plugin-owned fallback; we never maintain ad-hoc per-language phrase lists.
-	const vrPhrases = [loc('AppProperties_Shortcut_InVR', 'Include in VR Library').toLowerCase()];
-	const targetPhrases = [loc('AppProperties_Shortcut_TargetExecutable', 'Target').toLowerCase()];
+	const vrPhrases = [
+		loc('AppProperties_Shortcut_InVR', 'Include in VR Library').toLowerCase(),
+		'include in vr library', 'incluir en la biblioteca de rv', 'incluir en la biblioteca vr',
+		'in vr-bibliothek aufnehmen', 'inclure dans la bibliothèque vr', 'includi nella libreria vr',
+		'включить в библиотеку vr',
+	];
+	const targetPhrases = [
+		loc('AppProperties_Shortcut_TargetExecutable', 'Target').toLowerCase(),
+		loc('AppProperties_Shortcut_StartDir', 'Start In').toLowerCase(),
+		'target', 'destino', 'cible', 'ziel', 'destinazione', 'объект',
+		'start in', 'iniciar en', 'démarrer dans', 'ausführen in', 'inizia in', 'рабочая папка',
+	];
 
 	const walker = doc.createTreeWalker(doc.body || doc.documentElement, NodeFilter.SHOW_TEXT, null);
 	let tn: Text | null;
@@ -58,18 +64,15 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		try {
 			const style = (cur.ownerDocument?.defaultView || window).getComputedStyle(cur);
 			const element = cur as HTMLElement;
-			const hasScroll = element.scrollHeight > element.clientHeight + 4;
-			if (style.overflowY === 'auto' || style.overflowY === 'scroll' || hasScroll) {
+			const isScrollable = (style.overflowY === 'auto' || style.overflowY === 'scroll') && element.clientHeight > 0;
+			const isModalBody = cur.className && String(cur.className).includes('Modal');
+			if (isScrollable || isModalBody) {
 				container = cur;
 				break;
 			}
 		} catch {}
 	}
-	if (!container) {
-		container = anchor.closest?.('[class*="DialogContent"], [class*="DialogBody"], [class*="TabBody"], [class*="Properties"], form')
-			|| fallbackContainer
-			|| anchor.parentElement;
-	}
+	if (!container) container = fallbackContainer;
 	if (!container) return;
 
 	// ── Extract game title ─────────────────────────────────────────────
@@ -137,10 +140,10 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	if (!gameTitle) return;
 
 	let titleKey = normalizeTitle(gameTitle);
-	const initialShortcutId = findActiveShortcutAppId(doc, gameTitle);
+	const initialShortcutId = findActiveShortcutAppId(doc, gameTitle) || (findShortcutAppIdByName(gameTitle) ? String(findShortcutAppIdByName(gameTitle)) : null);
 	let managedShortcutId = initialShortcutId ? Number(initialShortcutId) : null;
 	const mappingAliases = new Set<string>([titleKey]);
-	const currentRaw = findMappingForTitle(gameTitle, initialShortcutId) || '';
+	const currentRaw = findMappingForShortcut(initialShortcutId, gameTitle) || '';
 	// Only numeric Steam AppIDs are active; old external-platform mappings stay hidden
 	// until the user replaces them with a Steam link.
 	const currentLinked = /^\d+$/.test(currentRaw) ? currentRaw : '';
@@ -157,16 +160,17 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		<div style="font-size: 11px; color: #6c7580; margin-bottom: 12px;">
 			${escapeHtml(gdlText('linked_description', 'Paste a Steam AppID or Steam store link to show game information on this library page.'))}
 		</div>
-		<div class="gdl-auto-detect" style="display:none; margin-bottom:12px; padding:10px 12px; background:rgba(26,159,255,0.08); border:1px solid rgba(26,159,255,0.2); border-radius:3px;">
-			<div class="gdl-auto-detect-title" style="font-size:11px; color:#8f98a0; margin-bottom:7px;"></div>
-			<select class="gdl-auto-candidates" style="width:100%; padding:7px 9px; background:#20242b; border:1px solid rgba(255,255,255,0.12); border-radius:2px; color:#dcdedf; font-size:12px;"></select>
+		<div class="gdl-auto-detect" style="margin-bottom:12px; padding:10px 12px; background:rgba(26,159,255,0.08); border:1px solid rgba(26,159,255,0.2); border-radius:3px;">
+			<div class="gdl-auto-detect-title" style="font-size:11px; color:#8f98a0; margin-bottom:7px;">${escapeHtml(gdlText('shortcut_suggestions_title', 'Sugerencias de Steam AppID:'))}</div>
+			<select class="gdl-auto-candidates" style="width:100%; padding:7px 9px; background:#20242b; border:1px solid rgba(255,255,255,0.12); border-radius:2px; color:#dcdedf; font-size:12px;">
+				<option value="">${escapeHtml(gdlText('detecting_game', 'Detectando el juego automáticamente...'))}</option>
+			</select>
 		</div>
 		<div style="display: flex; gap: 8px; align-items: center;">
 			<input class="gdl-appid-input" type="text" placeholder="${escapeHtml(gdlText('appid_placeholder', 'Steam AppID or Steam store link'))}"
 				value="${escapeHtml(currentLinked)}"
 				style="flex:1; padding:8px 12px; background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.1); border-radius:3px; color:#dcdedf; font-size:13px; outline:none;" />
 			<button class="gdl-save-btn" style="padding:8px 18px; background:#1a9fff; border:none; border-radius:3px; color:#fff; font-size:12px; font-weight:500; cursor:pointer; white-space:nowrap;">${escapeHtml(gdlText('save', 'Save'))}</button>
-			<button class="gdl-clear-btn" style="padding:8px 14px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.06); border-radius:3px; color:#8f98a0; font-size:12px; cursor:pointer; white-space:nowrap;">${escapeHtml(gdlText('unlink', 'Unlink'))}</button>
 		</div>
 		<div class="gdl-game-achievement-source" style="margin-top:16px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);">
 			<div style="font-size:12px; font-weight:500; color:#8f98a0; text-transform:uppercase; letter-spacing:.5px; margin-bottom:7px;">
@@ -198,9 +202,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 
 	const input = section.querySelector('.gdl-appid-input') as HTMLInputElement;
 	const saveBtn = section.querySelector('.gdl-save-btn') as HTMLButtonElement;
-	const clearBtn = section.querySelector('.gdl-clear-btn') as HTMLButtonElement;
 	const statusEl = section.querySelector('.gdl-status') as HTMLElement;
-	const autoBox = section.querySelector('.gdl-auto-detect') as HTMLElement;
 	const autoTitle = section.querySelector('.gdl-auto-detect-title') as HTMLElement;
 	const autoSelect = section.querySelector('.gdl-auto-candidates') as HTMLSelectElement;
 	const skipLauncherLabel = section.querySelector('.gdl-skip-launcher') as HTMLElement;
@@ -221,6 +223,12 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	});
 
 	if (gameAchievementPathInput && gameAchievementPathStatus) {
+		gameAchievementPathInput.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				gameAchievementPathSave?.click();
+			}
+		});
 		gameAchievementPathStatus.textContent = gdlText('game_achievement_path_loading', 'Loading achievement source...');
 		void getGameAchievementPathBackend({ request_json: gameAchievementPathRequest() })
 			.then(raw => {
@@ -290,49 +298,71 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		});
 	}
 
-	if (!currentLinked && managedShortcutId && input && statusEl) {
-		statusEl.textContent = gdlText('detecting_game', 'Detecting the game automatically...');
+	if (managedShortcutId && input && statusEl && autoSelect && autoTitle) {
+		statusEl.textContent = gdlText('detecting_game', 'Detectando el juego automáticamente...');
 		void (async () => {
 			detectionContext = await buildShortcutDetectionContext(doc, gameTitle, managedShortcutId!);
 			if (!detectionContext) {
-				statusEl.textContent = gdlText('no_match_found', 'No reliable match was found. You can still enter the AppID manually.');
+				autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'Sin sugerencias automáticas (introduce el AppID abajo)'))}</option>`;
+				statusEl.textContent = gdlText('no_match_found', 'No se encontró una coincidencia confiable. Puedes introducir el AppID manualmente.');
 				return;
 			}
 			const detection = await detectShortcutCandidates(detectionContext);
-			const viable = (detection?.candidates || []).filter(candidate => candidate.score >= 48);
+			const viable = detection?.candidates || [];
 			if (!viable.length) {
-				statusEl.textContent = gdlText('no_match_found', 'No reliable match was found. You can still enter the AppID manually.');
+				autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'Sin sugerencias automáticas (introduce el AppID abajo)'))}</option>`;
+				statusEl.textContent = gdlText('no_match_found', 'No se encontró una coincidencia confiable. Puedes introducir el AppID manualmente.');
 				return;
 			}
-			autoSelect.replaceChildren(...viable.map(candidate => {
+			const options: HTMLOptionElement[] = [];
+			if (currentLinked && !viable.some(c => c.appid === currentLinked)) {
+				const currentOpt = doc.createElement('option');
+				currentOpt.value = currentLinked;
+				currentOpt.textContent = gdlText('current_linked_option', 'Juego vinculado actualmente (AppID {appid})', { appid: currentLinked });
+				options.push(currentOpt);
+			}
+			for (const candidate of viable) {
 				const option = doc.createElement('option');
 				option.value = candidate.appid;
-				option.textContent = `${candidate.name} — AppID ${candidate.appid} (${Math.round(candidate.score)}%)`;
-				return option;
-			}));
-			input.value = viable[0].appid;
-			autoTitle.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Save to link it.', { name: viable[0].name });
-			autoBox.style.display = 'block';
-			statusEl.textContent = viable[0].score >= 72
-				? gdlText('detection_ready', 'Automatic detection is ready for confirmation.')
-				: gdlText('detection_uncertain', 'The match is uncertain. Choose the correct result or enter the AppID manually.');
+				const scoreText = candidate.score ? ` (${Math.round(candidate.score)}%)` : '';
+				option.textContent = `${candidate.name} — AppID ${candidate.appid}${scoreText}`;
+				options.push(option);
+			}
+			autoSelect.replaceChildren(...options);
+			if (!currentLinked && viable.length > 0) {
+				input.value = viable[0].appid;
+				autoSelect.value = viable[0].appid;
+				autoTitle.textContent = gdlText('detected_game', 'Detectado: {name}. Revisa el resultado y pulsa Guardar para vincularlo.', { name: viable[0].name });
+			} else if (currentLinked) {
+				autoSelect.value = currentLinked;
+				const currentCandidate = viable.find(c => c.appid === currentLinked);
+				autoTitle.textContent = currentCandidate
+					? gdlText('detected_game', 'Detectado: {name}. Revisa el resultado y pulsa Guardar para vincularlo.', { name: currentCandidate.name })
+					: gdlText('shortcut_suggestions_title', 'Sugerencias de Steam AppID:');
+			}
+			statusEl.textContent = viable[0]?.score >= 72
+				? gdlText('detection_ready', 'La detección automática está lista para confirmar.')
+				: gdlText('detection_uncertain', 'La coincidencia es incierta. Elige el resultado correcto o introduce el AppID manualmente.');
 			if (detection?.launcher_detected && !detection.generic_launcher && !isUnrealShippingExecutable(detectionContext.exePath)) {
 				skipLauncherLabel.style.display = 'flex';
 			}
 			if (detectionContext.bootstrapDetected && detectionContext.recommendedExePath) {
 				const bootstrap = shortcutPathBasename(detectionContext.exePath);
 				const gameExe = shortcutPathBasename(detectionContext.recommendedExePath);
-				trackingExecutableCopy.innerHTML = `<strong style="font-weight:500;color:#dcdedf;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam keeps tracking playtime.', { bootstrap, game: gameExe }))}`;
+				trackingExecutableCopy.innerHTML = `<strong style="font-weight:500;color:#dcdedf;">${escapeHtml(gdlText('use_tracking_executable', 'Usar el ejecutable real del juego'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} se cierra después de iniciar {game}. Usa {game} para que Steam registre tus horas de juego.', { bootstrap, game: gameExe }))}`;
 				trackingExecutableLabel.style.display = 'flex';
 			}
 			autoSelect.addEventListener('change', () => {
-				input.value = autoSelect.value;
-				const selected = viable.find(candidate => candidate.appid === autoSelect.value);
-				if (selected) autoTitle.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Save to link it.', { name: selected.name });
+				if (autoSelect.value) {
+					input.value = autoSelect.value;
+					const selected = viable.find(candidate => candidate.appid === autoSelect.value);
+					if (selected) autoTitle.textContent = gdlText('detected_game', 'Detectado: {name}. Revisa el resultado y pulsa Guardar para vincularlo.', { name: selected.name });
+				}
 			});
 		})().catch(e => {
 			backendLog('Properties automatic detection error: ' + e);
-			statusEl.textContent = gdlText('no_match_found', 'No reliable match was found. You can still enter the AppID manually.');
+			autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'Sin sugerencias automáticas (introduce el AppID abajo)'))}</option>`;
+			statusEl.textContent = gdlText('no_match_found', 'No se encontró una coincidencia confiable. Puedes introducir el AppID manualmente.');
 		});
 	}
 
@@ -373,43 +403,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			}
 			saveBtn.disabled = false;
 			saveBtn.style.opacity = '1';
-		});
-	}
-
-	if (clearBtn && input && statusEl) {
-		clearBtn.addEventListener('click', async () => {
-			try {
-				if (managedShortcutId) mappingAliases.add(shortcutMappingKey(managedShortcutId));
-				mappingAliases.add(titleKey);
-				const failedKeys: string[] = [];
-				for (const key of mappingAliases) {
-					if (await removeMappingChecked(key)) delete mappings[key];
-					else failedKeys.push(key);
-				}
-				if (failedKeys.length) throw new Error('mapping_remove_failed:' + failedKeys.join(','));
-				input.value = '';
-				statusEl.textContent = gdlText('link_removed', 'Link removed.');
-				statusEl.style.color = '#8f98a0';
-				// Clear artwork persistence marker so it can be re-applied later
-				const shortcutId = managedShortcutId || findShortcutAppIdByName(titleKey) || findShortcutAppIdByName(gameTitle);
-				if (shortcutId) {
-					clearArtworkSaved(shortcutId);
-					// Clear all library artwork plus the shortcut's native icon.
-					const apps = (window as any).SteamClient?.Apps;
-					if (typeof apps?.ClearCustomArtworkForApp === 'function') {
-						for (let t = 0; t < 5; t++) apps.ClearCustomArtworkForApp(shortcutId, t);
-					}
-					if (typeof apps?.SetShortcutIcon === 'function') {
-						try { apps.SetShortcutIcon(shortcutId, ''); } catch {}
-					}
-					try { await clearArtworkBackend({ shortcut_app_id: String(shortcutId) }); } catch {}
-				}
-				// Auto-refresh the library page to remove injected content
-				shortcutRuntimeHost().resetLibraryInjection(false);
-			} catch (e) {
-					statusEl.textContent = gdlText('remove_failed', 'Could not remove the link.');
-				statusEl.style.color = '#ff6b6b';
-			}
 		});
 	}
 }

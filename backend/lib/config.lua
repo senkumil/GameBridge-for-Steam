@@ -26,7 +26,7 @@ function M.plugin_dir()
         if parent and parent ~= "" then return parent end
     end
     local steam = millennium.steam_path()
-    local fallback = fs.join(steam, "plugins", "game-data-linker")
+    local fallback = fs.join(steam, "plugins", "GameBridge for Steam")
     logger:warn("Using fallback plugin path: " .. tostring(fallback))
     return fallback
 end

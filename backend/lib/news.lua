@@ -6,7 +6,7 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "Steam-Game-Data-Linker-Mod/2.6"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
 local M = {}
 local html_unescape = util.html_unescape
 function M.fetch_news(steam_app_id, language)

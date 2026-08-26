@@ -21,13 +21,15 @@ export const feLogBackend         = callable<[{ msg: string }], string>('fe_log'
 
 export const fetchLibraryAssetsBackend = callable<[{ request_json: string }], string>('fetch_library_assets');
 
+export const fetchCommunityArtworkBackend = callable<[{ request_json: string }], string>('fetch_community_artwork');
+
 export const saveShortcutIconBackend = callable<[{ request_json: string }], string>('save_shortcut_icon');
 
 export const clearArtworkBackend  = callable<[{ shortcut_app_id: string }], string>('clear_artwork');
 
 export const detectGameCandidatesBackend = callable<[{ request_json: string }], string>('detect_game_candidates');
 
-export const getShortcutDetailsBackend = callable<[{ shortcut_app_id: string }], string>('get_shortcut_details');
+export const getShortcutDetailsBackend = callable<[{ shortcut_app_id: string; title?: string }], string>('get_shortcut_details');
 
 export const getAchievementBasePathBackend = callable<[], string>('get_achievement_base_path');
 
@@ -107,3 +109,13 @@ export const fetchPublishedPreviewsBackend = callable<[{ file_ids_csv: string }]
 export const fetchFriendReviewBackend = callable<[{ steam_id64: string; steam_app_id: string }], string>('fetch_friend_review');
 
 export const fetchLocalAchievementsBackend = callable<[{ request_json: string }], string>('fetch_local_achievement_data');
+
+export const startPlaytimeSessionBackend = callable<[{ request_json: string }], string>('start_playtime_session');
+
+export const pingPlaytimeSessionBackend = callable<[{ request_json: string }], string>('ping_playtime_session');
+
+export const stopPlaytimeSessionBackend = callable<[{ request_json: string }], string>('stop_playtime_session');
+
+export const getPlaytimeDataBackend = callable<[{ request_json: string }], string>('get_playtime_data');
+
+export const setPlaytimeDataBackend = callable<[{ request_json: string }], string>('set_playtime_data');

@@ -10,6 +10,13 @@ function cloudSynchronizedSvg(extraClass = ''): string {
 export function ensureCloudStatus(doc: Document): void {
 	const classes = PLAYBAR_CLASSES();
 	const statsSections = elementsWithCssModuleClass(doc, classes.GameStatsSection).filter(section => section.isConnected);
+	// Steam uses more than one play-bar structure. If its CSS module class is
+	// absent, the achievement slot is still a reliable anchor for the same row.
+	// This keeps the simulated cloud state available to every linked shortcut.
+	if (statsSections.length === 0) {
+		const achievement = doc.querySelector<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements');
+		if (achievement?.parentElement?.isConnected) statsSections.push(achievement.parentElement);
+	}
 	for (const stats of statsSections) {
 		if (stats.querySelector('[data-gdl-cloud-status="1"]')) continue;
 		let reference = elementsWithCssModuleClass(stats, classes.LastPlayed).find(element => !element.closest('[data-gdl-cloud-status]'))

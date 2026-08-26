@@ -6,6 +6,15 @@ import { buildNativeSidebarSection } from './layout';
 
 const progressiveRevealCleanup = new WeakMap<HTMLElement, () => void>();
 
+function createCommunityHeader(doc: Document): HTMLElement {
+	const header = doc.createElement('div');
+	header.className = 'gdl-community-native-header';
+	const tooltipFirst = loc('AppDetails_Community_Tooltip1', 'This section contains screenshots, artwork, videos, guides, and more, submitted by the community.');
+	const tooltipSecond = loc('AppDetails_Community_Tooltip2', 'You can like, share, comment on, or report this content.');
+	header.innerHTML = `<span>${escapeHtml(gdlText('community_content', loc('AppDetails_SectionTitle_Community', 'Community Content')).toUpperCase())}</span><span class="gdl-community-help" aria-label="${escapeHtml(tooltipFirst)}">?<span class="gdl-community-help-tooltip">${escapeHtml(tooltipFirst)}<br><br>${escapeHtml(tooltipSecond)}</span></span>`;
+	return header;
+}
+
 export function disposeCommunityProgressiveReveal(root: HTMLElement): void {
 	progressiveRevealCleanup.get(root)?.();
 }
@@ -146,21 +155,21 @@ export function insertCommunitySection(
 	if (node) {
 		node.classList.add('gdl-community-section');
 		activityWrapper.parentElement.insertBefore(node, activityWrapper.nextSibling);
-		const heading = node.querySelector('h2');
-		const text = (heading?.querySelector('div div') || heading?.querySelector('div') || heading) as HTMLElement | null;
-		if (text) {
-			const help = doc.createElement('span');
-			help.className = 'gdl-community-help';
-			help.style.cssText = 'width:16px;height:16px;border-radius:50%;border:1px solid #8f98a0;display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:#8f98a0;cursor:help;margin-inline-start:8px;vertical-align:middle;';
-			help.innerHTML = `?<span class="gdl-community-help-tooltip">${escapeHtml('This section contains screenshots, artwork, videos, guides, and more submitted by the community.')}<br><br>${escapeHtml('You can rate, share, comment on, or report this content.')}</span>`;
-			text.appendChild(help);
-		}
+		const region = node.querySelector<HTMLElement>('[role="region"]') || node;
+		const inner = node.querySelector<HTMLElement>('#gdl-community-inner');
+		const body = inner?.parentElement;
+		region.querySelector('h2')?.remove();
+		if (body) region.insertBefore(createCommunityHeader(doc), body);
 	} else {
 		node = doc.createElement('div');
 		node.id = 'gdl-community-content';
 		node.className = 'gdl-community-section';
 		node.style.cssText = 'color:#acb2b8;font-family:inherit;padding:0 12px 24px;overflow:visible;';
-		node.innerHTML = `<h2>${escapeHtml(gdlText('community_content', loc('AppDetails_SectionTitle_Community', 'Community Content')).toUpperCase())}<span title="${escapeHtml('Community screenshots, artwork, and guides')}" style="width:16px;height:16px;border-radius:50%;border:1px solid #8f98a0;display:inline-flex;align-items:center;justify-content:center;font-size:10px;margin-inline-start:8px;">?</span></h2><div id="gdl-community-inner">${communityHtml}</div>`;
+		node.appendChild(createCommunityHeader(doc));
+		const inner = doc.createElement('div');
+		inner.id = 'gdl-community-inner';
+		inner.innerHTML = communityHtml;
+		node.appendChild(inner);
 		activityWrapper.parentElement.insertBefore(node, activityWrapper.nextSibling);
 	}
 

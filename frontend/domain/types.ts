@@ -117,6 +117,13 @@ export interface ShortcutLinkResult {
 	data?: SteamGameData;
 	shortcutAppId?: number | null;
 	aliases?: string[];
+	setup?: {
+		nameReady: boolean;
+		iconApplied: boolean;
+		artworkComplete: boolean;
+		missingArtwork: string[];
+		communityArtwork: string[];
+	};
 	error?: string;
 }
 

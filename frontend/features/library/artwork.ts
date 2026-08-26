@@ -1,4 +1,5 @@
-import { backendLog, fetchLibraryAssetsBackend, saveShortcutIconBackend } from '../../api/backend';
+import { backendLog, fetchCommunityArtworkBackend, fetchLibraryAssetsBackend, saveShortcutIconBackend } from '../../api/backend';
+import { getPreferences } from '../../core/preferences';
 import { steamLanguageSync } from '../../steam/localization';
 import { findShortcutAppIdsByName, getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
 
@@ -45,7 +46,7 @@ async function imageUrlToBase64(url: string): Promise<string | null> {
 	// Some image CDNs send no CORS headers, so the backend fallback is preferred.
 	// headers, so the browser blocks the direct fetch. Retry through a
 	// CORS-friendly image proxy that re-serves with Access-Control-Allow-Origin.
-	const proxied = 'https://wsrv.nl/?url=' + url.replace(/^https?:\/\//, '') + '&output=png';
+	const proxied = 'https://wsrv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//, '')) + '&output=png';
 	return await attempt(proxied);
 }
 
@@ -138,6 +139,32 @@ export interface SteamLibraryAssets {
 	install_size?: number;
 	franchise?: string;
 	source?: string;
+}
+
+interface CommunityArtworkAssets {
+	found?: boolean;
+	portrait?: string;
+	hero?: string;
+	logo?: string;
+	wide?: string;
+	source?: string;
+}
+
+async function getCommunityArtwork(steamAppId: string): Promise<CommunityArtworkAssets | null> {
+	const preferences = getPreferences();
+	if (!preferences.autoCommunityArtwork || !preferences.steamGridDbApiKey) return null;
+	try {
+		const raw = await fetchCommunityArtworkBackend({ request_json: JSON.stringify({
+			steam_app_id: steamAppId,
+			api_key: preferences.steamGridDbApiKey,
+		}) });
+		const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+		return parsed && typeof parsed === 'object' && !parsed.error && parsed.found ? parsed as CommunityArtworkAssets : null;
+	} catch (error) {
+		// The key is intentionally not part of the error/log message.
+		backendLog('Community artwork lookup failed for ' + steamAppId + ': ' + String(error));
+		return null;
+	}
 }
 
 const libraryAssetsRequests = new Map<string, Promise<SteamLibraryAssets | null>>();
@@ -270,10 +297,13 @@ function makeFallbackLogoDataUrl(title: string): string | null {
 	} catch { return null; }
 }
 
-/** Artwork persistence marker. v5 records the slots that really succeeded;
- *  older versions treated a hero-only 1/4 result as a complete artwork set. */
-const ART_STORAGE_PREFIX = 'gdl_artwork5_';
+/** Artwork persistence marker.  A shortcut is complete only when all four
+ * library slots were written.  Earlier markers accepted a logo by itself,
+ * which permanently prevented a later retry for games with partial artwork
+ * metadata (notably older Steam catalogue entries). */
+const ART_STORAGE_PREFIX = 'gdl_artwork7_';
 const LEGACY_ART_STORAGE_PREFIX = 'gdl_artwork4_';
+const PREVIOUS_ART_STORAGE_PREFIXES = ['gdl_artwork5_', 'gdl_artwork6_'];
 const LOGO_POSITION_STORAGE_PREFIX = 'gdl_logo_position1_';
 
 function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): boolean {
@@ -281,15 +311,22 @@ function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): boolean
 		const raw = localStorage.getItem(ART_STORAGE_PREFIX + shortcutAppId);
 		if (!raw) return false;
 		const marker = JSON.parse(raw);
-		return marker?.steamAppId === steamAppId
+		const allSlotsSaved = marker?.steamAppId === steamAppId
 			&& Array.isArray(marker.slots)
-			&& marker.slots.includes(2);
+			&& [0, 1, 2, 3].every(slot => marker.slots.includes(slot));
+		// A header fallback is usable without a key, but it must be retried after
+		// the user later enables SteamGridDB so it can be upgraded in place.
+		if (allSlotsSaved && marker?.needsCommunityArtwork) {
+			const preferences = getPreferences();
+			return !(preferences.autoCommunityArtwork && preferences.steamGridDbApiKey);
+		}
+		return allSlotsSaved;
 	} catch { return false; }
 }
 
-function markArtworkSaved(shortcutAppId: number, steamAppId: string, slots: number[]): void {
+function markArtworkSaved(shortcutAppId: number, steamAppId: string, slots: number[], needsCommunityArtwork = false): void {
 	try {
-		localStorage.setItem(ART_STORAGE_PREFIX + shortcutAppId, JSON.stringify({ steamAppId, slots }));
+		localStorage.setItem(ART_STORAGE_PREFIX + shortcutAppId, JSON.stringify({ steamAppId, slots, needsCommunityArtwork }));
 	} catch {}
 }
 
@@ -298,6 +335,7 @@ export function clearArtworkSaved(shortcutAppId: number): void {
 	try {
 		localStorage.removeItem(ART_STORAGE_PREFIX + shortcutAppId);
 		localStorage.removeItem(LEGACY_ART_STORAGE_PREFIX + shortcutAppId);
+		for (const prefix of PREVIOUS_ART_STORAGE_PREFIXES) localStorage.removeItem(prefix + shortcutAppId);
 		localStorage.removeItem(LOGO_POSITION_STORAGE_PREFIX + shortcutAppId);
 	} catch {}
 }
@@ -376,17 +414,29 @@ async function applyOfficialLogoPosition(
  *  breaks Steam's IPC proxy and produces "Unknown method" errors. */
 const artworkSpoofed = new Set<string>();
 const artworkInFlight = new Set<string>();
-export async function spoofArtwork(shortcutAppId: number, steamAppId: string, gameTitle: string, force = false): Promise<boolean> {
+export interface ArtworkApplyResult {
+	complete: boolean;
+	slots: number[];
+	missing: string[];
+	communitySlots: string[];
+}
+
+const ARTWORK_SLOT_NAMES: Record<number, string> = {
+	0: 'portrait', 1: 'hero', 2: 'logo', 3: 'header',
+};
+
+export async function spoofArtwork(shortcutAppId: number, steamAppId: string, gameTitle: string, force = false): Promise<ArtworkApplyResult> {
 	const key = shortcutAppId + ':' + steamAppId;
-	if (artworkInFlight.has(key)) return false;
-	if (!force && artworkSpoofed.has(key)) return false;
+	if (artworkInFlight.has(key)) return { complete: false, slots: [], missing: ['in_progress'], communitySlots: [] };
+	if (!force && artworkSpoofed.has(key)) return { complete: true, slots: [0, 1, 2, 3], missing: [], communitySlots: [] };
 
 	// Skip if artwork was already downloaded and saved for this exact pairing
 	if (!force && artworkAlreadySaved(shortcutAppId, steamAppId)) {
 		artworkSpoofed.add(key);
 		backendLog('Artwork already saved for ' + shortcutAppId + ' -> ' + steamAppId);
 		const modern = await getModernLibraryAssets(steamAppId);
-		return await applyOfficialLogoPosition(shortcutAppId, steamAppId, modern?.logo_position);
+		await applyOfficialLogoPosition(shortcutAppId, steamAppId, modern?.logo_position);
+		return { complete: true, slots: [0, 1, 2, 3], missing: [], communitySlots: [] };
 	}
 	artworkInFlight.add(key);
 
@@ -394,18 +444,75 @@ export async function spoofArtwork(shortcutAppId: number, steamAppId: string, ga
 	if (typeof sc?.Apps?.SetCustomArtworkForApp !== 'function') {
 		backendLog('SetCustomArtworkForApp not available');
 		artworkInFlight.delete(key);
-		return false;
+		return { complete: false, slots: [], missing: ['steam_client_api'], communitySlots: [] };
 	}
 
 	try {
-		const modern = await getModernLibraryAssets(steamAppId);
+		const modernPromise = getModernLibraryAssets(steamAppId);
+		// The appinfo mirror is useful for content-hashed modern artwork but can
+		// be slow or temporarily unavailable. Do not keep the library header
+		// blank while it responds: legacy official CDN assets are immediately
+		// usable for many older games.
+		const modern = await Promise.race<SteamLibraryAssets | null>([
+			modernPromise,
+			new Promise<null>(resolve => setTimeout(() => resolve(null), 850)),
+		]);
 		const cdnBase = `https://cdn.akamai.steamstatic.com/steam/apps/${steamAppId}`;
-		// Try appinfo's modern content-hashed URL first, then the legacy filename.
+		const cfBase = `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${steamAppId}`;
+		const cfCdnBase = `https://cdn.cloudflare.steamstatic.com/steam/apps/${steamAppId}`;
+
+		// Logo (2) and Hero (1) first for immediate library header rendering
 		const sources: { urls: string[]; imageType: number; label: string }[] = [
-			{ urls: [modern?.portrait || '', `${cdnBase}/library_600x900.jpg`], imageType: 0, label: 'Portrait Grid' },
-			{ urls: [modern?.hero || '', `${cdnBase}/library_hero.jpg`], imageType: 1, label: 'Hero' },
-			{ urls: [modern?.logo || '', `${cdnBase}/logo.png`], imageType: 2, label: 'Logo' },
-			{ urls: [modern?.wide || '', `${cdnBase}/header.jpg`], imageType: 3, label: 'Wide Capsule' },
+			{
+				urls: [
+					modern?.logo || '',
+					`${cfBase}/logo.png`,
+					`${cfCdnBase}/logo.png`,
+					`${cdnBase}/logo.png`,
+				],
+				imageType: 2,
+				label: 'Logo',
+			},
+			{
+				urls: [
+					modern?.hero || '',
+					modern?.wide || '',
+					`${cfBase}/library_hero.jpg`,
+					`${cfCdnBase}/library_hero.jpg`,
+					`${cdnBase}/library_hero.jpg`,
+					// Legacy titles can publish only their Store header. It is still
+					// official artwork and preferable to Steam's blank gradient.
+					`${cfBase}/header.jpg`,
+					`${cfCdnBase}/header.jpg`,
+					`${cdnBase}/header.jpg`,
+				],
+				imageType: 1,
+				label: 'Hero',
+			},
+			{
+				urls: [
+					modern?.portrait || '',
+					modern?.wide || '',
+					`${cfBase}/library_600x900.jpg`,
+					`${cfCdnBase}/library_600x900.jpg`,
+					`${cdnBase}/library_600x900.jpg`,
+					`${cfBase}/header.jpg`,
+					`${cfCdnBase}/header.jpg`,
+					`${cdnBase}/header.jpg`,
+				],
+				imageType: 0,
+				label: 'Portrait Grid',
+			},
+			{
+				urls: [
+					modern?.wide || '',
+					`${cfBase}/header.jpg`,
+					`${cfCdnBase}/header.jpg`,
+					`${cdnBase}/header.jpg`,
+				],
+				imageType: 3,
+				label: 'Wide Capsule',
+			},
 		];
 
 		const downloads = await Promise.all(sources.map(async ({ urls, imageType, label }) => {
@@ -417,6 +524,28 @@ export async function spoofArtwork(shortcutAppId: number, steamAppId: string, ga
 			}
 			return { url: '', dataUrl: null as string | null, imageType, label };
 		}));
+		const communitySlots: string[] = [];
+		const needsCommunityArtwork = (item: typeof downloads[number]): boolean => !item.dataUrl
+			|| ((item.imageType === 0 || item.imageType === 1) && /\/header\.jpg(?:$|[?#])/i.test(item.url));
+		if (downloads.some(needsCommunityArtwork)) {
+			const community = await getCommunityArtwork(steamAppId);
+			if (community) {
+				const communityUrlByType: Record<number, string> = {
+					0: community.portrait || '', 1: community.hero || '',
+					2: community.logo || '', 3: community.wide || '',
+				};
+				for (const item of downloads) {
+					if (!needsCommunityArtwork(item)) continue;
+					const url = communityUrlByType[item.imageType];
+					if (!url) continue;
+					const dataUrl = await imageUrlToBase64(url);
+					if (!dataUrl) continue;
+					item.url = url;
+					item.dataUrl = dataUrl;
+					communitySlots.push(ARTWORK_SLOT_NAMES[item.imageType]);
+				}
+			}
+		}
 
 		// Some games genuinely publish no library logo. Give Steam a transparent
 		// wordmark image so it uses the same compact logo layout instead of its
@@ -442,26 +571,47 @@ export async function spoofArtwork(shortcutAppId: number, steamAppId: string, ga
 				const mime = dataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
 				const ext = mime === 'png' ? 'png' : 'jpg';
 
-				backendLog('Artwork download: ' + label + ' ext=' + ext + ' b64len=' + base64Data.length + ' first20=' + base64Data.substring(0, 20));
-				try { await sc.Apps.ClearCustomArtworkForApp(shortcutAppId, imageType); } catch {}
-				await new Promise(r => setTimeout(r, 200));
 				const result = await sc.Apps.SetCustomArtworkForApp(shortcutAppId, base64Data, ext, imageType);
 				successfulSlots.push(imageType);
 				backendLog('Artwork set: ' + label + ' (type ' + imageType + ') for ' + shortcutAppId + ' result=' + JSON.stringify(result));
+				if (imageType === 2) {
+					void applyOfficialLogoPosition(shortcutAppId, steamAppId, modern?.logo_position, force);
+				}
 			} catch (e) {
 				backendLog('Artwork error (' + label + '): ' + e);
 			}
 		}
 
 		const logoApplied = successfulSlots.includes(2);
+		const allSlotsApplied = [0, 1, 2, 3].every(slot => successfulSlots.includes(slot));
+		const missing = [0, 1, 2, 3]
+			.filter(slot => !successfulSlots.includes(slot))
+			.map(slot => ARTWORK_SLOT_NAMES[slot]);
+		// Applying a Store header to a portrait/hero slot prevents an empty
+		// Steam tile, but it must not be reported as a full original library
+		// asset. Steam never published those assets for some older AppIDs.
+		for (const item of downloads) {
+			if ((item.imageType === 0 || item.imageType === 1) && /\/header\.jpg(?:$|[?#])/i.test(item.url)) {
+				const label = ARTWORK_SLOT_NAMES[item.imageType];
+				if (!missing.includes(label)) missing.push(label);
+			}
+			if (item.imageType === 2 && item.url === 'generated-title-logo.png' && !missing.includes('logo')) missing.push('logo');
+		}
+		const complete = missing.length === 0;
 		if (logoApplied) {
 			await applyOfficialLogoPosition(shortcutAppId, steamAppId, modern?.logo_position, force);
-			markArtworkSaved(shortcutAppId, steamAppId, successfulSlots);
-			artworkSpoofed.add(key);
+			// Do not suppress future repair attempts unless Steam received every
+			// slot. Older titles can have a valid logo but no legacy hero/capsule
+			// URL on the first pass; the next navigation can then fill it from the
+			// modern asset endpoint or the header fallback.
+			if (allSlotsApplied) {
+				markArtworkSaved(shortcutAppId, steamAppId, successfulSlots, !complete);
+				artworkSpoofed.add(key);
+			}
 		}
 		backendLog('Applied ' + successfulSlots.length + '/4 artwork images for ' + steamAppId
 			+ ' (logo=' + (logoApplied ? 'yes' : 'no') + ')');
-		return logoApplied;
+		return { complete, slots: successfulSlots, missing, communitySlots };
 	} finally {
 		artworkInFlight.delete(key);
 	}
@@ -472,4 +622,5 @@ export async function spoofArtwork(shortcutAppId: number, steamAppId: string, ga
 export function clearLibraryAssetCaches(): void {
 	libraryAssetsRequests.clear();
 	libraryAssetsResolved.clear();
+	artworkSpoofed.clear();
 }

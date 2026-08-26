@@ -6,10 +6,16 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "Steam-Game-Data-Linker-Mod/2.6"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
 local M = {}
 local detection_url_encode = util.url_encode
+
+-- Caches
 local detection_candidate_cache = {}
+local detection_vdf_cache = {}
+local detection_store_cache = {}
+local detection_appdetails_cache = {}
+local detection_appinfo_cache = {}
 
 local function detection_trim(value)
     return tostring(value or ""):match("^%s*(.-)%s*$") or ""
@@ -34,28 +40,74 @@ end
 local function detection_game_exe_hint(value)
     local stem = detection_basename(value)
     local lower = stem:lower()
-    -- Only strip a real executable/script extension. Shortcut titles can
-    -- legitimately contain dots (for example S.T.A.L.K.E.R. or a version
-    -- number) and must not be truncated as though they were file names.
     if lower:match("%.exe$") or lower:match("%.com$") or lower:match("%.bat$")
         or lower:match("%.cmd$") or lower:match("%.appimage$") then
         stem = detection_stem(stem)
     end
-    -- Unreal Engine games commonly expose a small root bootstrapper and keep
-    -- the real, long-lived process under Binaries/Win64.  Preserve that target
-    -- for Steam playtime tracking while removing only the build suffix for
-    -- catalog matching (e.g. SparkingZERO-Win64-Shipping.exe -> SparkingZERO).
     stem = stem:gsub("[%s_%-]+[Ww][Ii][Nn]64[%s_%-]+[Ss][Hh][Ii][Pp][Pp][Ii][Nn][Gg]$", "")
     stem = stem:gsub("[%s_%-]+[Ww][Ii][Nn]32[%s_%-]+[Ss][Hh][Ii][Pp][Pp][Ii][Nn][Gg]$", "")
     stem = stem:gsub("[%s_%-]+[Ll][Ii][Nn][Uu][Xx][%s_%-]+[Ss][Hh][Ii][Pp][Pp][Ii][Nn][Gg]$", "")
     return stem
 end
 
+local function detection_strip_accents(str)
+    local accents = {
+        ["á"] = "a", ["à"] = "a", ["ä"] = "a", ["â"] = "a", ["ã"] = "a", ["å"] = "a",
+        ["é"] = "e", ["è"] = "e", ["ë"] = "e", ["ê"] = "e",
+        ["í"] = "i", ["ì"] = "i", ["ï"] = "i", ["î"] = "i",
+        ["ó"] = "o", ["ò"] = "o", ["ö"] = "o", ["ô"] = "o", ["õ"] = "o",
+        ["ú"] = "u", ["ù"] = "u", ["ü"] = "u", ["û"] = "u",
+        ["ñ"] = "n", ["ç"] = "c",
+        ["Á"] = "a", ["À"] = "a", ["Ä"] = "a", ["Â"] = "a",
+        ["É"] = "e", ["È"] = "e", ["Ë"] = "e", ["Ê"] = "e",
+        ["Í"] = "i", ["Ì"] = "i", ["Ï"] = "i", ["Î"] = "i",
+        ["Ó"] = "o", ["Ò"] = "o", ["Ö"] = "o", ["Ô"] = "o",
+        ["Ú"] = "u", ["Ù"] = "u", ["Ü"] = "u", ["Û"] = "u",
+        ["Ñ"] = "n", ["Ç"] = "c",
+    }
+    local res = tostring(str or "")
+    for k, v in pairs(accents) do
+        res = res:gsub(k, v)
+    end
+    return res
+end
+
 local function detection_normalize(value)
-    local text = tostring(value or ""):lower()
+    local text = detection_strip_accents(tostring(value or "")):lower()
     text = text:gsub("™", ""):gsub("®", ""):gsub("©", "")
     text = text:gsub("[’'`´]", ""):gsub("[–—_:|/\\%[%]%(%){}]+", " ")
     text = text:gsub("[^%w]+", " "):gsub("%s+", " ")
+    return detection_trim(text)
+end
+
+local function detection_clean_game_title(value)
+    local text = tostring(value or "")
+    text = text:gsub("%b[]", " ")
+    text = text:gsub("%b()", " ")
+    text = text:gsub("[vV]%d+%.%d+[%d%.]*", " ")
+    text = text:gsub("[%s_%-]+[Bb][Uu][Ii][Ll][Dd][%s_%-]+%d+", " ")
+    text = text:gsub("[%s_%-]+[Ww][Ii][Nn]%d%d[%s_%-]+[Ss][Hh][Ii][Pp][Pp][Ii][Nn][Gg]", " ")
+    text = text:gsub("[%s_%-]+[Ll][Ii][Nn][Uu][Xx][%s_%-]+[Ss][Hh][Ii][Pp][Pp][Ii][Nn][Gg]", " ")
+    text = text:gsub("[%s_%-]+[Ww][Ii][Nn]%d%d$", "")
+    text = text:gsub("[%s_%-]+[Xx]64$", "")
+    text = text:gsub("[%s_%-]+[Xx]86$", "")
+    text = text:gsub("[%s_%-]+[Dd][Xx]11$", "")
+    text = text:gsub("[%s_%-]+[Dd][Xx]12$", "")
+    text = text:gsub("[%s_%-]+[Rr][Ee][Pp][Aa][Cc][Kk]", " ")
+    return detection_trim(text)
+end
+
+local function detection_replace_roman(value)
+    local text = " " .. detection_normalize(value) .. " "
+    text = text:gsub("%s+viii%s+", " 8 ")
+    text = text:gsub("%s+vii%s+", " 7 ")
+    text = text:gsub("%s+vi%s+", " 6 ")
+    text = text:gsub("%s+iv%s+", " 4 ")
+    text = text:gsub("%s+v%s+", " 5 ")
+    text = text:gsub("%s+iii%s+", " 3 ")
+    text = text:gsub("%s+ii%s+", " 2 ")
+    text = text:gsub("%s+ix%s+", " 9 ")
+    text = text:gsub("%s+x%s+", " 10 ")
     return detection_trim(text)
 end
 
@@ -64,6 +116,7 @@ local DETECTION_GENERIC_WORDS = {
     shipping = true, win64 = true, win32 = true, windows = true, x64 = true,
     x86 = true, dx11 = true, dx12 = true, binary = true, binaries = true,
     games = true, juegos = true, steamapps = true, common = true,
+    repack = true, fitgirl = true, dodi = true, gog = true, rune = true,
 }
 
 local DETECTION_GENERIC_EXES = {
@@ -72,6 +125,76 @@ local DETECTION_GENERIC_EXES = {
     ["playnite desktopapp"] = true, ["heroic"] = true,
     ["epicgameslauncher"] = true, ["galaxyclient"] = true,
     ["retroarch"] = true, ["steam"] = true,
+}
+
+local KNOWN_TITLE_ALIASES = {
+    ["gtasa"] = { name = "Grand Theft Auto: San Andreas", appids = { "12120", "1547000", "1546970" } },
+    ["gta sa"] = { name = "Grand Theft Auto: San Andreas", appids = { "12120", "1547000", "1546970" } },
+    ["gta_sa"] = { name = "Grand Theft Auto: San Andreas", appids = { "12120", "1547000", "1546970" } },
+    ["sanandreas"] = { name = "Grand Theft Auto: San Andreas", appids = { "12120", "1547000", "1546970" } },
+    ["san andreas"] = { name = "Grand Theft Auto: San Andreas", appids = { "12120", "1547000", "1546970" } },
+    ["gtavc"] = { name = "Grand Theft Auto: Vice City", appids = { "12110", "1546990", "1546970" } },
+    ["gta vc"] = { name = "Grand Theft Auto: Vice City", appids = { "12110", "1546990", "1546970" } },
+    ["gta_vc"] = { name = "Grand Theft Auto: Vice City", appids = { "12110", "1546990", "1546970" } },
+    ["vicecity"] = { name = "Grand Theft Auto: Vice City", appids = { "12110", "1546990", "1546970" } },
+    ["vice city"] = { name = "Grand Theft Auto: Vice City", appids = { "12110", "1546990", "1546970" } },
+    ["gta3"] = { name = "Grand Theft Auto III", appids = { "12100", "1546970" } },
+    ["gta 3"] = { name = "Grand Theft Auto III", appids = { "12100", "1546970" } },
+    ["gta iii"] = { name = "Grand Theft Auto III", appids = { "12100", "1546970" } },
+    ["gtaiv"] = { name = "Grand Theft Auto IV: The Complete Edition", appids = { "12210" } },
+    ["gta iv"] = { name = "Grand Theft Auto IV: The Complete Edition", appids = { "12210" } },
+    ["gta 4"] = { name = "Grand Theft Auto IV: The Complete Edition", appids = { "12210" } },
+    ["gtav"] = { name = "Grand Theft Auto V", appids = { "271590" } },
+    ["gta v"] = { name = "Grand Theft Auto V", appids = { "271590" } },
+    ["gta 5"] = { name = "Grand Theft Auto V", appids = { "271590" } },
+    ["rdr2"] = { name = "Red Dead Redemption 2", appids = { "1174180" } },
+    ["rdr 2"] = { name = "Red Dead Redemption 2", appids = { "1174180" } },
+    ["gow"] = { name = "God of War", appids = { "1593500" } },
+    ["god of war"] = { name = "God of War", appids = { "1593500" } },
+    ["godofwar"] = { name = "God of War", appids = { "1593500" } },
+    ["gowr"] = { name = "God of War Ragnarök", appids = { "2322010" } },
+    ["gow ragnarok"] = { name = "God of War Ragnarök", appids = { "2322010" } },
+    ["god of war ragnarok"] = { name = "God of War Ragnarök", appids = { "2322010" } },
+    ["godofwarragnarok"] = { name = "God of War Ragnarök", appids = { "2322010" } },
+    ["re4"] = { name = "Resident Evil 4", appids = { "2050650", "254700" } },
+    ["re4r"] = { name = "Resident Evil 4", appids = { "2050650" } },
+    ["re2"] = { name = "Resident Evil 2", appids = { "883710" } },
+    ["re3"] = { name = "Resident Evil 3", appids = { "952060" } },
+    ["re7"] = { name = "Resident Evil 7 Biohazard", appids = { "418370" } },
+    ["re8"] = { name = "Resident Evil Village", appids = { "1196590" } },
+    ["re9"] = { name = "Resident Evil Requiem", appids = { "3764200" } },
+    ["resident evil requiem"] = { name = "Resident Evil Requiem", appids = { "3764200" } },
+    ["revillage"] = { name = "Resident Evil Village", appids = { "1196590" } },
+    ["cp2077"] = { name = "Cyberpunk 2077", appids = { "1091500" } },
+    ["er"] = { name = "Elden Ring", appids = { "1245620" } },
+    ["ds1"] = { name = "Dark Souls: Remastered", appids = { "570940" } },
+    ["ds2"] = { name = "Dark Souls II: Scholar of the First Sin", appids = { "335300" } },
+    ["ds3"] = { name = "Dark Souls III", appids = { "374320" } },
+    ["mhw"] = { name = "Monster Hunter: World", appids = { "582010" } },
+    ["mhr"] = { name = "Monster Hunter Rise", appids = { "1446780" } },
+    ["dbd"] = { name = "Dead by Daylight", appids = { "381210" } },
+    ["acv"] = { name = "Assassin's Creed Valhalla", appids = { "2208920" } },
+    ["aco"] = { name = "Assassin's Creed Odyssey", appids = { "812140" } },
+    ["hfw"] = { name = "Horizon Forbidden West Complete Edition", appids = { "2420110" } },
+    ["hzd"] = { name = "Horizon Zero Dawn Complete Edition", appids = { "1151640" } },
+    ["tlou"] = { name = "The Last of Us Part I", appids = { "1888930" } },
+    ["tlou i"] = { name = "The Last of Us Part I", appids = { "1888930" } },
+    ["tloui"] = { name = "The Last of Us Part I", appids = { "1888930" } },
+    ["sh2"] = { name = "SILENT HILL 2", appids = { "2124490" } },
+    ["sh2r"] = { name = "SILENT HILL 2", appids = { "2124490" } },
+    ["sm2"] = { name = "Marvel's Spider-Man 2", appids = { "2651280" } },
+    ["spiderman"] = { name = "Marvel's Spider-Man Remastered", appids = { "1817070" } },
+    ["miles morales"] = { name = "Marvel's Spider-Man: Miles Morales", appids = { "1817190" } },
+    -- Community/launcher abbreviations are useful only as search aliases;
+    -- the stored shortcut title remains untouched until the user confirms.
+    ["mkke"] = { name = "Mortal Kombat Komplete Edition", appids = { "237110" } },
+    ["mortal kombat ke"] = { name = "Mortal Kombat Komplete Edition", appids = { "237110" } },
+    ["bg3"] = { name = "Baldur's Gate 3", appids = { "1086940" } },
+    ["wukong"] = { name = "Black Myth: Wukong", appids = { "2358720" } },
+    ["sparkingzero"] = { name = "DRAGON BALL: Sparking! ZERO", appids = { "1790600" } },
+    ["sparking zero"] = { name = "DRAGON BALL: Sparking! ZERO", appids = { "1790600" } },
+    ["sparking"] = { name = "DRAGON BALL: Sparking! ZERO", appids = { "1790600" } },
+    ["dragon ball sparking zero"] = { name = "DRAGON BALL: Sparking! ZERO", appids = { "1790600" } },
 }
 
 local function detection_tokens(value, discard_generic)
@@ -85,28 +208,40 @@ local function detection_tokens(value, discard_generic)
     return set, count
 end
 
-local function detection_similarity(left, right)
+local function detection_raw_similarity(left, right)
     local a, ac = detection_tokens(left, false)
     local b, bc = detection_tokens(right, false)
     if ac == 0 or bc == 0 then return 0 end
     local common = 0
     for token in pairs(a) do if b[token] then common = common + 1 end end
-    -- Dice coefficient rewards compact title matches without making an
-    -- additional edition/remaster token look identical to the base game.
     return (2 * common) / (ac + bc)
 end
 
-local function detection_compact_similarity(left, right)
+local function detection_similarity(left, right)
+    return math.max(
+        detection_raw_similarity(left, right),
+        detection_raw_similarity(detection_replace_roman(left), detection_replace_roman(right))
+    )
+end
+
+local function detection_raw_compact_similarity(left, right)
     local a = detection_normalize(left):gsub("%s+", "")
     local b = detection_normalize(right):gsub("%s+", "")
     if a == "" or b == "" then return 0 end
     if a == b then return 1 end
     local shorter, longer = a, b
     if #shorter > #longer then shorter, longer = longer, shorter end
-    if #shorter >= 5 and longer:find(shorter, 1, true) then
+    if #shorter >= 4 and longer:find(shorter, 1, true) then
         return math.min(0.95, (#shorter / #longer) + 0.30)
     end
     return 0
+end
+
+local function detection_compact_similarity(left, right)
+    return math.max(
+        detection_raw_compact_similarity(left, right),
+        detection_raw_compact_similarity(detection_replace_roman(left), detection_replace_roman(right))
+    )
 end
 
 local function detection_title_acronym(value)
@@ -135,12 +270,6 @@ local function detection_acronym_similarity(left, right)
     return math.max(compare(left_compact, right_acronym), compare(right_compact, left_acronym))
 end
 
-local function detection_url_encode(value)
-    return tostring(value or ""):gsub("\n", "\r\n"):gsub("([^%w%-_%.~])", function(char)
-        return string.format("%%%02X", string.byte(char))
-    end)
-end
-
 local function detection_read_small_file(path, max_bytes)
     if not path or path == "" or not fs.exists(path) then return nil end
     local handle = io.open(path, "r")
@@ -150,11 +279,6 @@ local function detection_read_small_file(path, max_bytes)
     return content
 end
 
--- Steam does not expose strShortcutExe through GetCachedAppDetails on every
--- client build.  The authoritative fallback is the active user's own
--- userdata/<account>/config/shortcuts.vdf.  Read it without modifying it so
--- automatic detection still works when a shortcut was added from an EXE,
--- .lnk file, launcher, or an Unreal *-Shipping executable.
 local function detection_read_binary_file(path, max_bytes)
     if not path or path == "" or not fs.exists(path) then return nil end
     local handle = io.open(path, "rb")
@@ -207,16 +331,12 @@ local function detection_parse_binary_vdf_object(data, position, depth)
             if value == nil then return nil, position, "invalid_integer" end
             result[key] = value
         elseif value_type == 3 or value_type == 4 or value_type == 6 then
-            -- Float, pointer and colour values are not needed for shortcut
-            -- identification, but consume their four-byte payload safely.
             if position + 3 > #data then return nil, position, "truncated_value" end
             position = position + 4
         elseif value_type == 7 then
             if position + 7 > #data then return nil, position, "truncated_uint64" end
             position = position + 8
         elseif value_type == 5 then
-            -- UTF-16 strings are uncommon in shortcuts.vdf. Consume the
-            -- terminating 00 00 pair while preserving two-byte alignment.
             local cursor = position
             local found = false
             while cursor + 1 <= #data do
@@ -245,8 +365,9 @@ end
 local function detection_find_tracking_executable(exe_path, start_dir)
     local selected = detection_clean_path(exe_path)
     if selected == "" then return nil, nil end
-    if selected:lower():match("[%s_%-]win%d%d[%s_%-]shipping%.exe$")
-        or selected:lower():match("[%s_%-]linux[%s_%-]shipping$") then
+    local lower_selected = selected:lower()
+    if lower_selected:match("[%s_%-]win%d%d[%s_%-]shipping%.exe$")
+        or lower_selected:match("[%s_%-]linux[%s_%-]shipping$") then
         return nil, nil
     end
 
@@ -254,43 +375,58 @@ local function detection_find_tracking_executable(exe_path, start_dir)
     if root == "" then root = fs.parent_path(selected) end
     if not root or root == "" or not fs.exists(root) then return nil, nil end
 
-    local selected_stem = detection_normalize(detection_game_exe_hint(detection_basename(selected))):gsub("%s+", "")
-    local candidates, candidate_seen = {}, {}
-    local function consider(path)
-        local clean = detection_clean_path(path)
-        local lower = clean:lower()
-        if clean == "" or lower == selected:lower() or candidate_seen[lower] or not fs.exists(clean) then return end
-        if not lower:match("[%s_%-]win32[%s_%-]shipping%.exe$")
-            and not lower:match("[%s_%-]win64[%s_%-]shipping%.exe$") then return end
-        candidate_seen[lower] = true
-        local candidate_stem = detection_normalize(detection_game_exe_hint(detection_basename(clean))):gsub("%s+", "")
-        local score = 50
-        if selected_stem ~= "" and candidate_stem == selected_stem then score = score + 80 end
-        if lower:find("\\binaries\\win64\\", 1, true) then score = score + 35 end
-        if lower:find("\\binaries\\win32\\", 1, true) then score = score + 25 end
-        if lower:find("\\engine\\", 1, true) then score = score - 25 end
-        table.insert(candidates, { path = clean, score = score })
-    end
+    local selected_basename = detection_basename(selected)
+    local selected_stem_raw = detection_game_exe_hint(selected_basename)
+    local selected_stem_norm = detection_normalize(selected_stem_raw):gsub("%s+", "")
 
-    local selected_stem_raw = detection_game_exe_hint(detection_basename(selected))
+    -- Fast-path 1: Check standard Unreal direct target locations
     for _, platform in ipairs({ "Win64", "Win32" }) do
-        consider(fs.join(root, selected_stem_raw, "Binaries", platform,
-            selected_stem_raw .. "-" .. platform .. "-Shipping.exe"))
-        consider(fs.join(root, "Binaries", platform,
-            selected_stem_raw .. "-" .. platform .. "-Shipping.exe"))
+        local p1 = fs.join(root, selected_stem_raw, "Binaries", platform, selected_stem_raw .. "-" .. platform .. "-Shipping.exe")
+        if fs.exists(p1) then return p1, fs.parent_path(p1) end
+        local p2 = fs.join(root, "Binaries", platform, selected_stem_raw .. "-" .. platform .. "-Shipping.exe")
+        if fs.exists(p2) then return p2, fs.parent_path(p2) end
     end
 
-    local visited = 0
+    -- Fast-path 2: Check Binaries/Win64 and Binaries/Win32 directly
+    for _, platform in ipairs({ "Win64", "Win32" }) do
+        for _, bin_dir in ipairs({
+            fs.join(root, "Binaries", platform),
+            fs.join(root, selected_stem_raw, "Binaries", platform),
+        }) do
+            if fs.exists(bin_dir) then
+                local ok_list, entries = pcall(fs.list, bin_dir)
+                if ok_list and type(entries) == "table" then
+                    for _, entry in ipairs(entries) do
+                        local name = tostring(entry.name or detection_basename(entry.path or ""))
+                        local lower_name = name:lower()
+                        if lower_name:match("[%s_%-]win%d%d[%s_%-]shipping%.exe$") then
+                            local path = tostring(entry.path or "")
+                            if path == "" then path = fs.join(bin_dir, name) end
+                            return path, bin_dir
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Targeted shallow fallback walk (max depth 2, max 100 entries, skip heavy asset folders)
     local skipped_directories = {
         ["_commonredist"] = true, ["redist"] = true, ["redistributables"] = true,
         ["directx"] = true, ["vcredist"] = true, ["installers"] = true,
+        ["content"] = true, ["engine"] = true, ["saved"] = true, ["intermediate"] = true,
+        ["plugins"] = true, ["shaders"] = true, ["movies"] = true, ["videos"] = true,
+        ["data"] = true, ["textures"] = true, ["audio"] = true, ["sounds"] = true,
+        ["music"] = true, ["localization"] = true, ["node_modules"] = true,
     }
+    local candidates = {}
+    local visited = 0
     local function walk(directory, depth)
-        if depth > 5 or visited >= 900 then return end
+        if depth > 2 or visited >= 100 then return end
         local ok_list, entries = pcall(fs.list, directory)
         if not ok_list or type(entries) ~= "table" then return end
         for _, entry in ipairs(entries) do
-            if visited >= 900 then break end
+            if visited >= 100 then break end
             visited = visited + 1
             local name = tostring(entry.name or detection_basename(entry.path or ""))
             local path = tostring(entry.path or "")
@@ -298,24 +434,29 @@ local function detection_find_tracking_executable(exe_path, start_dir)
             if entry.is_directory then
                 if not skipped_directories[name:lower()] then walk(path, depth + 1) end
             else
-                consider(path)
+                local lower_p = path:lower()
+                if (lower_p:match("[%s_%-]win32[%s_%-]shipping%.exe$") or lower_p:match("[%s_%-]win64[%s_%-]shipping%.exe$"))
+                    and lower_p ~= lower_selected then
+                    local cand_stem = detection_normalize(detection_game_exe_hint(name)):gsub("%s+", "")
+                    local score = 50
+                    if selected_stem_norm ~= "" and cand_stem == selected_stem_norm then score = score + 80 end
+                    if lower_p:find("\\binaries\\win64\\", 1, true) then score = score + 35 end
+                    table.insert(candidates, { path = path, score = score })
+                end
             end
         end
     end
     walk(root, 0)
 
-    table.sort(candidates, function(a, b)
-        if a.score == b.score then return #a.path < #b.path end
-        return a.score > b.score
-    end)
-    local best = candidates[1]
-    if not best then return nil, nil end
-    return best.path, fs.parent_path(best.path)
+    table.sort(candidates, function(a, b) return a.score > b.score end)
+    if candidates[1] then return candidates[1].path, fs.parent_path(candidates[1].path) end
+    return nil, nil
 end
 
-local function detection_find_shortcut_record(shortcut_app_id)
+local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
     local target = detection_shortcut_appid(shortcut_app_id)
-    if not target then return nil end
+    local target_title_norm = detection_normalize(shortcut_title or "")
+    if not target and target_title_norm == "" then return nil end
     local userdata_root = fs.join(millennium.steam_path(), "userdata")
     if not fs.exists(userdata_root) then return nil end
 
@@ -340,16 +481,44 @@ local function detection_find_shortcut_record(shortcut_app_id)
     table.sort(files, function(a, b) return a.modified > b.modified end)
 
     for _, file in ipairs(files) do
-        local data = detection_read_binary_file(file.path)
-        if data then
-            local root = detection_parse_binary_vdf_object(data, 1, 0)
-            local shortcuts = type(root) == "table" and (root.shortcuts or root) or nil
-            if type(shortcuts) == "table" then
-                for _, record in pairs(shortcuts) do
-                    if type(record) == "table" and detection_shortcut_appid(record.appid) == target then
+        local shortcuts = nil
+        local cached_vdf = detection_vdf_cache[file.path]
+        if cached_vdf and cached_vdf.modified == file.modified then
+            shortcuts = cached_vdf.shortcuts
+        else
+            local data = detection_read_binary_file(file.path)
+            if data then
+                local root = detection_parse_binary_vdf_object(data, 1, 0)
+                shortcuts = type(root) == "table" and (root.shortcuts or root) or nil
+                if type(shortcuts) == "table" then
+                    detection_vdf_cache[file.path] = { modified = file.modified, shortcuts = shortcuts }
+                end
+            end
+        end
+
+        if type(shortcuts) == "table" then
+            for _, record in pairs(shortcuts) do
+                if type(record) == "table" then
+                    -- `shortcuts.vdf` keeps the shortcut id as an unsigned
+                    -- 32-bit value, even though Steam's CEF can expose it as
+                    -- a signed number.  Resolve both forms before comparing.
+                    -- These fields are also the only reliable source of the
+                    -- executable while a newly-created shortcut has not yet
+                    -- been reflected in SteamClient's cached app details.
+                    local rec_appid = detection_shortcut_appid(
+                        record.appid or record.AppID or record.appid_64 or record.appid64)
+                    local rec_title = detection_trim(record.AppName or record.appname or record.Name or record.name or "")
+                    local matches_id = target ~= nil and rec_appid ~= nil and rec_appid == target
+                    local rec_clean = detection_clean_game_title(rec_title):lower()
+                    local target_clean = detection_clean_game_title(shortcut_title or ""):lower()
+                    local matches_title = target_title_norm ~= "" and (
+                        detection_normalize(rec_title) == target_title_norm
+                        or (rec_clean ~= "" and rec_clean == target_clean)
+                    )
+                    if matches_id or matches_title then
                         local shortcut = {
-                            shortcut_app_id = tostring(target),
-                            title = tostring(record.AppName or record.appname or ""),
+                            shortcut_app_id = tostring(rec_appid or target or ""),
+                            title = rec_title,
                             exe_path = detection_clean_path(record.Exe or record.exe or ""),
                             start_dir = detection_clean_path(record.StartDir or record.startdir or ""),
                             launch_options = detection_trim(record.LaunchOptions or record.launchoptions or ""),
@@ -372,11 +541,20 @@ local function detection_find_shortcut_record(shortcut_app_id)
 end
 
 function M.get_shortcut_details(shortcut_app_id)
-    local record = detection_find_shortcut_record(shortcut_app_id)
+    local target_id = shortcut_app_id
+    local target_title = nil
+    if type(shortcut_app_id) == "string" and shortcut_app_id:match("^%s*{") then
+        local ok, parsed = pcall(cjson.decode, shortcut_app_id)
+        if ok and type(parsed) == "table" then
+            target_id = parsed.shortcut_app_id or parsed.id
+            target_title = parsed.title or parsed.name
+        end
+    end
+    local record = detection_find_shortcut_record(target_id, target_title)
     if not record then
         return cjson.encode({ error = "shortcut_not_found" })
     end
-    logger:info("Resolved shortcut details from shortcuts.vdf for " .. tostring(shortcut_app_id))
+    logger:info("Resolved shortcut details from shortcuts.vdf for " .. tostring(target_id or target_title))
     return cjson.encode(record)
 end
 
@@ -384,9 +562,9 @@ local function detection_http_json(url, timeout)
     local ok_http, res, err = pcall(http.get, url, {
         headers = {
             ["Accept"] = "application/json",
-            ["User-Agent"] = "Steam-Game-Data-Linker-Mod/2.6"
+            ["User-Agent"] = USER_AGENT
         },
-        timeout = timeout or 15
+        timeout = timeout or 8
     })
     if not ok_http or not res or res.status ~= 200 then
         return nil, tostring(err or res or "HTTP request failed")
@@ -399,11 +577,17 @@ end
 local function detection_fetch_appdetails(appid, language)
     local id = tostring(appid or "")
     if not id:match("^%d+$") then return nil end
+    local lang = language or "english"
+    local cache_key = id .. "\31" .. lang
+    local cached = detection_appdetails_cache[cache_key]
+    if cached and os.time() - cached.time < 1800 then return cached.data end
+
     local url = "https://store.steampowered.com/api/appdetails?appids=" .. id
-        .. "&l=" .. detection_url_encode(language or "english")
-    local body = detection_http_json(url, 8)
+        .. "&l=" .. detection_url_encode(lang)
+    local body = detection_http_json(url, 6)
     local record = type(body) == "table" and body[id] or nil
     if type(record) == "table" and record.success and type(record.data) == "table" then
+        detection_appdetails_cache[cache_key] = { time = os.time(), data = record.data }
         return record.data
     end
     return nil
@@ -464,18 +648,31 @@ end
 local function detection_store_search(query, language)
     local cleaned = detection_trim(query)
     if #cleaned < 2 then return {} end
+    local lang = language or "english"
+    local cache_key = cleaned:lower() .. "\31" .. lang
+    local cached = detection_store_cache[cache_key]
+    if cached and os.time() - cached.time < 600 then return cached.items end
+
     local url = "https://store.steampowered.com/api/storesearch/?term="
         .. detection_url_encode(cleaned)
-        .. "&l=" .. detection_url_encode(language or "english")
+        .. "&l=" .. detection_url_encode(lang)
         .. "&cc=US"
-    local body = detection_http_json(url, 5)
-    return type(body) == "table" and type(body.items) == "table" and body.items or {}
+    local body = detection_http_json(url, 4)
+    local items = type(body) == "table" and type(body.items) == "table" and body.items or {}
+    detection_store_cache[cache_key] = { time = os.time(), items = items }
+    return items
 end
 
 local function detection_fetch_appinfo(appid)
     local id = tostring(appid or "")
-    local body = detection_http_json("https://api.steamcmd.net/v1/info/" .. id, 5)
-    return type(body) == "table" and type(body.data) == "table" and body.data[id] or nil
+    if not id:match("^%d+$") then return nil end
+    local cached = detection_appinfo_cache[id]
+    if cached and os.time() - cached.time < 1800 then return cached.data end
+
+    local body = detection_http_json("https://api.steamcmd.net/v1/info/" .. id, 2)
+    local data = type(body) == "table" and type(body.data) == "table" and body.data[id] or nil
+    if data then detection_appinfo_cache[id] = { time = os.time(), data = data } end
+    return data
 end
 
 local function detection_collect_launch_executables(node, result, depth)
@@ -494,7 +691,7 @@ end
 local function detection_folder_hints(exe_path, start_dir)
     local hints, seen = {}, {}
     local function add(value)
-        local cleaned = detection_trim(value)
+        local cleaned = detection_clean_game_title(value)
         local normalized = detection_normalize(cleaned)
         if cleaned ~= "" and normalized ~= "" and not seen[normalized] then
             seen[normalized] = true
@@ -523,12 +720,18 @@ end
 
 local function detection_direct_result(appid, source, request, language, launcher, generic_launcher)
     local data = detection_fetch_appdetails(appid, language)
-    if not data then return nil end
+    -- Local steam_appid.txt files are common in launchers and modified game
+    -- folders. They are a useful hint, not proof: only promote one to an
+    -- exact result after the official Store API confirms that it is an app.
+    if not data or not data.name or data.name == "" then return nil end
+    local name = data.name
+    local image = data.header_image or data.tiny_image
+        or ("https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/" .. tostring(appid) .. "/header.jpg")
     return {
         candidates = {{
             appid = tostring(appid),
-            name = tostring(data.name or request.title or appid),
-            image = tostring(data.header_image or ""),
+            name = tostring(name),
+            image = tostring(image),
             score = 100,
             confidence = "exact",
             reasons = { source },
@@ -569,13 +772,11 @@ function M.detect_game_candidates(request_json)
     local exe_basename = detection_basename(request.exe_path)
     local raw_exe_stem = detection_stem(exe_basename)
     local exe_stem = detection_game_exe_hint(exe_basename)
-    -- Steam normally names a newly-created shortcut after the selected file.
-    -- Apply the same catalogue-only cleanup to that title so an Unreal binary
-    -- such as SparkingZERO-Win64-Shipping is still searchable.  This value is
-    -- never written back to the shortcut and therefore cannot change the
-    -- executable Steam launches or the process it tracks for playtime.
     local title_hint = detection_game_exe_hint(request.title)
     if detection_trim(title_hint) == "" then title_hint = request.title end
+    local title_cleaned = detection_clean_game_title(title_hint)
+    if title_cleaned == "" then title_cleaned = title_hint end
+
     local exe_normalized = detection_normalize(exe_stem)
     local launcher = exe_normalized:find("launcher", 1, true) ~= nil
         or exe_normalized == "start protected game"
@@ -610,9 +811,6 @@ function M.detect_game_candidates(request_json)
     local queries, query_seen = {}, {}
     local function add_query(value)
         local cleaned = detection_trim(value)
-        -- Store search understands words better than compact binary names.
-        -- Expand common CamelCase and letter/number boundaries for the query
-        -- only (SparkingZERO -> Sparking ZERO, FC26 -> FC 26).
         local searchable = cleaned
             :gsub("(%l)(%u)", "%1 %2")
             :gsub("(%a)(%d)", "%1 %2")
@@ -626,7 +824,39 @@ function M.detect_game_candidates(request_json)
             table.insert(queries, searchable)
         end
     end
-    add_query(title_hint)
+
+    local alias_candidates = {}
+    local function check_alias(key)
+        if not key or key == "" then return end
+        local raw_norm = detection_normalize(key)
+        local compact = raw_norm:gsub("%s+", "")
+        local alias = KNOWN_TITLE_ALIASES[compact] or KNOWN_TITLE_ALIASES[raw_norm]
+        if alias then
+            add_query(alias.name)
+            for _, direct_id in ipairs(alias.appids) do
+                alias_candidates[direct_id] = alias.name
+            end
+        end
+    end
+
+    check_alias(title_hint)
+    check_alias(title_cleaned)
+    check_alias(exe_stem)
+    check_alias(raw_exe_stem)
+    for _, folder in ipairs(folders) do check_alias(folder) end
+
+    -- Sub-segment query decomposition for long titles
+    for segment in tostring(title_cleaned):gmatch("[^–—:|%-]+") do
+        local seg_trimmed = detection_trim(segment)
+        if #seg_trimmed >= 3 and seg_trimmed ~= title_cleaned then
+            add_query(seg_trimmed)
+            check_alias(seg_trimmed)
+        end
+    end
+
+    add_query(title_cleaned)
+    if title_cleaned ~= title_hint then add_query(title_hint) end
+
     if not DETECTION_GENERIC_EXES[exe_normalized] then
         local exe_tokens = detection_tokens(exe_stem, true)
         local rebuilt = {}
@@ -634,15 +864,31 @@ function M.detect_game_candidates(request_json)
         table.sort(rebuilt)
         if #rebuilt > 0 then add_query(table.concat(rebuilt, " ")) end
     end
-    -- Executable hints are generally stronger than technical parent folders
-    -- such as Binaries/Win64. Add folder fallbacks afterwards so a compact
-    -- Shipping binary name gets searched within the small request budget.
     for _, folder in ipairs(folders) do add_query(folder) end
 
     local by_id = {}
-    for query_index = 1, math.min(#queries, 3) do
+
+    -- Pre-seed by_id with alias candidate AppIDs
+    for direct_id, default_name in pairs(alias_candidates) do
+        local image = "https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/" .. direct_id .. "/header.jpg"
+        by_id[direct_id] = {
+            appid = direct_id,
+            name = default_name,
+            image = image,
+            item_type = "game",
+            reasons = { "franchise_alias" },
+            query_rank = 1,
+            query_index = 1,
+            executable_match = true,
+            direct = true,
+        }
+    end
+
+    local max_queries = math.min(#queries, 3)
+    for query_index = 1, max_queries do
         local items = detection_store_search(queries[query_index], language)
-        for rank = 1, math.min(#items, 20) do
+        local found_exact_match = false
+        for rank = 1, math.min(#items, 15) do
             local item = items[rank]
             local appid = tostring(type(item) == "table" and (item.id or item.appid) or "")
             local name = type(item) == "table" and tostring(item.name or "") or ""
@@ -652,7 +898,7 @@ function M.detect_game_candidates(request_json)
                     candidate = {
                         appid = appid,
                         name = name,
-                        image = tostring(item.tiny_image or item.header_image or ""),
+                        image = tostring(item.tiny_image or item.header_image or ("https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/" .. appid .. "/header.jpg")),
                         item_type = tostring(item.type or ""),
                         reasons = {},
                         query_rank = rank,
@@ -665,16 +911,30 @@ function M.detect_game_candidates(request_json)
                     candidate.query_rank = math.min(candidate.query_rank, rank)
                     candidate.query_index = math.min(candidate.query_index, query_index)
                 end
+
+                local sim = math.max(
+                    detection_similarity(title_cleaned, name),
+                    detection_compact_similarity(title_cleaned, name)
+                )
+                if sim >= 0.82 or detection_normalize(name) == detection_normalize(title_cleaned) then
+                    found_exact_match = true
+                end
             end
+        end
+        -- Early stop: If we already found a strong matching candidate from this query, stop querying
+        if found_exact_match and query_index >= 1 then
+            break
         end
     end
 
     local candidates = {}
     for _, candidate in pairs(by_id) do
         local title_similarity = math.max(
+            detection_similarity(title_cleaned, candidate.name),
             detection_similarity(title_hint, candidate.name),
+            detection_compact_similarity(title_cleaned, candidate.name),
             detection_compact_similarity(title_hint, candidate.name),
-            detection_acronym_similarity(title_hint, candidate.name)
+            detection_acronym_similarity(title_cleaned, candidate.name)
         )
         local folder_similarity = 0
         for _, folder in ipairs(folders) do
@@ -691,12 +951,15 @@ function M.detect_game_candidates(request_json)
                 detection_compact_similarity(exe_stem, candidate.name),
                 detection_acronym_similarity(exe_stem, candidate.name)
             )
-        local normalized_title = detection_normalize(title_hint)
+        local normalized_title = detection_normalize(title_cleaned)
         local normalized_name = detection_normalize(candidate.name)
         local score = title_similarity * 58 + folder_similarity * 24 + exe_similarity * 10
         score = score + math.max(0, 9 - math.min(candidate.query_rank, 9))
-        if normalized_title ~= "" and normalized_title == normalized_name then
-            score = math.max(score, 78)
+        if candidate.direct then
+            score = math.max(score, 95)
+            detection_add_reason(candidate, "franchise_alias")
+        elseif normalized_title ~= "" and normalized_title == normalized_name then
+            score = math.max(score, 88)
             detection_add_reason(candidate, "title_exact")
         elseif title_similarity >= 0.65 then
             detection_add_reason(candidate, "title_similar")
@@ -716,32 +979,33 @@ function M.detect_game_candidates(request_json)
         return a.score > b.score
     end)
 
-    -- Validate only the strongest few candidates against Steam appinfo.  This
-    -- keeps the Properties dialog responsive while giving an exact executable
-    -- match enough weight to disambiguate editions with similar names.
+    -- Validate only if score is ambiguous
     local actual_exe = exe_basename:lower()
-    local validation_limit = math.min(#candidates, 2)
-    if candidates[1] and candidates[1].score >= 86 then validation_limit = 0 end
+    local validation_limit = (candidates[1] and candidates[1].score >= 82) and 0 or math.min(#candidates, 2)
     for index = 1, validation_limit do
         local candidate = candidates[index]
-        local appinfo = detection_fetch_appinfo(candidate.appid)
-        if type(appinfo) == "table" then
-            local common = type(appinfo.common) == "table" and appinfo.common or {}
-            if candidate.name == "" and common.name then candidate.name = tostring(common.name) end
-            if candidate.image == "" and common.header_image then candidate.image = tostring(common.header_image) end
-            local app_type = tostring(common.type or candidate.item_type or ""):lower()
-            if app_type ~= "" and app_type ~= "game" and app_type ~= "app" then
-                candidate.score = candidate.score - 30
-                detection_add_reason(candidate, "non_game_result")
-            end
-            local official_exes = {}
-            if type(appinfo.config) == "table" and type(appinfo.config.launch) == "table" then
-                detection_collect_launch_executables(appinfo.config.launch, official_exes, 0)
-            end
-            if actual_exe ~= "" and official_exes[actual_exe] then
-                candidate.executable_match = true
-                candidate.score = candidate.score + 28
-                detection_add_reason(candidate, "official_executable_match")
+        if not candidate.direct then
+            local appinfo = detection_fetch_appinfo(candidate.appid)
+            if type(appinfo) == "table" then
+                local common = type(appinfo.common) == "table" and appinfo.common or {}
+                if candidate.name == "" and common.name then candidate.name = tostring(common.name) end
+                if (candidate.image == "" or candidate.image:find("header.jpg")) and common.header_image then
+                    candidate.image = tostring(common.header_image)
+                end
+                local app_type = tostring(common.type or candidate.item_type or ""):lower()
+                if app_type ~= "" and app_type ~= "game" and app_type ~= "app" then
+                    candidate.score = candidate.score - 30
+                    detection_add_reason(candidate, "non_game_result")
+                end
+                local official_exes = {}
+                if type(appinfo.config) == "table" and type(appinfo.config.launch) == "table" then
+                    detection_collect_launch_executables(appinfo.config.launch, official_exes, 0)
+                end
+                if actual_exe ~= "" and official_exes[actual_exe] then
+                    candidate.executable_match = true
+                    candidate.score = candidate.score + 28
+                    detection_add_reason(candidate, "official_executable_match")
+                end
             end
         end
         candidate.score = math.max(0, math.min(99, math.floor(candidate.score + 0.5)))
@@ -755,9 +1019,26 @@ function M.detect_game_candidates(request_json)
     local output = {}
     for index = 1, math.min(#candidates, 6) do
         local candidate = candidates[index]
+		-- Alias such as "re9" bypass Store search and therefore used to receive
+		-- a guessed /apps/<id>/header.jpg URL. New Steam store assets are
+		-- versioned by hash, so that guessed URL can legitimately be a 404 even
+		-- though the game has official artwork. Resolve aliases through
+		-- appdetails before exposing them to the modal.
+		if candidate.direct then
+			local official = detection_fetch_appdetails(candidate.appid, language)
+			if type(official) == "table" then
+				if official.name and tostring(official.name) ~= "" then
+					candidate.name = tostring(official.name)
+				end
+				local official_image = official.header_image or official.capsule_image or official.capsule_imagev5
+				if official_image and tostring(official_image) ~= "" then
+					candidate.image = tostring(official_image)
+				end
+			end
+		end
         candidate._reason_set = nil
-        if candidate.score >= 92 then candidate.confidence = "high"
-        elseif candidate.score >= 72 then candidate.confidence = "medium"
+        if candidate.score >= 90 then candidate.confidence = "high"
+        elseif candidate.score >= 70 then candidate.confidence = "medium"
         else candidate.confidence = "low" end
         table.insert(output, candidate)
     end

@@ -25,8 +25,12 @@ export function ensureNativeGameChrome(doc: Document, model: NativeGameInfo): vo
 	ensureNativeGameInfoStyles(doc);
 
 	try {
-		if (model.hasCloud) ensureCloudStatus(doc);
-		else removeCloudStatus(doc);
+		// A linked shortcut is not the Store AppID that Steam uses to decide
+		// whether to render its own cloud widget.  Always provide our clearly
+		// simulated, synchronized status for linked games so older titles (for
+		// example GTA IV) do not lose this play-bar slot merely because their
+		// Store metadata has no Steam Cloud category.
+		ensureCloudStatus(doc);
 	} catch (error) {
 		backendLog('Cloud status injection error: ' + error);
 	}

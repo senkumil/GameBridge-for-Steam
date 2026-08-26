@@ -37,8 +37,14 @@ export async function buildShortcutDetectionContext(
 	title: string,
 	shortcutAppId: number,
 ): Promise<ShortcutDetectionContext | null> {
-	if (!Number.isFinite(shortcutAppId) || shortcutAppId < 2147483648) return null;
-	const app = getShortcutAppById(shortcutAppId);
+	let validId = Number(shortcutAppId) || 0;
+	if (validId < 0) validId = (validId >>> 0);
+	if (validId < 2147483648) {
+		let hash = 0;
+		for (let i = 0; i < (title || '').length; i++) hash = (hash * 31 + title.charCodeAt(i)) >>> 0;
+		validId = 2147483648 + (hash % 1000000000);
+	}
+	const app = getShortcutAppById(validId);
 	const fromProperties = doc ? readShortcutPathFromProperties(doc) : { exePath: '', startDir: '', launchOptions: '' };
 	let exePath = readShortcutOverviewField(app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || fromProperties.exePath;
 	let startDir = readShortcutOverviewField(app, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir') || fromProperties.startDir;
@@ -69,7 +75,7 @@ export async function buildShortcutDetectionContext(
 	{
 		const neededPathFallback = !exePath || !startDir;
 		try {
-			const raw = await getShortcutDetailsBackend({ shortcut_app_id: String(shortcutAppId) });
+			const raw = await getShortcutDetailsBackend({ shortcut_app_id: String(shortcutAppId), title: title || '' });
 			let details: any = raw;
 			for (let attempt = 0; attempt < 2 && typeof details === 'string'; attempt++) details = JSON.parse(details);
 			if (details && typeof details === 'object' && !details.error) {

@@ -128,15 +128,67 @@ export function shortcutMappingKey(shortcutAppId: string | number): string {
 	return 'shortcut:' + String(shortcutAppId);
 }
 
+export function exeMappingKey(exePath: string): string {
+	const cleaned = (exePath || '').trim().toLowerCase().replace(/\\/g, '/');
+	return 'exe:' + cleaned;
+}
+
+export function exeStemMappingKey(exePath: string): string | null {
+	const cleaned = (exePath || '').trim().toLowerCase().replace(/\\/g, '/');
+	const filename = cleaned.split('/').pop() || '';
+	const stem = filename.replace(/\.(exe|com|bat|cmd|appimage)$/i, '').trim();
+	if (!stem || stem.length < 2) return null;
+	const generic = new Set([
+		'game', 'start', 'launcher', 'launch', 'shipping', 'win64-shipping', 'win32-shipping',
+		'bootstrapper', 'play', 'playnite', 'heroic', 'epicgameslauncher', 'steam', 'retroarch',
+	]);
+	if (generic.has(stem)) return null;
+	return 'exe_stem:' + stem;
+}
+
+export function findMappingByExe(exePath: string): string | null {
+	if (!exePath) return null;
+	const fullKey = exeMappingKey(exePath);
+	if (mappings[fullKey] && /^\d+$/.test(String(mappings[fullKey]))) {
+		return String(mappings[fullKey]);
+	}
+	const stemKey = exeStemMappingKey(exePath);
+	if (stemKey && mappings[stemKey] && /^\d+$/.test(String(mappings[stemKey]))) {
+		return String(mappings[stemKey]);
+	}
+	const lower = exePath.trim().toLowerCase();
+	const normalizedLower = lower.replace(/\\/g, '/');
+	for (const [k, v] of Object.entries(mappings)) {
+		if (k.startsWith('exe:') && /^\d+$/.test(String(v))) {
+			const target = k.replace('exe:', '').toLowerCase();
+			if (target === lower || target === normalizedLower) {
+				return String(v);
+			}
+		}
+	}
+	return null;
+}
+
 export function findMappingForTitle(title: string, shortcutAppId?: string | number | null): string | null {
 	if (shortcutAppId) {
 		const stable = mappings[shortcutMappingKey(shortcutAppId)];
-		if (stable) return stable;
+		if (stable && /^\d+$/.test(String(stable))) return String(stable);
 	}
-	const key = normalizeTitle(title);
-	if (mappings[key]) return mappings[key];
-	for (const k of Object.keys(mappings)) {
-		if (normalizeTitle(k) === key) return mappings[k];
+	if (!title) return null;
+	const trimmedTitle = String(title).trim();
+	if (mappings[trimmedTitle] && /^\d+$/.test(String(mappings[trimmedTitle]))) {
+		return String(mappings[trimmedTitle]);
+	}
+	const normKey = normalizeTitle(trimmedTitle);
+	if (normKey && mappings[normKey] && /^\d+$/.test(String(mappings[normKey]))) {
+		return String(mappings[normKey]);
+	}
+	const lower = trimmedTitle.toLowerCase();
+	for (const [k, v] of Object.entries(mappings)) {
+		if (k.startsWith('shortcut:') || k.startsWith('exe:') || k.startsWith('exe_stem:') || !/^\d+$/.test(String(v))) continue;
+		if (k.toLowerCase() === lower || normalizeTitle(k) === normKey) {
+			return String(v);
+		}
 	}
 	return null;
 }

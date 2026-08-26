@@ -18,6 +18,7 @@ export function steamLocalizationManager(): any | null {
 }
 
 export const SPANISH_TOKEN_FALLBACKS: Record<string, string> = {
+	AppDetails_Shortcut_Explanation: 'Alguna información sobre %1$s no está disponible porque no es un juego de Steam o es un mod. No obstante, Steam controla el inicio del juego por ti y, en la mayoría de los casos, la interfaz dentro del juego estará disponible.',
 	AppDetails_SectionTitle_Activity: 'Actividad',
 	AppActivity_StatusUpdate_Post: 'Diles algo sobre este juego a tus amigos...',
 	AppActivity_PostStatusUpdate: 'Publicar',
@@ -41,7 +42,7 @@ export const SPANISH_TOKEN_FALLBACKS: Record<string, string> = {
 	AppDetails_Feature_PartialController: 'Compatibilidad parcial con control',
 	AppDetails_Feature_FamilySharing: 'Préstamo familiar',
 	AppDetails_Feature_RemotePlayTogether: 'Remote Play Together',
-	AppDetails_SectionTitle_TradingCards: 'Cromos',
+	AppDetails_SectionTitle_TradingCards: 'Tarjetas',
 	AppDetails_Links_Store: 'Página de la tienda',
 	AppDetails_Links_DLC: 'DLC',
 	AppDetails_Links_Community: 'Punto de encuentro',
@@ -99,7 +100,7 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	full_controller: 'Compatibilidad total con control',
 	partial_controller: 'Compatibilidad parcial con control',
 	family_sharing: 'Préstamo familiar',
-	trading_cards: 'Cromos',
+	trading_cards: 'Tarjetas',
 	store_page: 'Página de la tienda',
 	dlc_links: 'DLC',
 	community_hub: 'Punto de encuentro',
@@ -132,28 +133,50 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	game_achievement_path_automatic: 'Usando carpetas automáticas de AppID de la configuración global del plugin.',
 	game_achievement_path_enter: 'Introduce un archivo JSON o ruta de carpeta.',
 	game_achievement_path_saved: 'Fuente de logros guardada para este juego.',
+	game_achievement_path_cleared: 'Ruta personalizada eliminada; se usarán las carpetas automáticas de AppID.',
+	no_match_found: 'No se encontró una coincidencia confiable. Puedes introducir el AppID manualmente.',
+	shortcut_suggestions_title: 'Sugerencias de Steam AppID:',
+	no_suggestions_found: 'Sin sugerencias automáticas (introduce el AppID abajo)',
+	current_linked_option: 'Juego vinculado actualmente (AppID {appid})',
+	detecting_game: 'Detectando el juego automáticamente...',
+	detected_game: 'Detectado: {name}. Revisa el resultado y pulsa Guardar para vincularlo.',
+	detection_ready: 'La detección automática está lista para confirmar.',
+	detection_uncertain: 'La coincidencia es incierta. Elige el resultado correcto o introduce el AppID manualmente.',
+	use_tracking_executable: 'Usar el ejecutable real del juego',
+	tracking_executable_help: '{bootstrap} se cierra después de iniciar {game}. Usa {game} para que Steam registre tus horas de juego.',
 	locked_achievements: 'Logros bloqueados',
 	view_all_achievements: 'Ver todos los logros',
 	view_dlc_store: 'Ver DLC en la tienda',
-	view_my_cards: 'Ver mis cromos',
-	cards_found: 'Cromos encontrados',
-	cards_remaining: '{count} cromos restantes',
+	view_my_cards: 'Ver mis tarjetas',
+	cards_found: 'Tarjetas encontradas',
+	cards_remaining: '{count} tarjetas por coleccionar',
 	experience_points: '100 de EXP',
+	trading_cards_help_p1: 'Encuentra tarjetas mientras juegas. Puedes intercambiarlos con amigos (o en el mercado de la Comunidad de Steam) por tarjetas que no has podido encontrar.',
+	trading_cards_help_p2: 'Completa todo el set de tarjetas y conviértelos en una insignia. Las insignias aumentan tu nivel de Steam y desbloquean beneficios en tu cuenta y perfil.',
 	recent_emoticons: 'EMOTICONOS RECIENTES',
 	all_emoticons: 'TODOS LOS EMOTICONOS',
 	explore_workshop: 'Explora el contenido creado por la comunidad para este juego.',
 	visit_workshop: 'Visitar este Workshop',
 	trending_item: 'Artículo popular',
 	settings_title: 'GameBridge for Steam',
-	settings_description: 'Haz clic derecho en cualquier juego que no sea de Steam → Propiedades → introduce un Steam AppID vinculado. La página de la biblioteca mostrará su descripción, capturas de pantalla y metadatos.',
+	settings_guide_title: '¿Cómo vincular tus juegos a Steam?',
+	settings_step_1: 'Añade tu juego en Steam (+ Añadir un producto → Añadir un producto que no es de Steam).',
+	settings_step_2: 'Haz clic derecho en el juego en tu biblioteca de Steam → Propiedades.',
+	settings_step_3: 'En el campo "Juego vinculado", pega el Steam AppID o URL de la tienda (ej: 1245620 para Elden Ring).',
+	settings_step_4: '¡Listo! Tu juego cargará portadas oficiales, noticias, capturas, logros locales y compatibilidad con Big Picture.',
 	achievement_path_title: 'Carpeta local de logros',
-	achievement_path_description: 'Elige la carpeta base que contiene una subcarpeta por juego: <carpeta>\\<Steam AppID>\\achievements.json. El AppID vinculado oficial se comprueba primero.',
-	achievement_path_placeholder: 'Ejemplo: %APPDATA%\\Goldberg SteamEmu Saves',
-	achievement_path_loading: 'Cargando carpeta actual...',
-	achievement_path_save: 'Guardar carpeta',
-	achievement_path_reset: 'Restaurar predeterminado',
+	achievement_path_description: 'Carpeta base con subcarpetas por AppID: <carpeta>\\<AppID>\\achievements.json.',
+	achievement_path_placeholder: 'Ejemplo: %APPDATA%\\GSE Saves',
+	achievement_path_loading: 'Cargando...',
+	achievement_path_browse: 'Examinar...',
+	achievement_path_browsing: 'Abriendo...',
+	achievement_path_save: 'Guardar',
+	achievement_path_reset: 'Predeterminado',
 	achievement_path_saved: 'Carpeta de logros guardada.',
 	achievement_path_failed: 'No se pudo guardar la carpeta de logros.',
+	achievement_autocrack_title: 'Generación de logros en juegos externos',
+	achievement_autocrack_note: 'Para que los juegos no oficiales registren logros en tiempo real, deben usar un emulador como SteamAutoCrack (Goldberg Emulator). El emulador generará automáticamente las carpetas y el archivo achievements.json a medida que juegas y consigues logros.',
+	achievement_autocrack_download_link: 'Descargar SteamAutoCrack en GitHub (Releases)',
 	achievement_test_title: 'Probar notificaciones de logros',
 	achievement_test_description: 'Envía una notificación de logro aleatoria con sonido para probar que las notificaciones funcionan.',
 	achievement_test_loading: 'Enviando notificación de prueba...',
@@ -163,17 +186,63 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	auto_detect_title: 'Detección automática de accesos directos',
 	auto_detect_description: 'Sugiere vincular cuando se añaden nuevos juegos que no son de Steam a tu biblioteca.',
 	auto_detect_shortcuts_toggle: 'Mostrar sugerencia de vinculación al añadir un juego que no sea de Steam',
-	developer_tools_title: 'Herramientas de desarrollador',
-	developer_tools_description: 'Las opciones de prueba están deshabilitadas de forma predeterminada para instalaciones públicas.',
-	developer_mode: 'Habilitar modo desarrollador',
+	playtime_tracking_title: 'Seguimiento de tiempo de juego (Fallback)',
+	playtime_tracking_description: 'Registra y muestra las horas jugadas en juegos que no son de Steam si tu cliente de Steam no incluye seguimiento nativo.',
+	playtime_tracking_toggle: 'Activar seguimiento y estadísticas de tiempo de juego para juegos externos',
+	playtime_hours: '{count} h',
+	playtime_minutes: '{count} min',
+	playtime_less_than_minute: '< 1 min',
+	playtime_section_title: 'TIEMPO DE JUEGO',
+	last_played_section_title: 'ÚLTIMA VEZ JUGADO',
+	last_played_today: 'Hoy',
+	last_played_yesterday: 'Ayer',
+	last_played_days_ago: 'Hace {count} días',
+	simulated_achievements_title: 'Logros de prueba',
+	simulated_achievements_description: 'Úsalo solo para comprobar la interfaz cuando el juego no tenga un archivo local de progreso.',
 	simulate_achievements: 'Mostrar logros de prueba deterministas cuando no existe un archivo de progreso local',
 	view_linked_achievements: 'Ver logros de este juego vinculado',
 	emoticons: 'Emoticonos',
+	auto_link_title: 'Juego de Steam detectado',
+	auto_link_message: 'Se encontró una coincidencia en Steam para “{name}”. Confírmala antes de que el plugin cargue la información del juego.',
+	selected_executable: 'Ejecutable seleccionado: {exe}',
+	executable_preserved: 'Steam seguirá iniciando el ejecutable que seleccionaste: {exe}',
+	not_now: 'Rechazar',
+	reject_link: 'Rechazar',
+	link_game: 'Vincular juego',
+	launcher_detected: 'Este destino parece un launcher. Opcionalmente puedes añadir -nolauncher.',
+	tracking_repair_title: 'Reparar seguimiento de tiempo',
+	tracking_repair_message: 'Este juego se inicia a través de un launcher secundario ({bootstrap}) que se cierra inmediatamente. Steam no podrá registrar tus horas de juego a menos que apuntes al ejecutable real ({game}).',
+	repair_tracking: 'Reparar seguimiento',
+	tracking_repair_success: '✓ El acceso directo ahora ejecuta el proceso principal del juego. Steam registrará tu tiempo de juego.',
+	tracking_repair_failed: 'No se pudo actualizar el destino. Puedes seleccionar el ejecutable recomendado manualmente en Propiedades.',
+	linked_updating: '✓ Vinculado a “{name}”. Actualizando nombre, icono y portadas...',
+	linked_official: '✓ Vinculado a “{name}”. Nombre e icono oficiales actualizados.',
+	linked_name: '✓ Vinculado a “{name}”. Nombre oficial actualizado; el icono oficial no estaba disponible.',
+	linked_reopen: '✓ Vinculado a “{name}”. Es posible que debas reiniciar Steam para ver el nuevo icono.',
+	tracking_executable_updated: ' Steam ejecutará ahora el proceso principal del juego para registrar tu tiempo de juego.',
+	local_note_updated: ' Nota local actualizada.',
+	linked_open_save: '✓ Vinculado a “{name}”. Abre la página del juego y pulsa Guardar para actualizar su nombre e icono.',
+	verifying_steam: 'Verificando en Steam...',
+	appid_not_found: 'No se encontró el AppID {id} en Steam.',
+	save_failed: 'No se pudo guardar.',
 };
 
 export function isSpanishLanguage(): boolean {
 	const lang = String(steamLanguageSync() || '').toLowerCase();
-	return lang === 'spanish' || lang === 'latam';
+	if (lang === 'spanish' || lang === 'latam') return true;
+	try {
+		const lm = steamLocalizationManager();
+		const locales: string[] = lm?.m_rgLocalesToUse || [];
+		for (const l of locales) {
+			if (String(l).toLowerCase().startsWith('es')) return true;
+		}
+		if (lm?.m_strELanguage === 'spanish' || lm?.m_strELanguage === 'latam') return true;
+	} catch {}
+	try {
+		const navLang = String(navigator.language || (navigator as any).userLanguage || '').toLowerCase();
+		if (navLang.startsWith('es')) return true;
+	} catch {}
+	return false;
 }
 
 export function loc(token: string, fallbackEnglish: string): string {

@@ -6,7 +6,7 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "Steam-Game-Data-Linker-Mod/2.6"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
 local M = {}
 local detection_url_encode = util.url_encode
 local html_unescape = util.html_unescape
@@ -337,7 +337,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
         headers = {
             ["Accept"] = "application/json,text/plain,*/*",
             ["Accept-Language"] = "en-US,en;q=0.8",
-            ["User-Agent"] = "Steam-Game-Data-Linker-Mod/2.6",
+            ["User-Agent"] = "GameBridge-for-Steam/1.0",
         },
         timeout = 18,
     })
@@ -364,7 +364,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
         headers = {
             ["Accept"] = "text/html,*/*",
             ["Accept-Language"] = "en-US,en;q=0.8",
-            ["User-Agent"] = "Steam-Game-Data-Linker-Mod/2.6",
+            ["User-Agent"] = "GameBridge-for-Steam/1.0",
         },
         timeout = 18,
     })

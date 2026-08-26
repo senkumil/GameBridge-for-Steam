@@ -6,7 +6,7 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "Steam-Game-Data-Linker-Mod/2.6"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
 local M = {}
 
 local function get_active_account_id()
@@ -313,6 +313,71 @@ function M.fetch_library_assets(request_json)
         .. (result.logo ~= "" and "yes" or "no") .. ", hero="
         .. (result.hero ~= "" and "yes" or "no"))
     return encoded
+end
+
+-- Optional community fallback. It is deliberately separate from the official
+-- resolver above: callers invoke it only for slots Steam did not publish, and
+-- the API key is supplied per request (never written to the plugin log/files).
+local function steamgriddb_image_url(value)
+    local url = tostring(value or "")
+    if url:match("^https://[%w%-.]*steamgriddb%.com/") then return url end
+    return ""
+end
+
+local function steamgriddb_request(path, api_key)
+    local ok_http, res = pcall(http.get, "https://www.steamgriddb.com/api/v2/" .. path, {
+        headers = {
+            ["Accept"] = "application/json",
+            ["Authorization"] = "Bearer " .. api_key,
+            ["User-Agent"] = USER_AGENT,
+        },
+        timeout = 10,
+    })
+    if not ok_http or not res or res.status ~= 200 or not res.body then return nil end
+    local ok_body, body = pcall(cjson.decode, res.body)
+    return ok_body and type(body) == "table" and body or nil
+end
+
+local function steamgriddb_first_url(body)
+    local items = type(body) == "table" and body.data or nil
+    if type(items) ~= "table" then return "" end
+    if items.url then return steamgriddb_image_url(items.url) end
+    for _, item in ipairs(items) do
+        local url = type(item) == "table" and steamgriddb_image_url(item.url) or ""
+        if url ~= "" then return url end
+    end
+    return ""
+end
+
+function M.fetch_community_artwork(request_json)
+    local ok_request, request = pcall(cjson.decode, tostring(request_json or ""))
+    if not ok_request or type(request) ~= "table" then return cjson.encode({ error = "invalid_request" }) end
+    local appid = tostring(request.steam_app_id or request.appid or "")
+    local api_key = tostring(request.api_key or ""):match("^%s*(.-)%s*$") or ""
+    if not appid:match("^%d+$") then return cjson.encode({ error = "invalid_appid" }) end
+    if #api_key < 16 or #api_key > 160 then return cjson.encode({ error = "api_key_missing" }) end
+
+    -- SteamGridDB maps its own game ids from Steam AppIDs, avoiding fuzzy title
+    -- searches and accidental artwork from a different edition.
+    local game = steamgriddb_request("games/steam/" .. appid, api_key)
+    local game_id = type(game) == "table" and type(game.data) == "table" and tonumber(game.data.id) or nil
+    if not game_id then return cjson.encode({ found = false, source = "steamgriddb" }) end
+
+    local id = tostring(math.floor(game_id))
+    local result = {
+        found = true,
+        source = "steamgriddb",
+        portrait = steamgriddb_first_url(steamgriddb_request("grids/game/" .. id .. "?dimensions=600x900", api_key)),
+        hero = steamgriddb_first_url(steamgriddb_request("heroes/game/" .. id, api_key)),
+        logo = steamgriddb_first_url(steamgriddb_request("logos/game/" .. id, api_key)),
+        wide = steamgriddb_first_url(steamgriddb_request("grids/game/" .. id .. "?dimensions=920x430", api_key)),
+    }
+    result.found = result.portrait ~= "" or result.hero ~= "" or result.logo ~= "" or result.wide ~= ""
+    -- Do not log URLs or the API key; a count is enough for diagnostics.
+    logger:info("SteamGridDB fallback resolved " .. appid .. " assets="
+        .. tostring((result.portrait ~= "" and 1 or 0) + (result.hero ~= "" and 1 or 0)
+            + (result.logo ~= "" and 1 or 0) + (result.wide ~= "" and 1 or 0)))
+    return cjson.encode(result)
 end
 
 -- Persist Steam's official client icon for a non-Steam shortcut.  SetShortcutIcon

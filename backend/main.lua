@@ -4,7 +4,7 @@ local http       = require("http")
 local cjson      = require("json")
 local fs         = require("fs")
 
-local USER_AGENT = "Steam-Game-Data-Linker-Mod/2.6"
+local USER_AGENT = "GameBridge-for-Steam/1.0"
 
 local function resolve_backend_dir()
     local raw = tostring(MILLENNIUM_PLUGIN_SECRET_BACKEND_ABSOLUTE or "")
@@ -45,6 +45,7 @@ local social = load_factory("social")(deps)
 local community = load_factory("community")(deps)
 local artwork = load_factory("artwork")(deps)
 local achievements = load_factory("achievements")(deps)
+local playtime = load_factory("playtime")(deps)
 
 -- Millennium discovers frontend-callable functions by global name. Keep the
 -- IPC surface stable while delegating implementation to cohesive modules.
@@ -63,6 +64,7 @@ function fetch_friend_personas(steam_ids_csv) return social.fetch_friend_persona
 function fetch_community_content(steam_app_id, language) return community.fetch_community_content(steam_app_id, language) end
 function fetch_community_items_catalog(steam_app_id, language) return community.fetch_community_items_catalog(steam_app_id, language) end
 function fetch_library_assets(request_json) return artwork.fetch_library_assets(request_json) end
+function fetch_community_artwork(request_json) return artwork.fetch_community_artwork(request_json) end
 function save_shortcut_icon(request_json) return artwork.save_shortcut_icon(request_json) end
 function save_artwork(shortcut_app_id, steam_app_id) return artwork.save_artwork(shortcut_app_id, steam_app_id) end
 function clear_artwork(shortcut_app_id) return artwork.clear_artwork(shortcut_app_id) end
@@ -73,6 +75,11 @@ function set_game_achievement_path(request_json) return achievements.set_game_ac
 function fetch_local_achievement_data(request_json, language, state_app_id)
     return achievements.fetch_local_achievement_data(request_json, language, state_app_id)
 end
+function start_playtime_session(request_json) return playtime.start_session(request_json) end
+function ping_playtime_session(request_json) return playtime.ping_session(request_json) end
+function stop_playtime_session(request_json) return playtime.stop_session(request_json) end
+function get_playtime_data(request_json) return playtime.get_playtime(request_json) end
+function set_playtime_data(request_json) return playtime.set_playtime(request_json) end
 function fe_log(msg)
     logger:info("[FE] " .. tostring(msg))
     return "ok"

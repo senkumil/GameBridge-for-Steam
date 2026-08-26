@@ -1,4 +1,5 @@
 import { fetchLocalAchievementsBackend } from '../../api/backend';
+import { simulatedAchievementsEnabled } from '../../core/preferences';
 import type { LocalAchievementData } from '../../domain/types';
 import { steamLanguageSync } from '../../steam/localization';
 
@@ -15,7 +16,10 @@ export function localAchievementRequestJson(
 		steam_app_id: String(steamAppId),
 		language: steamLanguageSync() || 'spanish',
 		state_app_id: options.stateAppId == null ? '' : String(options.stateAppId),
-		allow_simulated: options.allowSimulated ?? true,
+		// Never enable the test fallback implicitly. It is enabled only when the
+		// user has enabled both developer mode and simulated progress; callers may
+		// still explicitly disable it for a particular request.
+		allow_simulated: options.allowSimulated !== false && simulatedAchievementsEnabled(),
 	});
 }
 
