@@ -1,6 +1,6 @@
 import { LINKS_BAR_CLASSES } from '../../steam/css';
 import { elementsWithCssModuleClass, isRenderedElement } from '../../steam/native-dom';
-import { findMappingForShortcut } from '../shortcuts/runtime';
+import { findMappingForShortcut, isShortcutDismissed } from '../shortcuts/runtime';
 import { GDL_INJECTED } from './constants';
 
 export function routedSteamAppId(doc: Document): number | null {
@@ -62,8 +62,11 @@ export function reconcileLibraryNavigation(doc: Document, state: LibraryNavigati
 		return;
 	}
 	if (routeId === null) return;
-	const routeMapping = routeId >= 2147483648 ? findMappingForShortcut(String(routeId), '') : null;
-	const sameLinkedGame = routeId >= 2147483648
+	const routeShortcutDismissed = routeId >= 2147483648 && isShortcutDismissed(routeId);
+	const routeMapping = routeId >= 2147483648 && !routeShortcutDismissed
+		? findMappingForShortcut(String(routeId), '')
+		: null;
+	const sameLinkedGame = !routeShortcutDismissed && routeId >= 2147483648
 		&& (String(routeId) === state.currentInjectedShortcutAppId || routeMapping === state.currentInjectedAppId);
 	if (!sameLinkedGame) {
 		state.clearCurrentInjection(doc);

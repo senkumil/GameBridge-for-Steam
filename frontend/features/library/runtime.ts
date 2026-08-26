@@ -40,7 +40,6 @@ let currentInjectedShortcutAppId: string | null = null;
 let injectionGeneration = 0;
 let injectionInFlight: { doc: Document; steamAppId: string; generation: number } | null = null;
 const navigationController = new LibraryNavigationController();
-
 function isCurrentNavigation(doc: Document, generation: number): boolean {
 	return isUsableLibraryDocument(doc) && navigationController.isCurrent(doc, generation);
 }
@@ -49,7 +48,6 @@ function isUsableLibraryDocument(doc: Document | null | undefined): doc is Docum
 		return Boolean(doc?.body && doc.documentElement?.isConnected && doc.defaultView && !doc.defaultView.closed);
 	} catch { return false; }
 }
-
 export function configureLibraryRuntimeHost(host: LibraryRuntimeHost): void {
 	configuredLibraryRuntimeHost = host;
 }
@@ -303,7 +301,9 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 	const routedShortcutAppId = findActiveShortcutAppId(doc, '');
 	const titleMatchedShortcutAppId = findActiveShortcutAppId(doc, gameTitle);
 	const activeShortcutAppId = titleMatchedShortcutAppId || routedShortcutAppId || (shortcutByName ? String(shortcutByName) : null);
-	const activeMapping = findMappingForShortcut(activeShortcutAppId, gameTitle);
+	const normalizedActiveShortcutId = normalizedShortcutAppId(activeShortcutAppId);
+	const activeShortcutDismissed = Boolean(normalizedActiveShortcutId && isShortcutDismissed(normalizedActiveShortcutId));
+	const activeMapping = activeShortcutDismissed ? null : findMappingForShortcut(activeShortcutAppId, gameTitle);
 	const steamAppId = activeMapping;
 	const resolvedShortcutAppId = activeShortcutAppId;
 	if (!steamAppId || !/^\d+$/.test(steamAppId)) {
@@ -318,7 +318,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		}
 		void injectPlaytimeFallbackStats(doc, visibleShortcutId, gameTitle, undefined,
 			() => isUsableLibraryDocument(doc) && !doc.getElementById(GDL_INJECTED)
-				&& !findMappingForShortcut(String(visibleShortcutId), gameTitle));
+				&& (isShortcutDismissed(visibleShortcutId) || !findMappingForShortcut(String(visibleShortcutId), gameTitle)));
 		if (currentInjectedDocument === doc) clearCurrentInjection(doc);
 		cleanupInjection(doc);
 		if (getPreferences().autoDetectShortcuts && visibleShortcutId && !isShortcutDismissed(visibleShortcutId)) {

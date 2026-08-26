@@ -30,17 +30,23 @@ const DISMISSED_SHORTCUTS_KEY = 'gdl_dismissed_shortcuts_v3';
 // the user for a loose keyword hit such as "re9" -> an unrelated title.
 const AUTO_LINK_MIN_CONFIDENCE = 70;
 const AUTO_LINK_VERIFIED_EXECUTABLE_MIN_CONFIDENCE = 45;
+const AUTO_LINK_MAINTAINED_ALIAS_MIN_CONFIDENCE = 35;
 
 /**
  * A manually opened Properties picker may show every Store suggestion. The
- * unsolicited modal stays stricter, but an executable verified against
- * Steam's own launch configuration is stronger evidence than a noisy or
- * user-edited shortcut title and is safe to offer for explicit confirmation.
+ * unsolicited modal stays stricter. Verified executables are strong evidence;
+ * a maintained executable alias is weaker, but is still safe to present for
+ * explicit review even when the shortcut title was replaced by an arbitrary
+ * label. Plain Store-search guesses do not receive this exception.
  */
 function isReliableAutoLinkCandidate(candidate: ShortcutDetectionCandidate): boolean {
+	const reasons = new Set(candidate.reasons || []);
+	const maintainedAlias = reasons.has('franchise_alias')
+		&& reasons.has('alias_requires_confirmation');
 	return Boolean(candidate.direct
 		|| candidate.score >= AUTO_LINK_MIN_CONFIDENCE
-		|| (candidate.executable_match && candidate.score >= AUTO_LINK_VERIFIED_EXECUTABLE_MIN_CONFIDENCE));
+		|| (candidate.executable_match && candidate.score >= AUTO_LINK_VERIFIED_EXECUTABLE_MIN_CONFIDENCE)
+		|| (maintainedAlias && candidate.score >= AUTO_LINK_MAINTAINED_ALIAS_MIN_CONFIDENCE));
 }
 
 function loadDismissedShortcuts(): Set<number> {
@@ -114,7 +120,12 @@ function closeShortcutAutoLinkModal(doc: Document, shortcutAppId: number, dismis
 	doc.getElementById('gdl-auto-link-modal')?.remove();
 	try { document.getElementById('gdl-auto-link-modal')?.remove(); } catch {}
 	shortcutAutoDetectorModalOpen = false;
-	if (dismiss) dismissShortcut(shortcutAppId);
+	if (dismiss) {
+		dismissShortcut(shortcutAppId);
+		// A shared executable mapping may have been mounted before the modal was
+		// shown. Restore the native page immediately when the user rejects it.
+		try { shortcutRuntimeHost().resetLibraryInjection?.(false, doc); } catch {}
+	}
 }
 
 export function showShortcutAutoLinkModal(
@@ -156,6 +167,10 @@ export function showShortcutAutoLinkModal(
 						<select class="gdl-auto-link-select" style="width:100%;padding:7px 9px;background:#20242b;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;"></select>
 					</div>
 				</div>
+				<label style="display:block;margin:0 0 14px;font-size:11px;color:#8f98a0;">
+					<span style="display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.45px;">${escapeHtml(gdlText('manual_appid_label', 'Or enter a Steam AppID manually'))}</span>
+					<input class="gdl-auto-link-manual-appid" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(gdlText('manual_appid_placeholder', 'Steam AppID'))}" style="box-sizing:border-box;width:100%;padding:8px 9px;background:#101820;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;" />
+				</label>
 				<div style="padding:9px 11px;background:rgba(0,0,0,.18);color:#8f98a0;font-size:11px;line-height:1.35;overflow-wrap:anywhere;">${escapeHtml(executableSummary)}</div>
 				<label class="gdl-auto-link-tracking" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;padding:10px 11px;background:rgba(91,163,43,.10);border:1px solid rgba(91,163,43,.28);color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;">
 					<input class="gdl-auto-link-tracking-input" type="checkbox" checked style="margin-top:2px;" />
@@ -176,6 +191,7 @@ export function showShortcutAutoLinkModal(
 		</div>`;
 
 	const select = overlay.querySelector('.gdl-auto-link-select') as HTMLSelectElement;
+	const manualAppIdInput = overlay.querySelector('.gdl-auto-link-manual-appid') as HTMLInputElement;
 	const image = overlay.querySelector('.gdl-auto-link-image') as HTMLImageElement;
 	const name = overlay.querySelector('.gdl-auto-link-name') as HTMLElement;
 	const appId = overlay.querySelector('.gdl-auto-link-id') as HTMLElement;
@@ -201,7 +217,12 @@ export function showShortcutAutoLinkModal(
 	select.selectedIndex = 0;
 	select.value = candidates[0].appid;
 	let imageRequestRevision = 0;
+	let manualLookupTimer: ReturnType<typeof setTimeout> | null = null;
 	const renderCandidate = () => {
+		if (manualLookupTimer) {
+			clearTimeout(manualLookupTimer);
+			manualLookupTimer = null;
+		}
 		const candidate = candidates.find(item => item.appid === select.value) || candidates[0];
 		const requestRevision = ++imageRequestRevision;
 		name.textContent = candidate.name;
@@ -210,6 +231,12 @@ export function showShortcutAutoLinkModal(
 			status.textContent = gdlText(
 				'auto_link_executable_verified_review',
 				'The executable matches this Steam game, but the shortcut title is uncertain. Review it before linking.',
+			);
+			status.style.color = '#e5ad37';
+		} else if (!candidate.direct && candidate.score < AUTO_LINK_MIN_CONFIDENCE) {
+			status.textContent = gdlText(
+				'detection_uncertain',
+				'The match is uncertain. Choose the correct result or enter the AppID manually.',
 			);
 			status.style.color = '#e5ad37';
 		} else {
@@ -232,7 +259,59 @@ export function showShortcutAutoLinkModal(
 			image.style.visibility = 'visible';
 		}).catch(() => {});
 	};
-	select.addEventListener('change', renderCandidate);
+	const renderManualAppId = () => {
+		const manualAppId = manualAppIdInput.value.trim();
+		if (!manualAppId) {
+			renderCandidate();
+			return;
+		}
+		if (!/^\d+$/.test(manualAppId)) {
+			imageRequestRevision += 1;
+			name.textContent = gdlText('manual_appid_title', 'Manual Steam AppID');
+			appId.textContent = '';
+			image.removeAttribute('src');
+			image.style.visibility = 'hidden';
+			status.textContent = gdlText('manual_appid_invalid', 'Enter a numeric Steam AppID.');
+			status.style.color = '#e5ad37';
+			return;
+		}
+		const requestRevision = ++imageRequestRevision;
+		name.textContent = gdlText('manual_appid_title', 'Manual Steam AppID');
+		appId.textContent = `Steam AppID ${manualAppId}`;
+		image.removeAttribute('src');
+		image.style.visibility = 'hidden';
+		status.textContent = gdlText('verifying_steam', 'Verifying on Steam...');
+		status.style.color = '#8f98a0';
+		if (manualLookupTimer) clearTimeout(manualLookupTimer);
+		manualLookupTimer = setTimeout(() => {
+			void getGameData(manualAppId).then(official => {
+				if (requestRevision !== imageRequestRevision || manualAppIdInput.value.trim() !== manualAppId) return;
+				if (!official) {
+					status.textContent = gdlText('appid_not_found', 'AppID {id} was not found on Steam.', { id: manualAppId });
+					status.style.color = '#ff6b6b';
+					return;
+				}
+				name.textContent = String(official.name || gdlText('manual_appid_title', 'Manual Steam AppID'));
+				const officialImage = String(official.header_image || official.capsule_image || official.capsule_imagev5 || '').trim();
+				if (officialImage) {
+					image.onerror = () => { image.style.visibility = 'hidden'; };
+					image.src = officialImage;
+					image.style.visibility = 'visible';
+				}
+				status.textContent = gdlText('manual_appid_ready', 'Manual AppID selected. Review the Steam game before linking.');
+				status.style.color = '#66c0f4';
+			}).catch(() => {
+				if (requestRevision !== imageRequestRevision || manualAppIdInput.value.trim() !== manualAppId) return;
+				status.textContent = gdlText('appid_not_found', 'AppID {id} was not found on Steam.', { id: manualAppId });
+				status.style.color = '#ff6b6b';
+			});
+		}, 250);
+	};
+	select.addEventListener('change', () => {
+		if (manualAppIdInput.value) manualAppIdInput.value = '';
+		renderCandidate();
+	});
+	manualAppIdInput.addEventListener('input', renderManualAppId);
 	renderCandidate();
 	if (hasTrackingRecommendation) trackingLabel.style.display = 'flex';
 
@@ -271,7 +350,14 @@ export function showShortcutAutoLinkModal(
 	targetDoc.addEventListener('keydown', activeModalEscapeHandler);
 	confirm.addEventListener('click', async () => {
 		if (modalSubmitting) return;
+		const manualAppId = manualAppIdInput.value.trim();
+		if (manualAppId && !/^\d+$/.test(manualAppId)) {
+			status.textContent = gdlText('manual_appid_invalid', 'Enter a numeric Steam AppID.');
+			status.style.color = '#ff6b6b';
+			return;
+		}
 		const selected = candidates.find(candidate => candidate.appid === select.value) || candidates[0];
+		const steamAppId = manualAppId || selected.appid;
 		modalSubmitting = true;
 		shortcutLinkInProgress = true;
 		setProgress(1);
@@ -286,7 +372,7 @@ export function showShortcutAutoLinkModal(
 				doc: targetDoc,
 				title: context.title,
 				shortcutAppId: context.shortcutAppId,
-				steamAppId: selected.appid,
+				steamAppId,
 				skipLauncher: allowNoLauncher && launcherInput.checked,
 				existingLaunchOptions: context.launchOptions,
 				trackingExecutable: hasTrackingRecommendation && trackingInput.checked ? context.recommendedExePath : '',

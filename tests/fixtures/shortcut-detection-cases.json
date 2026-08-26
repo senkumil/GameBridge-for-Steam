@@ -7,7 +7,11 @@
   {
     "executable": "tlou-i.exe",
     "title": "tlou-i",
-    "expect": { "aliasesAreHintsOnly": true, "requireOfficialStoreCandidate": true }
+    "expect": {
+      "aliasesAreHintsOnly": true,
+      "requireOfficialStoreCandidate": true,
+      "maintainedAliasCanOpenReviewModal": true
+    }
   },
   {
     "executable": "MKKE.exe",
@@ -35,7 +39,17 @@
     "expect": {
       "ambiguousResultsRequireManualConfirmation": true,
       "verifiedExecutableOutranksAlias": true,
-      "unverifiedAliasScoreIsCapped": true
+      "unverifiedAliasScoreIsCapped": true,
+      "maintainedAliasCanOpenReviewModal": true
+    }
+  },
+  {
+    "executable": "tlou-i.exe",
+    "title": "q",
+    "expect": {
+      "arbitraryTitleDoesNotDiscardExecutableAlias": true,
+      "maintainedAliasCanOpenReviewModal": true,
+      "requiresManualConfirmation": true
     }
   }
 ]

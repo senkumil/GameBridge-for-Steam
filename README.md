@@ -152,7 +152,13 @@ SteamAutoCrack and Goldberg Emulator are external projects and are not bundled w
 
 ## ⏱️ Playtime and Session Tracking
 
-GameBridge first uses the playtime Steam already records for the shortcut. If the client does not expose native shortcut playtime, an optional fallback can:
+### Steam Beta or the GameBridge fallback?
+
+Steam Beta builds that include native non-Steam playtime tracking are recommended if you want Steam itself to measure and display the shortcut's local playtime. You can opt in from **Steam → Settings → Interface → Client Beta Participation → Steam Beta Update**.
+
+GameBridge checks whether the current Steam client already exposes native playtime for each linked shortcut. When it does, the plugin uses Steam's value and does not create a duplicate counter. When it does not, GameBridge automatically activates its own local fallback tracker. The fallback is enabled by default and can be disabled in GameBridge settings.
+
+The fallback can:
 
 - Detect when a linked external game starts and stops.
 - Persist sessions across shortcut title changes and regenerated shortcut IDs.
@@ -160,7 +166,16 @@ GameBridge first uses the playtime Steam already records for the shortcut. If th
 - Keep aliases and canonical shortcut identity synchronized.
 - Recover cleanly from overlapping or interrupted sessions.
 
-For games that start through a launcher which closes immediately, the linking workflow can suggest the real long-running executable so tracking does not stop prematurely.
+### ⚠️ Critical Requirement: Main Game Executable vs. Launchers
+
+> [!IMPORTANT]
+> **Point directly to the original game executable:**
+> For playtime tracking and session detection to function accurately (both via Steam's native tracker and through the GameBridge fallback), the Steam shortcut must target the **original, main game executable**—the `.exe` binary that stays open and actively running throughout your entire play session.
+> 
+> **Why doesn't it work with launchers or intermediary executables?**
+> If you add an external launcher, bootstrap tool, script, or intermediary wrapper `.exe` that merely boots up the actual game and then immediately exits, Steam and the process monitor will assume the session finished in a few seconds, prematurely stopping the timer and leaving playtime unrecorded.
+> 
+> If a game uses a separate launcher, locate the actual long-running game executable inside the installation directory (for example, Unreal Engine titles typically place it under `Binaries/Win64/...-Shipping.exe`) and set it as the shortcut target in Steam. During the linking workflow, GameBridge will also attempt to identify and suggest this real executable automatically.
 
 ---
 
@@ -203,7 +218,7 @@ Plugin-specific windows, detection messages, settings, and linking results use G
 
 ## 🚀 Quick Start
 
-1. In Steam, choose **Games → Add a Non-Steam Game to My Library...** and add the game's executable.
+1. In Steam, choose **Games → Add a Non-Steam Game to My Library...** and add the **main game executable** (avoid selecting launchers or intermediary executables to ensure accurate playtime tracking).
 2. Open the new shortcut in your Library.
 3. Review the automatic detection modal and choose **Link game**.
 4. Wait for the success report confirming the title, icon, and artwork that were applied.

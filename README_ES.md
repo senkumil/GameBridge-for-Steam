@@ -152,7 +152,13 @@ SteamAutoCrack y Goldberg Emulator son proyectos externos; no vienen incluidos n
 
 ## ⏱️ Tiempo de juego y sesiones
 
-GameBridge utiliza primero el tiempo que Steam ya registra para el acceso directo. Si el cliente no lo expone, el seguimiento alternativo opcional puede:
+### ¿Steam Beta o el seguimiento de GameBridge?
+
+Las versiones de Steam Beta que incluyen medición nativa para juegos externos son la opción recomendada si quieres que el propio cliente mida y muestre el tiempo local del acceso directo. Puedes activarla desde **Steam → Parámetros → Interfaz → Participación en la beta del cliente → Steam Beta Update**.
+
+GameBridge comprueba si el cliente actual ya expone tiempo de juego nativo para cada acceso vinculado. Cuando existe, utiliza el valor de Steam y no crea un contador duplicado. Cuando no existe, GameBridge activa automáticamente su propio seguimiento local alternativo. Este fallback viene activado por defecto y puede deshabilitarse desde los ajustes del complemento.
+
+El seguimiento alternativo puede:
 
 - Detectar cuándo comienza y termina un juego vinculado.
 - Conservar sesiones tras cambios de título o regeneraciones del ID del acceso directo.
@@ -160,7 +166,16 @@ GameBridge utiliza primero el tiempo que Steam ya registra para el acceso direct
 - Mantener sincronizados los alias con una identidad canónica.
 - Recuperarse de sesiones interrumpidas o superpuestas.
 
-Si el juego usa un launcher que se cierra inmediatamente, la vinculación puede sugerir el ejecutable de larga duración para que el seguimiento no termine antes de tiempo.
+### ⚠️ Requisito fundamental: Ejecutable principal vs. Launchers
+
+> [!IMPORTANT]
+> **Apunta directamente al `.exe` original del juego:**
+> Para que el registro y la detección del tiempo de juego funcionen correctamente (tanto mediante la medición nativa de Steam como con el seguimiento alternativo de GameBridge), el acceso directo en Steam debe apuntar al **ejecutable principal/original del juego** —es decir, al archivo ejecutable que permanece abierto y en memoria durante toda la partida—.
+> 
+> **¿Por qué no funciona con launchers o ejecutables intermediarios?**
+> Si agregas a Steam un launcher externo, script, instalador o ejecutable intermediario/wrapper que únicamente se encarga de abrir el juego real y luego se cierra de inmediato, Steam y el monitor de procesos detectarán que la aplicación ha finalizado en cuestión de segundos, deteniendo el contador y provocando que el tiempo jugado no se registre.
+> 
+> Si el juego incluye un launcher de este tipo, localiza en su carpeta de instalación el ejecutable real de larga duración (por ejemplo, en juegos de Unreal Engine suele estar en `Binaries/Win64/...-Shipping.exe`) y configúralo como destino en las propiedades del acceso directo en Steam. Durante el flujo de vinculación, GameBridge también intentará detectar y sugerirte dicho ejecutable real de forma automática.
 
 ---
 
@@ -203,7 +218,7 @@ Las ventanas propias del complemento, mensajes de detección, ajustes y resultad
 
 ## 🚀 Inicio rápido
 
-1. En Steam, selecciona **Juegos → Añadir un producto que no es de Steam a mi biblioteca...** y agrega el ejecutable.
+1. En Steam, selecciona **Juegos → Añadir un producto que no es de Steam a mi biblioteca...** y agrega el **ejecutable principal** del juego (evita seleccionar launchers o ejecutables intermediarios para que el tiempo de juego se registre correctamente).
 2. Abre el nuevo acceso directo en tu Biblioteca.
 3. Revisa la detección automática y pulsa **Vincular juego**.
 4. Espera el informe que confirma el nombre, icono y recursos aplicados.
