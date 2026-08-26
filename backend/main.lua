@@ -4,7 +4,7 @@ local http       = require("http")
 local cjson      = require("json")
 local fs         = require("fs")
 
-local USER_AGENT = "GameBridge-for-Steam/1.0"
+local USER_AGENT = "GameBridge-for-Steam/2.0.0"
 
 local function resolve_backend_dir()
     local raw = tostring(MILLENNIUM_PLUGIN_SECRET_BACKEND_ABSOLUTE or "")
@@ -66,7 +66,6 @@ function fetch_community_items_catalog(steam_app_id, language) return community.
 function fetch_library_assets(request_json) return artwork.fetch_library_assets(request_json) end
 function fetch_community_artwork(request_json) return artwork.fetch_community_artwork(request_json) end
 function save_shortcut_icon(request_json) return artwork.save_shortcut_icon(request_json) end
-function save_artwork(shortcut_app_id, steam_app_id) return artwork.save_artwork(shortcut_app_id, steam_app_id) end
 function clear_artwork(shortcut_app_id) return artwork.clear_artwork(shortcut_app_id) end
 function get_achievement_base_path() return achievements.get_achievement_base_path() end
 function set_achievement_base_path(path) return achievements.set_achievement_base_path(path) end

@@ -16,6 +16,7 @@ import { clearLinkedNoteSyncState } from './linked-notes';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForDuplicateShortcut, findMappingForShortcut, getAllShortcutRecords, isUnrealShippingExecutable, shortcutAlreadyLinked } from './registry';
 import { buildShortcutDetectionContext, clearShortcutDetectionCache, detectShortcutCandidates } from './detection';
+import { hasPendingLinkJob } from './link-job-queue';
 import {
 	isShortcutIdentityMutationInProgress,
 	linkShortcutToSteam,
@@ -28,6 +29,19 @@ const DISMISSED_SHORTCUTS_KEY = 'gdl_dismissed_shortcuts_v3';
 // expose weaker search results, but background detection must never interrupt
 // the user for a loose keyword hit such as "re9" -> an unrelated title.
 const AUTO_LINK_MIN_CONFIDENCE = 70;
+const AUTO_LINK_VERIFIED_EXECUTABLE_MIN_CONFIDENCE = 45;
+
+/**
+ * A manually opened Properties picker may show every Store suggestion. The
+ * unsolicited modal stays stricter, but an executable verified against
+ * Steam's own launch configuration is stronger evidence than a noisy or
+ * user-edited shortcut title and is safe to offer for explicit confirmation.
+ */
+function isReliableAutoLinkCandidate(candidate: ShortcutDetectionCandidate): boolean {
+	return Boolean(candidate.direct
+		|| candidate.score >= AUTO_LINK_MIN_CONFIDENCE
+		|| (candidate.executable_match && candidate.score >= AUTO_LINK_VERIFIED_EXECUTABLE_MIN_CONFIDENCE));
+}
 
 function loadDismissedShortcuts(): Set<number> {
 	try {
@@ -113,7 +127,7 @@ export function showShortcutAutoLinkModal(
 	if (targetDoc.getElementById('gdl-auto-link-modal')) return;
 	try { targetDoc.getElementById('gdl-auto-link-modal')?.remove(); } catch {}
 	const candidates = (detection.candidates || [])
-		.filter(candidate => candidate.direct || candidate.score >= AUTO_LINK_MIN_CONFIDENCE)
+		.filter(isReliableAutoLinkCandidate)
 		.slice(0, 6);
 	if (!candidates.length) return;
 	const hasTrackingRecommendation = !!(context.bootstrapDetected && context.recommendedExePath);
@@ -129,7 +143,7 @@ export function showShortcutAutoLinkModal(
 	overlay.innerHTML = `
 		<div role="dialog" aria-modal="true" style="width:min(620px,calc(100vw - 40px));overflow:hidden;border-radius:6px;background:linear-gradient(145deg,#1b2531,#121922);border:1px solid rgba(102,192,244,.30);box-shadow:0 24px 80px rgba(0,0,0,.78);">
 			<div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;background:linear-gradient(90deg,rgba(39,65,84,.95),rgba(24,31,41,.96));border-bottom:1px solid rgba(255,255,255,.09);">
-				<div><div style="font-size:20px;font-weight:600;color:#fff;">${escapeHtml(gdlText('auto_link_title', 'Steam game detected'))}</div><div style="margin-top:4px;font-size:11px;letter-spacing:.8px;color:#66c0f4;text-transform:uppercase;">Coincidencia lista para revisar</div></div>
+				<div><div style="font-size:20px;font-weight:600;color:#fff;">${escapeHtml(gdlText('auto_link_title', 'Steam game detected'))}</div><div style="margin-top:4px;font-size:11px;letter-spacing:.8px;color:#66c0f4;text-transform:uppercase;">${escapeHtml(gdlText('auto_link_ready_to_review', 'Match ready for review'))}</div></div>
 				<button class="gdl-auto-link-close" aria-label="${escapeHtml(gdlText('close', 'Close'))}" style="border:0;background:transparent;color:#8f98a0;font-size:24px;line-height:1;cursor:pointer;padding:0 3px;">×</button>
 			</div>
 			<div style="padding:20px 22px 22px;">
@@ -151,11 +165,11 @@ export function showShortcutAutoLinkModal(
 					<input class="gdl-auto-link-launcher-input" type="checkbox" style="margin-top:2px;" />
 					<span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('launcher_detected', 'This target looks like a game launcher. You may optionally add -nolauncher.'))}</span>
 				</label>
-				<div class="gdl-auto-link-progress" style="display:flex;gap:7px;margin-top:15px;color:#8f98a0;font-size:11px;"><span data-step="link" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">1 · Vincular</span><span data-step="identity" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">2 · Identidad</span><span data-step="assets" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">3 · Recursos</span></div>
+				<div class="gdl-auto-link-progress" style="display:flex;gap:7px;margin-top:15px;color:#8f98a0;font-size:11px;"><span data-step="link" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_link', '1 · Link'))}</span><span data-step="identity" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_identity', '2 · Identity'))}</span><span data-step="assets" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_assets', '3 · Assets'))}</span></div>
 				<div class="gdl-auto-link-status" aria-live="polite" style="min-height:18px;margin-top:11px;font-size:12px;color:#8f98a0;"></div>
 				<div class="gdl-auto-link-result" aria-live="polite" style="display:none;margin-top:12px;padding:11px 12px;border-radius:3px;font-size:12px;line-height:1.45;"></div>
 				<div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px;">
-					<button class="gdl-auto-link-cancel" style="padding:9px 17px;border:0;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(gdlText('reject_link', 'Rechazar'))}</button>
+					<button class="gdl-auto-link-cancel" style="padding:9px 17px;border:0;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(gdlText('reject_link', 'Reject'))}</button>
 					<button class="gdl-auto-link-confirm" style="padding:9px 18px;border:0;border-radius:2px;background:linear-gradient(90deg,#06bfff,#2d73ff);color:#fff;cursor:pointer;">${escapeHtml(gdlText('link_game', 'Link game'))}</button>
 				</div>
 			</div>
@@ -181,12 +195,27 @@ export function showShortcutAutoLinkModal(
 		option.textContent = `${candidate.name} — AppID ${candidate.appid} (${Math.round(candidate.score)}%)`;
 		select.appendChild(option);
 	}
+	// Steam CEF can restore the previous value of a dynamically recreated
+	// <select>. Always start on the backend's highest-ranked candidate instead
+	// of silently preserving an AppID selected in an earlier modal.
+	select.selectedIndex = 0;
+	select.value = candidates[0].appid;
 	let imageRequestRevision = 0;
 	const renderCandidate = () => {
 		const candidate = candidates.find(item => item.appid === select.value) || candidates[0];
 		const requestRevision = ++imageRequestRevision;
 		name.textContent = candidate.name;
 		appId.textContent = `Steam AppID ${candidate.appid} · ${Math.round(candidate.score)}%`;
+		if (!candidate.direct && candidate.score < AUTO_LINK_MIN_CONFIDENCE && candidate.executable_match) {
+			status.textContent = gdlText(
+				'auto_link_executable_verified_review',
+				'The executable matches this Steam game, but the shortcut title is uncertain. Review it before linking.',
+			);
+			status.style.color = '#e5ad37';
+		} else {
+			status.textContent = '';
+			status.style.color = '#8f98a0';
+		}
 		// Store-search thumbnails and guessed static CDN paths are not stable for
 		// every Steam game. Show the candidate image immediately, then reconcile
 		// it with the authoritative appdetails header for the selected AppID.
@@ -282,16 +311,18 @@ export function showShortcutAutoLinkModal(
 				resultPanel.style.color = complete ? '#b4d99a' : '#e5c07b';
 				if (complete) {
 					const community = setup?.communityArtwork?.length
-						? ` SteamGridDB aportó: ${setup.communityArtwork.join(', ')}.` : '';
-					resultPanel.innerHTML = `<strong style="color:#a4d007;">✓ Vinculación completada.</strong><br>Nombre oficial, icono y las cuatro imágenes de biblioteca se aplicaron correctamente.${community}`;
-					status.textContent = 'El juego ya está listo en tu biblioteca.';
+						? gdlText('steamgriddb_contributed', ' SteamGridDB provided: {assets}.', { assets: setup.communityArtwork.join(', ') }) : '';
+					resultPanel.innerHTML = `<strong style="color:#a4d007;">${escapeHtml(gdlText('link_complete_title', '✓ Link complete.'))}</strong><br>${escapeHtml(gdlText('link_complete_body', 'The official name, icon, and four library images were applied successfully.'))}${escapeHtml(community)}`;
+					status.textContent = gdlText('link_ready_library', 'The game is ready in your library.');
 				} else {
-					const missing = setup?.missingArtwork?.length ? ` Faltan: ${setup.missingArtwork.join(', ')}.` : '';
-					resultPanel.innerHTML = `<strong style="color:#e5ad37;">Vinculado con avisos.</strong><br>${setup?.iconApplied ? '' : 'No se pudo aplicar el icono oficial. '}${missing} Cuando Steam no publica una pieza de biblioteca, se conserva su arte oficial disponible como alternativa.`;
-					status.textContent = 'La vinculación se guardó; revisa los recursos indicados.';
+					const missing = setup?.missingArtwork?.length
+						? gdlText('link_warning_missing', ' Missing: {assets}.', { assets: setup.missingArtwork.join(', ') }) : '';
+					const iconWarning = setup?.iconApplied ? '' : gdlText('link_warning_icon', 'The official icon could not be applied. ');
+					resultPanel.innerHTML = `<strong style="color:#e5ad37;">${escapeHtml(gdlText('link_warning_title', 'Linked with warnings.'))}</strong><br>${escapeHtml(iconWarning + missing + gdlText('link_warning_fallback', 'When Steam does not publish a library asset, its available official artwork is retained as an alternative.'))}`;
+					status.textContent = gdlText('link_saved_review', 'The link was saved; review the indicated artwork.');
 				}
 				confirm.style.display = 'none';
-				cancel.textContent = 'Listo';
+				cancel.textContent = gdlText('done', 'Done');
 				cancel.disabled = false;
 				confirm.disabled = true;
 				// The completion view stays open for the user to read, but it is no
@@ -329,6 +360,7 @@ async function inspectNewShortcut(record: { id: number; title: string }, force =
 		return;
 	}
 	if (shortcutDetectionInFlight.has(record.id)) return;
+	if (!force && hasPendingLinkJob(record.id, record.title)) return;
 	if (!force && isShortcutDismissed(record.id)) return;
 	if (!isNewlyAdded && !force) {
 		// Existing shortcuts on startup or navigation only sync if already mapped
@@ -409,7 +441,7 @@ async function inspectNewShortcut(record: { id: number; title: string }, force =
 		}
 
 		const viable = (detection?.candidates || [])
-			.filter(candidate => candidate.direct || candidate.score >= AUTO_LINK_MIN_CONFIDENCE);
+			.filter(isReliableAutoLinkCandidate);
 		if (!detection || !viable.length) {
 			backendLog(`Automatic detection found no reliable match for shortcut ${record.title}`);
 			return;
@@ -419,7 +451,7 @@ async function inspectNewShortcut(record: { id: number; title: string }, force =
 		}
 		const host = shortcutRuntimeHost();
 		const doc = host.getMainWindowDoc() || (typeof document !== 'undefined' ? document : null);
-		if (!doc?.body || (!force && isShortcutDismissed(record.id))) {
+		if (!doc?.body || (!force && (isShortcutDismissed(record.id) || hasPendingLinkJob(record.id, record.title)))) {
 			backendLog(`Cannot show auto link modal: document is null or shortcut is dismissed (${record.title})`);
 			return;
 		}
@@ -451,6 +483,7 @@ export function scheduleShortcutInspection(
 		return;
 	}
 	if (shortcutDetectionScheduled.has(record.id) || shortcutDetectionInFlight.has(record.id)) return;
+	if (!force && hasPendingLinkJob(record.id, record.title)) return;
 	if (!force && isShortcutDismissed(record.id)) return;
 	if (!includeLinked && !isNewlyAdded && shortcutAlreadyLinked(record.id)) return;
 	shortcutDetectionScheduled.add(record.id);
@@ -482,7 +515,7 @@ function scanForNewShortcuts(): void {
 		shortcutAutoDetectorInitialized = true;
 		for (const record of records) {
 			knownShortcutIds.add(record.id);
-			if (!shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id)) {
+			if (!shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id) && !hasPendingLinkJob(record.id, record.title)) {
 				backendLog(`Startup unlinked shortcut found: ${record.title} (${record.id})`);
 				scheduleShortcutInspection(record, 500, true, false, true);
 			}
@@ -524,7 +557,7 @@ function scanForNewShortcuts(): void {
 	for (const record of records) {
 		if (knownShortcutIds.has(record.id)) continue;
 		recordKnownShortcut(record.id);
-		if (!shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id)) {
+		if (!shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id) && !hasPendingLinkJob(record.id, record.title)) {
 			backendLog(`New shortcut added: ${record.title} (${record.id})`);
 			scheduleShortcutInspection(record, 300, true, false, true);
 		}

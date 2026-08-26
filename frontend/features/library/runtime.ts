@@ -26,22 +26,24 @@ import { findMappingForShortcut, isShortcutDismissed, normalizedShortcutAppId, s
 import { getPreferences } from '../../core/preferences';
 import { injectPlaytimeFallbackStats, removePlaytimeFallbackStats } from '../playtime/tracker';
 import { hideNoticeQuick } from './notice';
+import { restoreNativeLibraryStyles } from './layout';
+import { LibraryNavigationController } from './navigation-controller';
 import { hasVisibleNativeLinksBar, reconcileLibraryNavigation, routedSteamAppId } from './native-route';
 export { hideNoticeQuick } from './notice';
-
 export interface LibraryRuntimeHost {
 	getMainWindowDoc: () => Document | null;
 }
-
 let configuredLibraryRuntimeHost: LibraryRuntimeHost | null = null;
 let currentInjectedDocument: Document | null = null;
 let currentInjectedAppId: string | null = null;
 let currentInjectedShortcutAppId: string | null = null;
 let injectionGeneration = 0;
 let injectionInFlight: { doc: Document; steamAppId: string; generation: number } | null = null;
-let navigationCleanupTimer: ReturnType<typeof setTimeout> | null = null;
-let navigationCleanupDocument: Document | null = null;
+const navigationController = new LibraryNavigationController();
 
+function isCurrentNavigation(doc: Document, generation: number): boolean {
+	return isUsableLibraryDocument(doc) && navigationController.isCurrent(doc, generation);
+}
 function isUsableLibraryDocument(doc: Document | null | undefined): doc is Document {
 	try {
 		return Boolean(doc?.body && doc.documentElement?.isConnected && doc.defaultView && !doc.defaultView.closed);
@@ -195,7 +197,7 @@ function renderLinkedPage(
 
 /** Remove GDL desktop-Library UI and restore Steam's original shortcut notice. */
 export function cleanupInjection(doc: Document): void {
-	cancelNavigationCleanup(doc);
+	navigationController.cancelCleanup(doc);
 	removeNativeGameChrome(doc, true);
 	removePlaytimeFallbackStats(doc);
 	disposeStatusPostBox(doc);
@@ -208,36 +210,36 @@ export function cleanupInjection(doc: Document): void {
 		'gdl-trading-cards-section', 'gdl-dlc-section', 'gdl-workshop-section',
 		'gdl-playbar-achievements', 'gdl-link-bar', 'gdl-community-content', 'gdl-activity-feed',
 	]) doc.getElementById(id)?.remove();
-	doc.querySelectorAll('[data-gdl-hidden]').forEach(element => { (element as HTMLElement).style.display = ''; element.removeAttribute('data-gdl-hidden'); });
+	restoreNativeLibraryStyles(doc);
+	// Compatibility with injected UI from an earlier plugin build. New code uses
+	// the snapshot registry above and never blindly resets Steam's display value.
+	doc.querySelectorAll('[data-gdl-hidden]').forEach(element => element.removeAttribute('data-gdl-hidden'));
 }
 export function handleLibraryNavigation(doc: Document): void {
+	navigationController.advance(doc);
 	if (isUsableLibraryDocument(doc) && (currentInjectedDocument === doc || doc.getElementById(GDL_INJECTED))) {
 		clearCurrentInjection(doc);
 		cleanupInjection(doc);
 	}
 	reconcileLibraryNavigation(doc, { currentInjectedAppId, currentInjectedShortcutAppId, clearCurrentInjection, cleanupInjection });
 }
-function cancelNavigationCleanup(doc?: Document): void {
-	if (doc && navigationCleanupDocument && navigationCleanupDocument !== doc) return;
-	if (navigationCleanupTimer) clearTimeout(navigationCleanupTimer);
-	navigationCleanupTimer = null;
-	navigationCleanupDocument = null;
+function scheduleNavigationRetry(doc: Document, generation: number, delayMs: number): void {
+	navigationController.scheduleRetry(doc, generation, delayMs, () => {
+		if (isUsableLibraryDocument(doc)) void tryInjectLibraryData(doc).catch(() => {});
+	});
 }
 
 function scheduleNavigationCleanup(doc: Document): void {
-	cancelNavigationCleanup();
-	navigationCleanupDocument = doc;
-	navigationCleanupTimer = setTimeout(() => {
-		navigationCleanupTimer = null;
-		navigationCleanupDocument = null;
-		if (!isUsableLibraryDocument(doc)) return;
+	const generation = navigationController.current(doc);
+	navigationController.scheduleCleanup(doc, generation, 350, () => {
+		if (!isCurrentNavigation(doc, generation)) return;
 		if (findNonSteamNotice(doc)) {
 			void tryInjectLibraryData(doc).catch(error => backendLog('Library recovery failed: ' + String(error)));
 			return;
 		}
 		clearCurrentInjection(doc);
 		cleanupInjection(doc);
-	}, 350);
+	});
 }
 
 async function warmLocalAchievements(steamAppId: string, shortcutAppId: string | null): Promise<void> {
@@ -259,6 +261,7 @@ function finalizeAchievements(doc: Document, steamAppId: string, fallbackTotal: 
 
 export async function tryInjectLibraryData(doc: Document): Promise<void> {
 	if (!isUsableLibraryDocument(doc)) return;
+	const navigationGeneration = navigationController.current(doc);
 	const activeLibraryDoc = configuredLibraryRuntimeHost?.getMainWindowDoc() || null;
 	if (isUsableLibraryDocument(activeLibraryDoc) && activeLibraryDoc !== doc) return;
 	if (currentInjectedDocument && currentInjectedDocument !== doc
@@ -284,15 +287,16 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		return;
 	}
 	installSteamNavigation(doc);
-	cancelNavigationCleanup(doc);
+	navigationController.cancelCleanup(doc);
 	const notice = noticeInfo.element;
 	const gameTitle = noticeInfo.title;
 	if (Object.keys(mappings).length === 0) {
 		await loadMappings().catch(() => {});
 	}
+	if (!isCurrentNavigation(doc, navigationGeneration)) return;
 	const currentNotice = findNonSteamNotice(doc);
 	if (!notice.isConnected || !currentNotice || currentNotice.element !== notice || currentNotice.title !== gameTitle) {
-		setTimeout(() => { if (isUsableLibraryDocument(doc)) void tryInjectLibraryData(doc); }, 80);
+		scheduleNavigationRetry(doc, navigationGeneration, 80);
 		return;
 	}
 	const shortcutByName = findShortcutAppIdByName(gameTitle);
@@ -415,7 +419,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		if (injectionInFlight === flight) injectionInFlight = null;
 	}
 
-	if (!data || !isCurrentRender(doc, steamAppId, generation)) {
+	if (!data || !isCurrentNavigation(doc, navigationGeneration) || !isCurrentRender(doc, steamAppId, generation)) {
 		if (!data) backendLog('No game data for: ' + steamAppId);
 		return;
 	}
@@ -477,10 +481,11 @@ export function resetLibraryInjection(reinject = false, targetDoc?: Document | n
 	const liveDoc = libraryRuntimeHost().getMainWindowDoc();
 	const doc = isUsableLibraryDocument(liveDoc) ? liveDoc : targetDoc;
 	if (!doc) {
-		cancelNavigationCleanup();
+		navigationController.dispose();
 		clearCurrentInjection();
 		return;
 	}
+	navigationController.advance(doc);
 	clearCurrentInjection(doc);
 	cleanupInjection(doc);
 	if (reinject) void tryInjectLibraryData(doc).catch(error => backendLog('Library reinjection failed: ' + error));
@@ -488,7 +493,7 @@ export function resetLibraryInjection(reinject = false, targetDoc?: Document | n
 export function disposeLibraryRuntime(): void {
 	const doc = currentInjectedDocument || configuredLibraryRuntimeHost?.getMainWindowDoc() || null;
 	if (doc) cleanupInjection(doc);
-	cancelNavigationCleanup();
+	navigationController.dispose();
 	clearCurrentInjection();
 	configuredLibraryRuntimeHost = null;
 }

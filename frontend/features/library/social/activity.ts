@@ -256,9 +256,10 @@ export async function populateActivityFeed(doc: Document, steamAppId: string, ga
 	// Prefetch personas, screenshot previews, and reviews in parallel
 	const previews = new Map<string, string>();
 	const reviews = new Map<string, FriendReview>();
+	const visibleActorIds = [...actorIds].filter(id => !hasCachedPersona(id)).slice(0, 8);
 	await Promise.all([
-		actorIds.size > 0
-			? fetchFriendPersonasBackend({ steam_ids_csv: [...actorIds].join(',') })
+		visibleActorIds.length > 0
+			? fetchFriendPersonasBackend({ steam_ids_csv: visibleActorIds.join(',') })
 				.then(json => { for (const persona of JSON.parse(json) as FriendPersona[]) cachePersona(persona); })
 				.catch(e => backendLog('Activity persona fetch error: ' + e))
 			: Promise.resolve(),

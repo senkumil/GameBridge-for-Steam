@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.0.0 - Reliable Linking, Native Library Isolation & Interactive Cards
+
+- Makes first-time linking persistent without restarting Steam by completing identity, artwork and mapping work in a background-safe queue.
+- Rebuilds automatic shortcut detection around verified executable evidence, ambiguity gaps and reviewable candidates instead of treating aliases as proof.
+- Adds candidate artwork to both the automatic linking modal and shortcut Properties, with localized success and missing-asset reports.
+- Adds official Steam artwork recovery plus optional SteamGridDB fallback for missing library assets, with stricter provider and asset selection validation.
+- Centralizes retryable frontend requests so temporary startup, Store or IPC failures are not cached until Steam restarts.
+- Introduces generation-based Library navigation and complete native-style restoration to prevent flicker, stale injections and changes leaking into native Steam games.
+- Improves localized activity, achievements, cloud/playtime status, community content, notes, DLC and responsive primary-link rendering.
+- Adds Steam-like interactive trading cards with centered expansion, bounded 3D tilt, cursor lighting and metadata-gated foil holographic reflection.
+- Adds canonical playtime session persistence, atomic achievement-path writes, faster Base64 artwork decoding and bounded backend caches.
+- Expands source, localization, detection-fixture, TypeScript, Lua and generated-bundle validation under `npm run verify`.
+
 ## v1.5.0 - Stable Release & Performance / Cache Parity
 
 - **Instant Cache Rendering (0ms):** Synchronous localized metadata retrieval without IPC delays on library navigation.
@@ -8,7 +21,12 @@
 - **Parallelized Dynamic Streams:** News, friend activity, community items, and achievements load asynchronously in parallel without blocking each other.
 - **Native Steam UI Parity & Bug Fixes:** Cloned native `<h2>` heading for Activity section, fixed styling for status composer and major event cards, responsive quick-link bar, and cleaned community section header.
 
-## v2.6.0-alpha.2 - Native UI parity pass
+> **Versioning note:** `v2.6.0-alpha.1` and `v2.6.0-alpha.2` below were
+> internal development milestones only. They were never published or distributed
+> as plugin releases. `v1.5.0` was the previous public release and `v2.0.0` is
+> the current public release line.
+
+## v2.6.0-alpha.2 — Internal, never published
 
 - Calibrates the Steam desktop Library reference against 1920×1080 maximized-client captures; the screenshots are taskbar-cropped only and are not treated as a smaller viewport.
 - Splits Library fallback CSS by visual surface so Information, primary links, Activity, community content, status posting, and trading cards can be refined independently.
@@ -22,7 +40,7 @@
 - Clears session native blueprints on Steam-language changes and clears both native blueprints and resolved CSS-module caches when the plugin is dismounted.
 - Keeps all visible localization conservative: verified Steam token first, English fallback otherwise; no reverse/fuzzy token guessing is used in production.
 
-## v2.6.0-alpha.1 - Architecture refactor foundation
+## v2.6.0-alpha.1 — Internal, never published
 
 - Splits the previous frontend monolith into explicit runtime, feature, Steam-adapter, core, API, settings, and domain layers.
 - Splits the backend into a thin Millennium IPC facade plus cohesive modules for mappings, Store data, shortcut detection, news, social data, community content, artwork, and achievements.

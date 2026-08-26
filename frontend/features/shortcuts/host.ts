@@ -4,6 +4,7 @@ export interface ShortcutRuntimeHost {
 	resetLibraryInjection?: (reinject?: boolean, targetDoc?: Document | null) => void;
 	findNonSteamNotice: (doc: Document) => { title: string } | null;
 	isLibraryActive?: (doc?: Document | null) => boolean;
+	runPendingLinkJobs?: () => void;
 }
 
 let configuredHost: ShortcutRuntimeHost | null = null;

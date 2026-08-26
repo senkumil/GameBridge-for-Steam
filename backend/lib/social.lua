@@ -6,14 +6,14 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
 local M = {}
 
 local published_preview_cache = {}
 
 function M.fetch_published_file_previews(file_ids_csv)
     local results = {}
-    for id in tostring(file_ids_csv):gmatch("(%d+)") do
+    for id in tostring(file_ids_csv or ""):gmatch("(%d+)") do
         if #results >= 12 then break end
         if published_preview_cache[id] then
             table.insert(results, published_preview_cache[id])
@@ -46,8 +46,8 @@ local function strip_html(s)
 end
 
 function M.fetch_friend_review(steam_id64, steam_app_id)
-    local sid = tostring(steam_id64):match("(%d+)") or ""
-    local appid = tostring(steam_app_id):match("(%d+)") or ""
+    local sid = tostring(steam_id64 or ""):match("(%d+)") or ""
+    local appid = tostring(steam_app_id or ""):match("(%d+)") or ""
     -- SteamID64s are 17 digits, appids far shorter; undo swapped arguments
     -- (same Linux argument-order quirk as fetch_partner_events)
     if #sid < 15 and #appid >= 15 then
@@ -85,19 +85,25 @@ end
 
 -- ── Friend persona fetching (batch, cached) ───────────────────────────
 local friend_persona_cache = {}
+local FRIEND_PERSONA_MAX_REQUESTS = 8
+local FRIEND_PERSONA_CACHE_SECONDS = 15 * 60
+local FRIEND_PERSONA_FAILURE_CACHE_SECONDS = 60
 
 function M.fetch_friend_personas(steam_ids_csv)
-    local ids = {}
-    for id in tostring(steam_ids_csv):gmatch("(%d+)") do
-        if #ids < 30 then
+    local ids, seen = {}, {}
+    for id in tostring(steam_ids_csv or ""):gmatch("(%d+)") do
+        if not seen[id] and #ids < FRIEND_PERSONA_MAX_REQUESTS then
+            seen[id] = true
             table.insert(ids, id)
         end
     end
 
     local results = {}
+    local now = os.time()
     for _, sid in ipairs(ids) do
-        if friend_persona_cache[sid] then
-            table.insert(results, friend_persona_cache[sid])
+        local cached = friend_persona_cache[sid]
+        if cached and cached.expires_at > now then
+            table.insert(results, cached.entry)
         else
             local url = "https://steamcommunity.com/profiles/" .. sid .. "/?xml=1"
             local ok_req, res = pcall(http.get, url, { timeout = 8 })
@@ -110,7 +116,13 @@ function M.fetch_friend_personas(steam_ids_csv)
                 entry.name = name or ""
                 entry.avatar = avatar or ""
             end
-            friend_persona_cache[sid] = entry
+            friend_persona_cache[sid] = {
+                entry = entry,
+                -- Cache a transient failed lookup briefly to prevent repeated
+                -- synchronous timeouts while the Community service is down.
+                expires_at = now + ((entry.name ~= "" or entry.avatar ~= "")
+                    and FRIEND_PERSONA_CACHE_SECONDS or FRIEND_PERSONA_FAILURE_CACHE_SECONDS),
+            }
             table.insert(results, entry)
         end
     end

@@ -21,7 +21,7 @@ const expandedNativeGameInfoKeys = new Set<string>();
 const nativeInfoResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function informationSvg(): string {
-	return `<svg class="SVGIcon_Information" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 10.4v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.2" r="1.15" fill="currentColor"/></svg>`;
+	return `<svg class="SVGIcon_Button SVGIcon_Information" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 10.4v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.2" r="1.15" fill="currentColor"/></svg>`;
 }
 
 function nativeFeatureSvg(feature: NativeGameFeature): string {
@@ -191,11 +191,16 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 		let button = container.querySelector<HTMLElement>('[data-gdl-game-info-button="1"]');
 		if (!button) {
 			button = buildNativeInfoButtonBlueprint(doc) || doc.createElement('button');
+			const usesNativeBlueprint = button.dataset.gdlNativeBlueprint === '1';
 			button.dataset.gdlGameInfoButton = '1';
 			button.dataset.gameKey = model.key;
 			if (!button.className) button.className = playbarModule.native ? `${classes.MenuButton || ''}` : 'gdl-info-button-fallback';
-			button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
+			// Preserve Steam's captured button markup and SVG exactly. It carries
+			// Steam's own hover lighting/animation. Only builds without a native
+			// blueprint use our structurally compatible fallback.
+			if (!usesNativeBlueprint) button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
 			button.setAttribute('type', 'button');
+			button.setAttribute('aria-label', gdlText('show_game_details', 'Show game details'));
 			button.addEventListener('click', event => {
 				event.preventDefault();
 				event.stopPropagation();
@@ -205,7 +210,7 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 			let favorite = elementsWithCssModuleClass(container, classes.FavoriteButton)[0] || null;
 			while (favorite && favorite.parentElement !== container) favorite = favorite.parentElement;
 			container.insertBefore(button, favorite);
-		} else if (!button.querySelector('.SVGIcon_Information')) {
+		} else if (button.dataset.gdlNativeBlueprint !== '1' && !button.querySelector('.SVGIcon_Information')) {
 			button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
 		}
 		button.dataset.gameKey = model.key;

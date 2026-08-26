@@ -14,7 +14,7 @@ export function ensureInfoPanelStyles(doc: Document): void {
 			padding:0;border:0;border-radius:2px;background:rgba(58,69,83,.72);color:#a8b0ba;
 		}
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback:hover,
-		[data-gdl-game-info-button="1"].gdl-info-button-fallback.gdl-info-active { background:rgba(78,91,108,.88);color:#fff; }
+		[data-gdl-game-info-button="1"].gdl-info-button-fallback.gdl-info-active { background:rgba(78,91,108,.88);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12); }
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback svg { width:22px;height:22px;display:block; }
 
 		#gdl-game-info-panel {

@@ -121,22 +121,26 @@ export function renderFriendsSection(friendResult: FriendCategories | null, stea
 
 export async function hydrateFriendPersonas(doc: Document, friendData: FriendCategories | null, steamAppId: string, gameName: string): Promise<void> {
 	if (!friendData || friendData.totalCount <= 0) return;
-	const recentIds = friendData.recentlyPlayed.map(friend => friend.steamid);
-	const previousIds = friendData.previouslyPlayed.map(friend => friend.steamid);
-	const idsToFetch = [...recentIds.slice(0, 12), ...previousIds.slice(0, 18)];
-	if (idsToFetch.length === 0) return;
+	// Hydrate only the personas initially visible above the fold. Expanded
+	// friend groups keep their Steam avatar fallback until a later refresh.
+	const visibleIds = [
+		...friendData.recentlyPlayed.slice(0, 6).map(friend => friend.steamid),
+		...friendData.previouslyPlayed.slice(0, 2).map(friend => friend.steamid),
+	];
+	const idsToFetch = [...new Set(visibleIds)].filter(id => !hasCachedPersona(id)).slice(0, 8);
+	if (idsToFetch.length === 0) {
+		const target = doc.getElementById('gdl-friends-content');
+		if (target) target.innerHTML = renderFriendsSection(friendData, steamAppId, gameName);
+		return;
+	}
 	let personas: FriendPersona[];
-	if (idsToFetch.every(hasCachedPersona)) {
-		personas = idsToFetch.map(id => getCachedPersona(id)!).filter(Boolean);
-	} else {
-		try {
-			const raw = await fetchFriendPersonasBackend({ steam_ids_csv: idsToFetch.join(',') });
-			personas = JSON.parse(raw) as FriendPersona[];
-			for (const persona of personas) cachePersona(persona);
-		} catch (error) {
-			backendLog('Persona fetch error: ' + error);
-			return;
-		}
+	try {
+		const raw = await fetchFriendPersonasBackend({ steam_ids_csv: idsToFetch.join(',') });
+		personas = JSON.parse(raw) as FriendPersona[];
+		for (const persona of personas) cachePersona(persona);
+	} catch (error) {
+		backendLog('Persona fetch error: ' + error);
+		return;
 	}
 	const target = doc.getElementById('gdl-friends-content');
 	if (target) target.innerHTML = renderFriendsSection(friendData, steamAppId, gameName, personas);

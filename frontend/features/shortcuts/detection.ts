@@ -1,6 +1,7 @@
 import type { ShortcutDetectionCandidate, ShortcutDetectionContext, ShortcutDetectionResult } from '../../domain/types';
 import { detectGameCandidatesBackend, getShortcutDetailsBackend, backendLog } from '../../api/backend';
 import { getSteamLanguage } from '../../steam/localization';
+import { RetryingRequestCache } from '../../core/request-cache';
 import {
 	cleanShortcutPath,
 	getShortcutAppById,
@@ -9,7 +10,20 @@ import {
 	shortcutPathDirectory,
 } from '../../steam/shortcuts';
 
-const detectionCache = new Map<string, Promise<ShortcutDetectionResult | null>>();
+const detectionCache = new RetryingRequestCache<ShortcutDetectionResult>({ ttlMs: 5 * 60 * 1000, retries: 1, baseDelayMs: 180 });
+
+/**
+ * Windows assigns display names such as "tlou-i.exe - Acceso directo" when a
+ * desktop shortcut is added through Steam's program list.  That is not the
+ * game's title and weakens otherwise reliable alias/executable matching.
+ * Keep the original title for UI and mappings; use this only for detection.
+ */
+function detectionTitleHint(title: string): string {
+	let hint = String(title || '').trim();
+	hint = hint.replace(/\s*[-–—]\s*(?:acceso directo|shortcut|verknüpfung|raccourci|collegamento|atalho)\s*$/i, '');
+	hint = hint.replace(/\.(?:lnk|url|exe|com|bat|cmd|appimage)\s*$/i, '');
+	return hint.trim() || String(title || '').trim();
+}
 
 function readShortcutPathFromProperties(doc: Document): { exePath: string; startDir: string; launchOptions: string } {
 	const values = Array.from(doc.querySelectorAll('input')).map(input => (input as HTMLInputElement).value?.trim() || '');
@@ -122,14 +136,14 @@ export async function buildShortcutDetectionContext(
 
 export async function detectShortcutCandidates(context: ShortcutDetectionContext): Promise<ShortcutDetectionResult | null> {
 	const language = await getSteamLanguage().catch((): string => 'english');
-	const cacheKey = [context.shortcutAppId, context.title, context.exePath, context.launchOptions, language].join('|');
-	const cached = detectionCache.get(cacheKey);
-	if (cached) return cached;
-	const request = (async (): Promise<ShortcutDetectionResult | null> => {
+	const titleHint = detectionTitleHint(context.title);
+	const cacheKey = [context.shortcutAppId, titleHint, context.exePath, context.launchOptions, language].join('|');
+	try {
+		return await detectionCache.get(cacheKey, async (): Promise<ShortcutDetectionResult | null> => {
 		try {
 			const raw = await detectGameCandidatesBackend({
 				request_json: JSON.stringify({
-					title: context.title,
+				title: titleHint,
 					exe_path: context.exePath,
 					start_dir: context.startDir,
 					launch_options: context.launchOptions,
@@ -165,9 +179,11 @@ export async function detectShortcutCandidates(context: ShortcutDetectionContext
 			backendLog(`Automatic AppID detection failed for ${context.title}: ${error}`);
 			return null;
 		}
-	})();
-	detectionCache.set(cacheKey, request);
-	return request;
+		});
+	} catch (error) {
+		backendLog(`Automatic AppID detection failed for ${context.title}: ${error}`);
+		return null;
+	}
 }
 
 export function clearShortcutDetectionCache(): void {

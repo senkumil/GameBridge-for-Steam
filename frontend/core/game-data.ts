@@ -1,9 +1,15 @@
 import type { GameDataCache, SteamGameData } from '../domain/types';
 import { fetchGameData, backendLog } from '../api/backend';
 import { CACHE_TTL, cacheGet, cacheSet } from './cache';
+import { RetryingRequestCache } from './request-cache';
 import { getSteamLanguage } from '../steam/localization';
 
 export const gameDataCache: GameDataCache = {};
+const gameDataRequests = new RetryingRequestCache<SteamGameData>({
+	ttlMs: 5 * 60 * 1000,
+	retries: 2,
+	baseDelayMs: 150,
+});
 
 export function mergeSteamEnglishFallback<T>(preferred: T, english: T): T {
 	if (preferred === undefined || preferred === null || preferred === '') return english;
@@ -21,7 +27,7 @@ export function mergeSteamEnglishFallback<T>(preferred: T, english: T): T {
 export async function getGameData(steamAppId: string): Promise<SteamGameData | null> {
 	const language = await getSteamLanguage().catch(() => 'english');
 	const languageKey = `${steamAppId}:${language}`;
-	if (gameDataCache[languageKey] !== undefined) return gameDataCache[languageKey];
+	if (gameDataCache[languageKey]) return gameDataCache[languageKey];
 	const cached = cacheGet<SteamGameData>(`gamedata_v2_${steamAppId}_${language}`, CACHE_TTL.gameMetadata);
 	if (cached) {
 		gameDataCache[languageKey] = cached;
@@ -29,6 +35,7 @@ export async function getGameData(steamAppId: string): Promise<SteamGameData | n
 		return cached;
 	}
 	try {
+		return await gameDataRequests.get(languageKey, async () => {
 		const [preferredRaw, englishRaw] = await Promise.all([
 			fetchGameData({ steam_app_id: steamAppId, language }),
 			language === 'english' ? Promise.resolve('') : fetchGameData({ steam_app_id: steamAppId, language: 'english' }).catch(() => ''),
@@ -40,18 +47,19 @@ export async function getGameData(steamAppId: string): Promise<SteamGameData | n
 		const data = preferredData
 			? (englishData ? mergeSteamEnglishFallback(preferredData, englishData) : preferredData)
 			: englishData;
-		if (!data) { gameDataCache[languageKey] = null; return null; }
+		if (!data) return null;
 		gameDataCache[languageKey] = data;
 		gameDataCache[steamAppId] = data;
 		cacheSet(`gamedata_v2_${steamAppId}_${language}`, data);
 		return data;
+		});
 	} catch (e) {
 		backendLog('Fetch failed for ' + steamAppId + ': ' + e);
-		gameDataCache[languageKey] = null;
 		return null;
 	}
 }
 
 export function clearGameDataCache(): void {
 	for (const key of Object.keys(gameDataCache)) delete gameDataCache[key];
+	gameDataRequests.clear();
 }

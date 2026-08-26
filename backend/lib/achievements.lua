@@ -6,7 +6,7 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
 local M = {}
 local get_config_path = config.get_config_path
 local html_unescape = util.html_unescape
@@ -78,8 +78,21 @@ local function read_text_file(path)
 end
 
 local function file_exists(path)
-    local s = read_text_file(path)
-    return s ~= nil
+    -- Existence checks must never read the file body. Achievement databases
+    -- and schema files can be several megabytes, and this helper is called for
+    -- every candidate path during detection.  fs.exists performs a metadata
+    -- check and also works for directories used as achievement roots.
+    if not path or path == "" then return false end
+    local value = tostring(path)
+    if fs.exists(value) then return true end
+
+    -- Keep the legacy separator fallbacks for older Millennium fs providers,
+    -- but still perform metadata-only checks on each variant.
+    local forward = value:gsub("\\", "/")
+    if forward ~= value and fs.exists(forward) then return true end
+    local backward = value:gsub("/", "\\")
+    if backward ~= value and fs.exists(backward) then return true end
+    return false
 end
 
 local function local_achievement_root()
@@ -138,15 +151,11 @@ end
 
 local function write_game_achievement_paths(data)
     local path = achievement_game_paths_config_path()
-    local dir = fs.parent_path(path)
-    if dir and dir ~= "" and not fs.exists(dir) then fs.create_directories(dir) end
-    local f, err = io.open(path, "wb")
-    if not f then
-        logger:warn("Could not save per-game achievement paths: " .. tostring(err))
+    local ok, err = config.write_json_atomic(path, data)
+    if not ok then
+        logger:warn("Could not save per-game achievement paths: " .. tostring(err or "write_failed"))
         return false
     end
-    f:write(cjson.encode(data))
-    f:close()
     return true
 end
 

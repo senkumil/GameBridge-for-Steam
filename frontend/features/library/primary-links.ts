@@ -44,7 +44,7 @@ export function createPrimaryLinksBar(
 	const overflowLinks = links.slice(3).map(([label, url]) =>
 		`<a class="gdl-primary-overflow-link" href="${url}" data-gdl-open-url="${url}">${label}</a>`,
 	).join('');
-	linkBar.innerHTML = `${primaryLinks}<details class="gdl-primary-more"><summary aria-label="Más enlaces">•••</summary><div class="gdl-primary-more-menu">${overflowLinks}</div></details>`;
+	linkBar.innerHTML = `${primaryLinks}<details class="gdl-primary-more"><summary aria-label="${gdlText('more_links', 'More links')}">•••</summary><div class="gdl-primary-more-menu">${overflowLinks}</div></details>`;
 
 	if (layout.anchorRegion) {
 		const linkBarOuter = doc.createElement('div');

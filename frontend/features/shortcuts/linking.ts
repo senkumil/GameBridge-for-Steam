@@ -19,6 +19,28 @@ export function isShortcutIdentityMutationInProgress(): boolean {
 
 export type ShortcutLinkStatus = (message: string, color?: string) => void;
 
+/**
+ * Steam adds shortcuts picked from its "Add a Non-Steam Game" list
+ * asynchronously. The confirmation dialog can be accepted before that entry
+ * is visible through appStore, so resolve it over a short bounded window
+ * rather than falling back to a title-only mapping and skipping its rename.
+ */
+async function resolveShortcutForLink(doc: Document | null | undefined, title: string, initialId?: number | null): Promise<number | null> {
+	const waits = [0, 100, 250, 500, 900, 1500];
+	for (const wait of waits) {
+		if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+		const candidates = [
+			initialId ? Number(initialId) : null,
+			doc ? Number(findActiveShortcutAppId(doc, title) || 0) : null,
+			findShortcutAppIdByName(title),
+		];
+		for (const candidate of candidates) {
+			if (candidate && Number.isFinite(candidate) && candidate >= 2147483648 && getShortcutAppById(candidate)) return candidate;
+		}
+	}
+	return null;
+}
+
 export function mergeNoLauncherOption(existing: string): string {
 	const current = String(existing || '').trim();
 	if (/(^|\s)-nolauncher(?=\s|$)/i.test(current)) return current;
@@ -124,13 +146,16 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 		}
 	}
 
-	const nameNeedsUpdate = Boolean(officialName && normalizeTitle(officialName) !== normalizeTitle(options.currentTitle));
+	// The selector can prefill a near-identical display name. Preserve Steam's
+	// exact canonical title anyway (punctuation, trademark marks and edition
+	// labels included), not merely its normalized search representation.
+	const nameNeedsUpdate = Boolean(officialName && officialName !== String(options.currentTitle || '').trim());
 	if (nameNeedsUpdate) {
 		const beforeRename = new Set(getAllShortcutRecords().map(record => record.id));
 		const apps = (window as any).SteamClient?.Apps;
 		if (typeof apps?.SetShortcutName === 'function') {
 			try {
-				apps.SetShortcutName(shortcutAppId, officialName);
+				await Promise.resolve(apps.SetShortcutName(shortcutAppId, officialName));
 				nameApplied = true;
 				const expectedExe = options.trackingExecutable
 					|| readShortcutOverviewField(getShortcutAppById(shortcutAppId), 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
@@ -216,13 +241,7 @@ export async function linkShortcutToSteam(options: {
 	}
 
 	try {
-		let shortcutAppId = options.shortcutAppId || null;
-		if (!shortcutAppId && options.doc) {
-			const active = findActiveShortcutAppId(options.doc, title);
-			shortcutAppId = active ? Number(active) : null;
-		}
-		if (!shortcutAppId) shortcutAppId = findShortcutAppIdByName(title);
-		if (shortcutAppId && shortcutAppId < 2147483648) shortcutAppId = null;
+		let shortcutAppId = await resolveShortcutForLink(options.doc, title, options.shortcutAppId);
 		let titleKey = normalizeTitle(title);
 		const aliases = new Set<string>([titleKey]);
 		const mappingKey = shortcutAppId ? shortcutMappingKey(shortcutAppId) : titleKey;

@@ -45,7 +45,7 @@ export function formatLastPlayedDate(timestampSeconds: number): string {
 		&& date.getMonth() === now.getMonth()
 		&& date.getDate() === now.getDate();
 
-	if (isToday) return gdlText('last_played_today', 'Hoy');
+	if (isToday) return gdlText('last_played_today', 'Today');
 
 	const yesterday = new Date(now);
 	yesterday.setDate(now.getDate() - 1);
@@ -53,11 +53,11 @@ export function formatLastPlayedDate(timestampSeconds: number): string {
 		&& date.getMonth() === yesterday.getMonth()
 		&& date.getDate() === yesterday.getDate();
 
-	if (isYesterday) return gdlText('last_played_yesterday', 'Ayer');
+	if (isYesterday) return gdlText('last_played_yesterday', 'Yesterday');
 
 	const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
 	if (diffDays >= 2 && diffDays <= 6) {
-		return gdlText('last_played_days_ago', 'Hace {count} días', { count: diffDays });
+		return gdlText('last_played_days_ago', '{count} days ago', { count: diffDays });
 	}
 
 	try {
@@ -196,6 +196,9 @@ export function removePlaytimeFallbackStats(doc: Document): void {
 
 async function pollRunningApps(): Promise<void> {
 	if (!getPreferences().trackNonSteamPlaytime) return;
+	// Keep an active external-game session alive while Steam is hidden, but do
+	// not wake the Steam store every interval when the client is merely idle.
+	if (document.hidden && activeSessions.size === 0) return;
 
 	const uiStore = (window as any).SteamUIStore;
 	const runningAppsSet = uiStore?.RunningApps as Set<any> | undefined;

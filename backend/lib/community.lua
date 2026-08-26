@@ -6,13 +6,18 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
 local M = {}
 local detection_url_encode = util.url_encode
 local html_unescape = util.html_unescape
+-- Detailed HTML parser output is useful while adapting to a Steam markup
+-- change, but it is too noisy for the production backend hot path.
+local DEBUG_LOGS = false
+local function debug_log(message)
+    if DEBUG_LOGS then logger:info(message) end
+end
 local function parse_hub_cards(html, fallback_type, items)
-    -- Debug: log bytes around position 100-200 to check encoding
-    logger:info("parse_hub_cards: html length=" .. tostring(#html) .. " first200=" .. html:sub(1, 200))
+    debug_log("parse_hub_cards: html length=" .. tostring(#html) .. " first200=" .. html:sub(1, 200))
 
     -- Try multiple delimiter patterns - the Millennium http module may return
     -- the HTML with different quoting or the id may use single quotes
@@ -32,18 +37,18 @@ local function parse_hub_cards(html, fallback_type, items)
         -- Try to find apphub_Card_ anywhere to see if it exists at all
         local anyPos = html:find('apphub_Card_', 1, true)
         if anyPos then
-            logger:info("parse_hub_cards: found apphub_Card_ at pos " .. tostring(anyPos) .. " context: " .. html:sub(math.max(1, anyPos - 30), anyPos + 60))
+            debug_log("parse_hub_cards: found apphub_Card_ at pos " .. tostring(anyPos) .. " context: " .. html:sub(math.max(1, anyPos - 30), anyPos + 60))
         else
-            logger:info("parse_hub_cards: NO apphub_Card_ found at all in " .. tostring(#html) .. " bytes")
+            debug_log("parse_hub_cards: NO apphub_Card_ found at all in " .. tostring(#html) .. " bytes")
             -- Check for apphub_Card with a space (class name)
             local classPos = html:find('apphub_Card ', 1, true)
             if classPos then
-                logger:info("parse_hub_cards: found class 'apphub_Card ' at pos " .. tostring(classPos) .. " context: " .. html:sub(math.max(1, classPos - 50), classPos + 100))
+                debug_log("parse_hub_cards: found class 'apphub_Card ' at pos " .. tostring(classPos) .. " context: " .. html:sub(math.max(1, classPos - 50), classPos + 100))
             end
         end
         return
     end
-    logger:info("parse_hub_cards: using delimiter '" .. DELIM .. "' first match at pos " .. tostring(first))
+    debug_log("parse_hub_cards: using delimiter '" .. DELIM .. "' first match at pos " .. tostring(first))
 
     local search_pos = first
     while #items < 96 do
@@ -132,7 +137,7 @@ local function parse_hub_cards(html, fallback_type, items)
         if item.image and item.image ~= "" then
             table.insert(items, item)
             if #items <= 3 then
-                logger:info("Parsed item #" .. tostring(#items) .. ": type=" .. tostring(item.type)
+                debug_log("Parsed item #" .. tostring(#items) .. ": type=" .. tostring(item.type)
                     .. " title=" .. tostring(item.title or ""):sub(1, 40)
                     .. " author=" .. tostring(item.author_name or "")
                     .. " link=..." .. tostring(item.link or ""):sub(-24))
@@ -337,7 +342,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
         headers = {
             ["Accept"] = "application/json,text/plain,*/*",
             ["Accept-Language"] = "en-US,en;q=0.8",
-            ["User-Agent"] = "GameBridge-for-Steam/1.0",
+            ["User-Agent"] = USER_AGENT,
         },
         timeout = 18,
     })
@@ -364,7 +369,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
         headers = {
             ["Accept"] = "text/html,*/*",
             ["Accept-Language"] = "en-US,en;q=0.8",
-            ["User-Agent"] = "GameBridge-for-Steam/1.0",
+            ["User-Agent"] = USER_AGENT,
         },
         timeout = 18,
     })

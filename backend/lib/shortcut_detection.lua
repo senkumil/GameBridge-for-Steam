@@ -6,16 +6,70 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
 local M = {}
 local detection_url_encode = util.url_encode
 
--- Caches
-local detection_candidate_cache = {}
-local detection_vdf_cache = {}
-local detection_store_cache = {}
-local detection_appdetails_cache = {}
-local detection_appinfo_cache = {}
+-- Bounded LRU caches. TTL alone does not release entries that are never read
+-- again, which matters during long-running Steam sessions with many games.
+local function detection_new_cache(limit)
+    return { entries = {}, count = 0, limit = limit, clock = 0 }
+end
+
+local function detection_cache_remove(cache, key)
+    if cache.entries[key] then
+        cache.entries[key] = nil
+        cache.count = cache.count - 1
+    end
+end
+
+local function detection_cache_get(cache, key, ttl)
+    local entry = cache.entries[key]
+    if not entry then return nil end
+    if ttl and os.time() - entry.time >= ttl then
+        detection_cache_remove(cache, key)
+        return nil
+    end
+    cache.clock = cache.clock + 1
+    entry.last_used = cache.clock
+    return entry
+end
+
+local function detection_cache_set(cache, key, entry)
+    local now = os.time()
+    -- Opportunistically remove expired records before evicting a usable one.
+    for cached_key, cached in pairs(cache.entries) do
+        if cached.ttl and now - cached.time >= cached.ttl then
+            detection_cache_remove(cache, cached_key)
+        end
+    end
+    if not cache.entries[key] then cache.count = cache.count + 1 end
+    cache.clock = cache.clock + 1
+    entry.time = entry.time or now
+    entry.last_used = cache.clock
+    cache.entries[key] = entry
+
+    while cache.count > cache.limit do
+        local oldest_key, oldest_used = nil, nil
+        for cached_key, cached in pairs(cache.entries) do
+            if not oldest_used or cached.last_used < oldest_used then
+                oldest_key, oldest_used = cached_key, cached.last_used
+            end
+        end
+        if not oldest_key then break end
+        detection_cache_remove(cache, oldest_key)
+    end
+end
+
+local detection_candidate_cache = detection_new_cache(128)
+local detection_vdf_cache = detection_new_cache(16)
+local detection_store_cache = detection_new_cache(96)
+local detection_appdetails_cache = detection_new_cache(96)
+local detection_appinfo_cache = detection_new_cache(96)
+-- A maintained alias (for example "re4") only narrows the search.  It must
+-- never look like near-certain identification unless the candidate's official
+-- Steam launch configuration also contains the executable we are inspecting.
+local DETECTION_UNVERIFIED_ALIAS_MAX_SCORE = 84
 
 local function detection_trim(value)
     return tostring(value or ""):match("^%s*(.-)%s*$") or ""
@@ -40,6 +94,14 @@ end
 local function detection_game_exe_hint(value)
     local stem = detection_basename(value)
     local lower = stem:lower()
+    -- A shortcut added from the Windows desktop can reach us as
+    -- "game.exe.lnk".  Peel wrapper extensions first, then the target
+    -- executable extension, so aliases and executable similarity still use
+    -- the real game hint instead of the shell shortcut name.
+    while lower:match("%.lnk$") or lower:match("%.url$") do
+        stem = detection_stem(stem)
+        lower = stem:lower()
+    end
     if lower:match("%.exe$") or lower:match("%.com$") or lower:match("%.bat$")
         or lower:match("%.cmd$") or lower:match("%.appimage$") then
         stem = detection_stem(stem)
@@ -244,12 +306,16 @@ local function detection_compact_similarity(left, right)
     )
 end
 
-local function detection_title_acronym(value)
+local DETECTION_OPTIONAL_ACRONYM_WORDS = {
+    part = true, chapter = true, episode = true, edition = true,
+}
+
+local function detection_title_acronym(value, omit_optional_words)
     local pieces = {}
     for token in detection_normalize(value):gmatch("%S+") do
         if token:match("^%d+$") or token:match("^[ivxlcdm]+$") then
             table.insert(pieces, token)
-        elseif #token > 0 then
+        elseif #token > 0 and (not omit_optional_words or not DETECTION_OPTIONAL_ACRONYM_WORDS[token]) then
             table.insert(pieces, token:sub(1, 1))
         end
     end
@@ -261,13 +327,20 @@ local function detection_acronym_similarity(left, right)
     local right_compact = detection_normalize(right):gsub("%s+", "")
     local left_acronym = detection_title_acronym(left)
     local right_acronym = detection_title_acronym(right)
+    local left_short_acronym = detection_title_acronym(left, true)
+    local right_short_acronym = detection_title_acronym(right, true)
     local function compare(compact, acronym)
         if #compact < 3 or #acronym < 3 then return 0 end
         if compact == acronym then return 1 end
         if acronym:sub(1, #compact) == compact then return 0.96 end
         return 0
     end
-    return math.max(compare(left_compact, right_acronym), compare(right_compact, left_acronym))
+    return math.max(
+        compare(left_compact, right_acronym),
+        compare(left_compact, right_short_acronym),
+        compare(right_compact, left_acronym),
+        compare(right_compact, left_short_acronym)
+    )
 end
 
 local function detection_read_small_file(path, max_bytes)
@@ -482,7 +555,7 @@ local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
 
     for _, file in ipairs(files) do
         local shortcuts = nil
-        local cached_vdf = detection_vdf_cache[file.path]
+        local cached_vdf = detection_cache_get(detection_vdf_cache, file.path)
         if cached_vdf and cached_vdf.modified == file.modified then
             shortcuts = cached_vdf.shortcuts
         else
@@ -491,7 +564,7 @@ local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
                 local root = detection_parse_binary_vdf_object(data, 1, 0)
                 shortcuts = type(root) == "table" and (root.shortcuts or root) or nil
                 if type(shortcuts) == "table" then
-                    detection_vdf_cache[file.path] = { modified = file.modified, shortcuts = shortcuts }
+                    detection_cache_set(detection_vdf_cache, file.path, { modified = file.modified, shortcuts = shortcuts })
                 end
             end
         end
@@ -579,15 +652,15 @@ local function detection_fetch_appdetails(appid, language)
     if not id:match("^%d+$") then return nil end
     local lang = language or "english"
     local cache_key = id .. "\31" .. lang
-    local cached = detection_appdetails_cache[cache_key]
-    if cached and os.time() - cached.time < 1800 then return cached.data end
+    local cached = detection_cache_get(detection_appdetails_cache, cache_key, 1800)
+    if cached then return cached.data end
 
     local url = "https://store.steampowered.com/api/appdetails?appids=" .. id
         .. "&l=" .. detection_url_encode(lang)
     local body = detection_http_json(url, 6)
     local record = type(body) == "table" and body[id] or nil
     if type(record) == "table" and record.success and type(record.data) == "table" then
-        detection_appdetails_cache[cache_key] = { time = os.time(), data = record.data }
+        detection_cache_set(detection_appdetails_cache, cache_key, { data = record.data, ttl = 1800 })
         return record.data
     end
     return nil
@@ -650,8 +723,8 @@ local function detection_store_search(query, language)
     if #cleaned < 2 then return {} end
     local lang = language or "english"
     local cache_key = cleaned:lower() .. "\31" .. lang
-    local cached = detection_store_cache[cache_key]
-    if cached and os.time() - cached.time < 600 then return cached.items end
+    local cached = detection_cache_get(detection_store_cache, cache_key, 600)
+    if cached then return cached.items end
 
     local url = "https://store.steampowered.com/api/storesearch/?term="
         .. detection_url_encode(cleaned)
@@ -659,19 +732,19 @@ local function detection_store_search(query, language)
         .. "&cc=US"
     local body = detection_http_json(url, 4)
     local items = type(body) == "table" and type(body.items) == "table" and body.items or {}
-    detection_store_cache[cache_key] = { time = os.time(), items = items }
+    detection_cache_set(detection_store_cache, cache_key, { items = items, ttl = 600 })
     return items
 end
 
 local function detection_fetch_appinfo(appid)
     local id = tostring(appid or "")
     if not id:match("^%d+$") then return nil end
-    local cached = detection_appinfo_cache[id]
-    if cached and os.time() - cached.time < 1800 then return cached.data end
+    local cached = detection_cache_get(detection_appinfo_cache, id, 1800)
+    if cached then return cached.data end
 
     local body = detection_http_json("https://api.steamcmd.net/v1/info/" .. id, 2)
     local data = type(body) == "table" and type(body.data) == "table" and body.data[id] or nil
-    if data then detection_appinfo_cache[id] = { time = os.time(), data = data } end
+    if data then detection_cache_set(detection_appinfo_cache, id, { data = data, ttl = 1800 }) end
     return data
 end
 
@@ -787,8 +860,8 @@ function M.detect_game_candidates(request_json)
         request.title, request.exe_path, request.start_dir,
         request.launch_options, language
     }, "\31")
-    local cached = detection_candidate_cache[cache_key]
-    if cached and os.time() - cached.time < 600 then return cached.json end
+    local cached = detection_cache_get(detection_candidate_cache, cache_key, 600)
+    if cached then return cached.json end
 
     local direct_appid = detection_appid_from_arguments(request.launch_options)
     local direct_source = direct_appid and "launch_argument" or nil
@@ -802,7 +875,7 @@ function M.detect_game_candidates(request_json)
         local direct = detection_direct_result(direct_appid, direct_source, request, language, launcher, generic_launcher)
         if direct then
             local encoded = cjson.encode(direct)
-            detection_candidate_cache[cache_key] = { time = os.time(), json = encoded }
+            detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 })
             return encoded
         end
     end
@@ -868,7 +941,9 @@ function M.detect_game_candidates(request_json)
 
     local by_id = {}
 
-    -- Pre-seed by_id with alias candidate AppIDs
+    -- Aliases are search hints, never proof of identity.  Short executable
+    -- names such as re4/re9/mk are inherently ambiguous and must still compete
+    -- with Store results and appinfo validation.
     for direct_id, default_name in pairs(alias_candidates) do
         local image = "https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/" .. direct_id .. "/header.jpg"
         by_id[direct_id] = {
@@ -877,10 +952,11 @@ function M.detect_game_candidates(request_json)
             image = image,
             item_type = "game",
             reasons = { "franchise_alias" },
-            query_rank = 1,
+            query_rank = 10,
             query_index = 1,
-            executable_match = true,
-            direct = true,
+            executable_match = false,
+            direct = false,
+            alias_hint = true,
         }
     end
 
@@ -955,8 +1031,10 @@ function M.detect_game_candidates(request_json)
         local normalized_name = detection_normalize(candidate.name)
         local score = title_similarity * 58 + folder_similarity * 24 + exe_similarity * 10
         score = score + math.max(0, 9 - math.min(candidate.query_rank, 9))
-        if candidate.direct then
-            score = math.max(score, 95)
+        if candidate.alias_hint then
+            -- A maintained alias is useful evidence, but it must not override
+            -- a conflicting title, folder or verified executable signal.
+            score = score + 7
             detection_add_reason(candidate, "franchise_alias")
         elseif normalized_title ~= "" and normalized_title == normalized_name then
             score = math.max(score, 88)
@@ -979,9 +1057,10 @@ function M.detect_game_candidates(request_json)
         return a.score > b.score
     end)
 
-    -- Validate only if score is ambiguous
+    -- Validate the leading candidates even when a title appears strong. Store
+    -- search alone is not enough to distinguish editions or short aliases.
     local actual_exe = exe_basename:lower()
-    local validation_limit = (candidates[1] and candidates[1].score >= 82) and 0 or math.min(#candidates, 2)
+    local validation_limit = math.min(#candidates, 3)
     for index = 1, validation_limit do
         local candidate = candidates[index]
         if not candidate.direct then
@@ -1008,10 +1087,22 @@ function M.detect_game_candidates(request_json)
                 end
             end
         end
+    end
+
+    -- Clamp every result, not only the three that were validated.  Otherwise
+    -- an unvalidated fourth result can retain a score above 99 and jump ahead
+    -- during the second sort.  Alias-only candidates are deliberately capped
+    -- so ambiguous names such as re4 cannot tie a verified executable.
+    for _, candidate in ipairs(candidates) do
+        if candidate.alias_hint and not candidate.executable_match then
+            candidate.score = math.min(candidate.score, DETECTION_UNVERIFIED_ALIAS_MAX_SCORE)
+            detection_add_reason(candidate, "alias_requires_confirmation")
+        end
         candidate.score = math.max(0, math.min(99, math.floor(candidate.score + 0.5)))
     end
 
     table.sort(candidates, function(a, b)
+        if a.executable_match ~= b.executable_match then return a.executable_match end
         if a.score == b.score then return tonumber(a.appid) < tonumber(b.appid) end
         return a.score > b.score
     end)
@@ -1019,12 +1110,10 @@ function M.detect_game_candidates(request_json)
     local output = {}
     for index = 1, math.min(#candidates, 6) do
         local candidate = candidates[index]
-		-- Alias such as "re9" bypass Store search and therefore used to receive
-		-- a guessed /apps/<id>/header.jpg URL. New Steam store assets are
-		-- versioned by hash, so that guessed URL can legitimately be a 404 even
-		-- though the game has official artwork. Resolve aliases through
-		-- appdetails before exposing them to the modal.
-		if candidate.direct then
+		-- Alias candidates begin with a generic header URL. Resolve the first
+		-- visible candidates through appdetails before exposing them to the
+		-- modal, because modern Store headers are versioned by hash.
+		if candidate.alias_hint or (candidate.image or ""):find("header.jpg") then
 			local official = detection_fetch_appdetails(candidate.appid, language)
 			if type(official) == "table" then
 				if official.name and tostring(official.name) ~= "" then
@@ -1037,7 +1126,10 @@ function M.detect_game_candidates(request_json)
 			end
 		end
         candidate._reason_set = nil
-        if candidate.score >= 90 then candidate.confidence = "high"
+        local runner_up = candidates[index == 1 and 2 or 1]
+        candidate.score_gap = runner_up and math.max(0, candidate.score - runner_up.score) or candidate.score
+        candidate.ambiguous = index == 1 and runner_up ~= nil and candidate.score_gap < 12
+        if candidate.score >= 90 and not candidate.ambiguous then candidate.confidence = "high"
         elseif candidate.score >= 70 then candidate.confidence = "medium"
         else candidate.confidence = "low" end
         table.insert(output, candidate)
@@ -1050,9 +1142,10 @@ function M.detect_game_candidates(request_json)
         executable = exe_basename,
         queries = queries,
         source = "steam_store_search",
+        ambiguous = output[1] and output[1].ambiguous or false,
     }
     local encoded = cjson.encode(result)
-    detection_candidate_cache[cache_key] = { time = os.time(), json = encoded }
+    detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 })
     return encoded
 end
 

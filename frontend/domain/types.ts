@@ -35,6 +35,7 @@ export interface SteamCommunityCardAsset {
 	title: string;
 	image: string;
 	artwork?: string;
+	foil?: boolean;
 }
 
 export interface SteamCommunityBadgeAsset {

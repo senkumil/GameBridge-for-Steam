@@ -1,5 +1,6 @@
 import { backendLog, fetchCommunityArtworkBackend, fetchLibraryAssetsBackend, saveShortcutIconBackend } from '../../api/backend';
 import { getPreferences } from '../../core/preferences';
+import { RetryingRequestCache } from '../../core/request-cache';
 import { steamLanguageSync } from '../../steam/localization';
 import { findShortcutAppIdsByName, getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
 
@@ -91,6 +92,60 @@ async function imageDataUrlToPng(dataUrl: string): Promise<string | null> {
 	});
 }
 
+/**
+ * Steam's custom-artwork API assigns a fixed native canvas to each slot:
+ * portrait 600x900, hero 1920x620, logo 1280x720 and wide 920x430.  Official
+ * assets already use those canvases, but SteamGridDB may return artwork with
+ * arbitrary dimensions.  Normalize community images before sending them to
+ * Steam so they follow the same crop/contain rules as native library art.
+ * Official images are deliberately not passed through this function.
+ */
+async function normalizeCommunityArtworkDataUrl(dataUrl: string, imageType: number): Promise<string | null> {
+	const targetByType: Record<number, { width: number; height: number; fit: 'cover' | 'contain' }> = {
+		0: { width: 600, height: 900, fit: 'cover' },
+		1: { width: 1920, height: 620, fit: 'cover' },
+		2: { width: 1280, height: 720, fit: 'contain' },
+		3: { width: 920, height: 430, fit: 'cover' },
+	};
+	const target = targetByType[imageType];
+	if (!target) return dataUrl;
+	return await new Promise(resolve => {
+		const img = new Image();
+		img.onload = () => {
+			try {
+				const sourceWidth = Math.max(1, img.naturalWidth || img.width || target.width);
+				const sourceHeight = Math.max(1, img.naturalHeight || img.height || target.height);
+				const scale = target.fit === 'cover'
+					? Math.max(target.width / sourceWidth, target.height / sourceHeight)
+					: Math.min(target.width / sourceWidth, target.height / sourceHeight);
+				const drawWidth = Math.max(1, Math.round(sourceWidth * scale));
+				const drawHeight = Math.max(1, Math.round(sourceHeight * scale));
+				const canvas = document.createElement('canvas');
+				canvas.width = target.width;
+				canvas.height = target.height;
+				const ctx = canvas.getContext('2d');
+				if (!ctx) { resolve(dataUrl); return; }
+				// Transparent background is required for logos; the other slots are
+				// fully covered by the image and therefore need no fill color.
+				ctx.clearRect(0, 0, target.width, target.height);
+				ctx.imageSmoothingEnabled = true;
+				ctx.imageSmoothingQuality = 'high';
+				ctx.drawImage(img,
+					Math.round((target.width - drawWidth) / 2),
+					Math.round((target.height - drawHeight) / 2),
+					drawWidth, drawHeight);
+				resolve(canvas.toDataURL('image/png'));
+			} catch {
+				// A browser with restricted canvas support can still use the original
+				// image; failing normalization must never remove a valid asset.
+				resolve(dataUrl);
+			}
+		};
+		img.onerror = () => resolve(dataUrl);
+		img.src = dataUrl;
+	});
+}
+
 function iconCandidatePriority(ext: string): number {
 	const normalized = normalizeIconExtension(ext);
 	if (normalized === 'ico') return 0;
@@ -148,6 +203,15 @@ interface CommunityArtworkAssets {
 	logo?: string;
 	wide?: string;
 	source?: string;
+	provenance?: Partial<Record<'portrait' | 'hero' | 'logo' | 'wide', {
+		id?: number | string;
+		provider?: string;
+		width?: number;
+		height?: number;
+		language?: string;
+		style?: string;
+		transparent?: boolean;
+	}>>;
 }
 
 async function getCommunityArtwork(steamAppId: string): Promise<CommunityArtworkAssets | null> {
@@ -167,8 +231,7 @@ async function getCommunityArtwork(steamAppId: string): Promise<CommunityArtwork
 	}
 }
 
-const libraryAssetsRequests = new Map<string, Promise<SteamLibraryAssets | null>>();
-const libraryAssetsResolved = new Map<string, SteamLibraryAssets | null>();
+const libraryAssetsRequests = new RetryingRequestCache<SteamLibraryAssets>({ ttlMs: 10 * 60 * 1000, retries: 2, baseDelayMs: 150 });
 
 function libraryAssetsKey(steamAppId: string): string {
 	return steamAppId + '|' + (steamLanguageSync() || 'english');
@@ -178,28 +241,25 @@ function libraryAssetsKey(steamAppId: string): string {
 export function getModernLibraryAssets(steamAppId: string): Promise<SteamLibraryAssets | null> {
 	const language = steamLanguageSync() || 'english';
 	const key = steamAppId + '|' + language;
-	const existing = libraryAssetsRequests.get(key);
-	if (existing) return existing;
-	const request = (async () => {
+	return libraryAssetsRequests.get(key, async () => {
 		try {
 			const parsed = JSON.parse(await fetchLibraryAssetsBackend({
 				request_json: JSON.stringify({ steam_app_id: steamAppId, language }),
 			}));
 			const result = parsed && !parsed.error ? parsed as SteamLibraryAssets : null;
-			libraryAssetsResolved.set(key, result);
 			return result;
 		} catch (e) {
 			backendLog('Modern library artwork lookup failed for ' + steamAppId + ': ' + e);
-			libraryAssetsResolved.set(key, null);
 			return null;
 		}
-	})();
-	libraryAssetsRequests.set(key, request);
-	return request;
+	}).catch((e: unknown): SteamLibraryAssets | null => {
+		backendLog('Modern library artwork lookup exhausted for ' + steamAppId + ': ' + e);
+		return null;
+	});
 }
 
 export function getResolvedLibraryAssets(steamAppId: string): SteamLibraryAssets | null {
-	return libraryAssetsResolved.get(libraryAssetsKey(steamAppId)) || null;
+	return libraryAssetsRequests.peek(libraryAssetsKey(steamAppId));
 }
 
 /** Download Steam's official client TGA to a persistent local path and assign
@@ -301,9 +361,11 @@ function makeFallbackLogoDataUrl(title: string): string | null {
  * library slots were written.  Earlier markers accepted a logo by itself,
  * which permanently prevented a later retry for games with partial artwork
  * metadata (notably older Steam catalogue entries). */
-const ART_STORAGE_PREFIX = 'gdl_artwork7_';
+// Bump the marker when the slot canvas/normalization policy changes so games
+// linked by an older build receive the corrected native-sized assets once.
+const ART_STORAGE_PREFIX = 'gdl_artwork8_';
 const LEGACY_ART_STORAGE_PREFIX = 'gdl_artwork4_';
-const PREVIOUS_ART_STORAGE_PREFIXES = ['gdl_artwork5_', 'gdl_artwork6_'];
+const PREVIOUS_ART_STORAGE_PREFIXES = ['gdl_artwork5_', 'gdl_artwork6_', 'gdl_artwork7_'];
 const LOGO_POSITION_STORAGE_PREFIX = 'gdl_logo_position1_';
 
 function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): boolean {
@@ -324,9 +386,9 @@ function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): boolean
 	} catch { return false; }
 }
 
-function markArtworkSaved(shortcutAppId: number, steamAppId: string, slots: number[], needsCommunityArtwork = false): void {
+function markArtworkSaved(shortcutAppId: number, steamAppId: string, slots: number[], needsCommunityArtwork = false, provenance?: Record<string, unknown>): void {
 	try {
-		localStorage.setItem(ART_STORAGE_PREFIX + shortcutAppId, JSON.stringify({ steamAppId, slots, needsCommunityArtwork }));
+		localStorage.setItem(ART_STORAGE_PREFIX + shortcutAppId, JSON.stringify({ steamAppId, slots, needsCommunityArtwork, provenance }));
 	} catch {}
 }
 
@@ -519,12 +581,13 @@ export async function spoofArtwork(shortcutAppId: number, steamAppId: string, ga
 			for (const url of Array.from(new Set(urls.filter(Boolean)))) {
 				try {
 					const dataUrl = await imageUrlToBase64(url);
-					if (dataUrl) return { url, dataUrl, imageType, label };
+					if (dataUrl) return { url, dataUrl, imageType, label, community: false };
 				} catch {}
 			}
-			return { url: '', dataUrl: null as string | null, imageType, label };
+			return { url: '', dataUrl: null as string | null, imageType, label, community: false };
 		}));
 		const communitySlots: string[] = [];
+		const communityProvenance: Record<string, unknown> = {};
 		const needsCommunityArtwork = (item: typeof downloads[number]): boolean => !item.dataUrl
 			|| ((item.imageType === 0 || item.imageType === 1) && /\/header\.jpg(?:$|[?#])/i.test(item.url));
 		if (downloads.some(needsCommunityArtwork)) {
@@ -542,7 +605,11 @@ export async function spoofArtwork(shortcutAppId: number, steamAppId: string, ga
 					if (!dataUrl) continue;
 					item.url = url;
 					item.dataUrl = dataUrl;
-					communitySlots.push(ARTWORK_SLOT_NAMES[item.imageType]);
+					item.community = true;
+					const slotName = ARTWORK_SLOT_NAMES[item.imageType];
+					communitySlots.push(slotName);
+					const sourceName = item.imageType === 0 ? 'portrait' : item.imageType === 1 ? 'hero' : item.imageType === 2 ? 'logo' : 'wide';
+					if (community.provenance?.[sourceName]) communityProvenance[slotName] = community.provenance[sourceName];
 				}
 			}
 		}
@@ -560,15 +627,18 @@ export async function spoofArtwork(shortcutAppId: number, steamAppId: string, ga
 		}
 
 		const successfulSlots: number[] = [];
-		for (const { dataUrl, imageType, label } of downloads) {
+		for (const { dataUrl, imageType, label, community } of downloads) {
 			if (!dataUrl) {
 				backendLog('Artwork not available: ' + label + ' for ' + steamAppId);
 				continue;
 			}
 			try {
-				const commaIdx = dataUrl.indexOf(',');
-				const base64Data = dataUrl.substring(commaIdx + 1);
-				const mime = dataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
+				const preparedDataUrl = community
+					? await normalizeCommunityArtworkDataUrl(dataUrl, imageType) || dataUrl
+					: dataUrl;
+				const commaIdx = preparedDataUrl.indexOf(',');
+				const base64Data = preparedDataUrl.substring(commaIdx + 1);
+				const mime = preparedDataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
 				const ext = mime === 'png' ? 'png' : 'jpg';
 
 				const result = await sc.Apps.SetCustomArtworkForApp(shortcutAppId, base64Data, ext, imageType);
@@ -605,7 +675,8 @@ export async function spoofArtwork(shortcutAppId: number, steamAppId: string, ga
 			// URL on the first pass; the next navigation can then fill it from the
 			// modern asset endpoint or the header fallback.
 			if (allSlotsApplied) {
-				markArtworkSaved(shortcutAppId, steamAppId, successfulSlots, !complete);
+				markArtworkSaved(shortcutAppId, steamAppId, successfulSlots, !complete,
+					Object.keys(communityProvenance).length ? communityProvenance : undefined);
 				artworkSpoofed.add(key);
 			}
 		}
@@ -621,6 +692,5 @@ export async function spoofArtwork(shortcutAppId: number, steamAppId: string, ga
 /** Invalidate only in-memory library asset requests; persisted image/artwork state is kept. */
 export function clearLibraryAssetCaches(): void {
 	libraryAssetsRequests.clear();
-	libraryAssetsResolved.clear();
 	artworkSpoofed.clear();
 }

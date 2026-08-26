@@ -15,6 +15,8 @@ import { clearLocalAchievementCache } from './cache';
 interface LocalAchievementDocumentState {
 	timer: number | null;
 	initialTimer: number | null;
+	syncTimer: number | null;
+	observer: MutationObserver | null;
 	inFlight: boolean;
 	signature: string;
 	data: LocalAchievementData | null;
@@ -45,18 +47,26 @@ export function installLocalAchievementUI(doc: Document): void {
 	const state: LocalAchievementDocumentState = {
 		timer: null,
 		initialTimer: null,
+		syncTimer: null,
+		observer: null,
 		inFlight: false,
 		signature: '',
 		data: null,
 		cleanup: () => {},
 	};
 
+	const stopPolling = (): void => {
+		if (state.timer !== null) window.clearInterval(state.timer);
+		state.timer = null;
+	};
+
 	const refresh = async (): Promise<void> => {
-		if (disposed || state.inFlight || !doc.body || doc.defaultView?.closed) return;
+		if (disposed || state.inFlight || doc.hidden || !doc.body || doc.defaultView?.closed) return;
 		const appid = detectLinkedSteamAppId(doc);
 		if (!appid) {
 			state.signature = '';
 			state.data = null;
+			stopPolling();
 			return;
 		}
 		state.inFlight = true;
@@ -90,6 +100,22 @@ export function installLocalAchievementUI(doc: Document): void {
 		}
 	};
 
+	const syncPolling = (): void => {
+		if (disposed || doc.hidden || !doc.body || doc.defaultView?.closed || !detectLinkedSteamAppId(doc)) {
+			stopPolling();
+			return;
+		}
+		if (state.timer === null) state.timer = window.setInterval(() => { void refresh(); }, 2000);
+		void refresh();
+	};
+	const schedulePollingSync = (): void => {
+		if (disposed || state.syncTimer !== null) return;
+		state.syncTimer = window.setTimeout(() => {
+			state.syncTimer = null;
+			syncPolling();
+		}, 180);
+	};
+
 	const intercept = (event: Event): void => {
 		const target = event.target as Element | null;
 		if (!target?.closest?.('#gdl-achievements-section') || !state.data) return;
@@ -105,15 +131,21 @@ export function installLocalAchievementUI(doc: Document): void {
 
 	doc.addEventListener('click', intercept, true);
 	doc.addEventListener('keydown', onKeyDown, true);
-	state.timer = window.setInterval(() => { void refresh(); }, 2000);
-	void refresh();
+	doc.addEventListener('visibilitychange', syncPolling);
+	state.observer = new MutationObserver(schedulePollingSync);
+	state.observer.observe(doc.body, { childList: true, subtree: true });
+	syncPolling();
 	state.cleanup = () => {
 		if (disposed) return;
 		disposed = true;
-		if (state.timer !== null) window.clearInterval(state.timer);
-		state.timer = null;
+		stopPolling();
+		if (state.syncTimer !== null) window.clearTimeout(state.syncTimer);
+		state.syncTimer = null;
+		state.observer?.disconnect();
+		state.observer = null;
 		doc.removeEventListener('click', intercept, true);
 		doc.removeEventListener('keydown', onKeyDown, true);
+		doc.removeEventListener('visibilitychange', syncPolling);
 	};
 	localAchievementDocState.set(doc, state);
 	localAchievementDocuments.add(doc);

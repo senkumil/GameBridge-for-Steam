@@ -6,7 +6,7 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/1.0"
+local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
 local M = {}
 
 local function get_active_account_id()
@@ -320,7 +320,10 @@ end
 -- the API key is supplied per request (never written to the plugin log/files).
 local function steamgriddb_image_url(value)
     local url = tostring(value or "")
-    if url:match("^https://[%w%-.]*steamgriddb%.com/") then return url end
+    local host = url:match("^https://([^/%?#]+)")
+    host = host and host:lower():gsub(":%d+$", "") or ""
+    -- Do not accept lookalike hosts such as steamgriddb.com.example.org.
+    if host == "steamgriddb.com" or host:match("^[a-z0-9-]+%.steamgriddb%.com$") then return url end
     return ""
 end
 
@@ -338,15 +341,64 @@ local function steamgriddb_request(path, api_key)
     return ok_body and type(body) == "table" and body or nil
 end
 
-local function steamgriddb_first_url(body)
+local function steamgriddb_asset_is_safe(item)
+    if type(item) ~= "table" or item.nsfw == true then return false end
+    local fields = { item.style, item.tags, item.name }
+    for _, value in ipairs(fields) do
+        local text
+        if type(value) == "table" then
+            local parts = {}
+            for _, tag in pairs(value) do parts[#parts + 1] = tostring(tag or "") end
+            text = table.concat(parts, " ")
+        else
+            text = tostring(value or "")
+        end
+        text = text:lower()
+        if text:find("nsfw", 1, true) or text:find("meme", 1, true) or text:find("humor", 1, true) or text:find("joke", 1, true) then
+            return false
+        end
+    end
+    return true
+end
+
+local function steamgriddb_first_asset(body, spec)
     local items = type(body) == "table" and body.data or nil
-    if type(items) ~= "table" then return "" end
-    if items.url then return steamgriddb_image_url(items.url) end
+    if type(items) ~= "table" then return { url = "" } end
+    if items.url then items = { items } end
+    local best = { url = "" }
+    local best_score = math.huge
     for _, item in ipairs(items) do
         local url = type(item) == "table" and steamgriddb_image_url(item.url) or ""
-        if url ~= "" then return url end
+        if url ~= "" and steamgriddb_asset_is_safe(item) then
+            local width = type(item) == "table" and tonumber(item.width) or nil
+            local height = type(item) == "table" and tonumber(item.height) or nil
+            local score = 0
+            if spec.ratio and width and height and width > 0 and height > 0 then
+                -- Prefer the image whose native ratio is closest to Steam's
+                -- slot. The frontend still normalizes the final canvas, but
+                -- choosing a suitable source avoids unnecessary cropping.
+                score = math.abs((width / height) - spec.ratio) * 100
+            elseif spec.ratio then
+                -- Keep candidates without metadata usable, but prefer any
+                -- candidate that includes dimensions when available.
+                score = 1000
+            end
+            if spec.width and width then score = score + math.abs(width - spec.width) / spec.width * 5 end
+            if spec.height and height then score = score + math.abs(height - spec.height) / spec.height * 5 end
+            local language = tostring(item.language or ""):lower()
+            if language == "english" or language == "en" then score = score - 2
+            elseif language ~= "" and language ~= "none" then score = score + 3 end
+            if spec.transparent then
+                if item.transparent == true then score = score - 8 else score = score + 8 end
+            end
+            if best.url == "" or score < best_score then
+                best = { url = url, id = item.id, provider = "steamgriddb", width = width, height = height,
+                    language = item.language, style = item.style, transparent = item.transparent == true }
+                best_score = score
+            end
+        end
     end
-    return ""
+    return best
 end
 
 function M.fetch_community_artwork(request_json)
@@ -364,13 +416,15 @@ function M.fetch_community_artwork(request_json)
     if not game_id then return cjson.encode({ found = false, source = "steamgriddb" }) end
 
     local id = tostring(math.floor(game_id))
+    local portrait = steamgriddb_first_asset(steamgriddb_request("grids/game/" .. id .. "?dimensions=600x900", api_key), { ratio = 600 / 900, width = 600, height = 900 })
+    local hero = steamgriddb_first_asset(steamgriddb_request("heroes/game/" .. id, api_key), { ratio = 1920 / 620, width = 1920, height = 620 })
+    local logo = steamgriddb_first_asset(steamgriddb_request("logos/game/" .. id, api_key), { ratio = 1280 / 720, transparent = true })
+    local wide = steamgriddb_first_asset(steamgriddb_request("grids/game/" .. id .. "?dimensions=920x430", api_key), { ratio = 920 / 430, width = 920, height = 430 })
     local result = {
         found = true,
         source = "steamgriddb",
-        portrait = steamgriddb_first_url(steamgriddb_request("grids/game/" .. id .. "?dimensions=600x900", api_key)),
-        hero = steamgriddb_first_url(steamgriddb_request("heroes/game/" .. id, api_key)),
-        logo = steamgriddb_first_url(steamgriddb_request("logos/game/" .. id, api_key)),
-        wide = steamgriddb_first_url(steamgriddb_request("grids/game/" .. id .. "?dimensions=920x430", api_key)),
+        portrait = portrait.url, hero = hero.url, logo = logo.url, wide = wide.url,
+        provenance = { portrait = portrait, hero = hero, logo = logo, wide = wide },
     }
     result.found = result.portrait ~= "" or result.hero ~= "" or result.logo ~= "" or result.wide ~= ""
     -- Do not log URLs or the API key; a count is enough for diagnostics.
@@ -384,29 +438,47 @@ end
 -- only accepts a local path, so the frontend asks this helper to download the
 -- appinfo icon into Steam's stable per-user grid directory first.
 local base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local base64_lookup = {}
+for index = 1, #base64_chars do
+    base64_lookup[base64_chars:sub(index, index)] = index - 1
+end
 
 local function decode_base64(data)
     data = tostring(data or ""):gsub("%s", "")
-    if data == "" or data:find("[^A-Za-z0-9%+/%=]") then return nil end
-    local bits = data:gsub(".", function(char)
-        if char == "=" then return "" end
-        local index = base64_chars:find(char, 1, true)
-        if not index then return "" end
-        local value = index - 1
-        local out = {}
-        for bit = 6, 1, -1 do
-            out[#out + 1] = (value % 2 ^ bit - value % 2 ^ (bit - 1) > 0) and "1" or "0"
+    if data == "" or #data % 4 ~= 0 or data:find("[^A-Za-z0-9%+/%=]") then return nil end
+
+    -- Decode four Base64 characters directly into at most three bytes.  This
+    -- avoids constructing an intermediate string of individual bits, which
+    -- caused excessive allocation and garbage collection for icon payloads.
+    local output = {}
+    for index = 1, #data, 4 do
+        local c1, c2 = data:sub(index, index), data:sub(index + 1, index + 1)
+        local c3, c4 = data:sub(index + 2, index + 2), data:sub(index + 3, index + 3)
+        local a, b = base64_lookup[c1], base64_lookup[c2]
+        if not a or not b then return nil end
+
+        local c = c3 == "=" and 0 or base64_lookup[c3]
+        local d = c4 == "=" and 0 or base64_lookup[c4]
+        if c == nil or d == nil then return nil end
+        -- Padding is legal only in the final quartet and must be well formed.
+        if (c3 == "=" and c4 ~= "=") or ((c3 == "=" or c4 == "=") and index + 3 ~= #data) then
+            return nil
         end
-        return table.concat(out)
-    end)
-    return bits:gsub("%d%d%d?%d?%d?%d?%d?%d?", function(chunk)
-        if #chunk ~= 8 then return "" end
-        local byte = 0
-        for i = 1, 8 do
-            if chunk:sub(i, i) == "1" then byte = byte + 2 ^ (8 - i) end
+
+        local value = a * 262144 + b * 4096 + c * 64 + d
+        local first = math.floor(value / 65536) % 256
+        if c3 == "=" then
+            output[#output + 1] = string.char(first)
+        else
+            local second = math.floor(value / 256) % 256
+            if c4 == "=" then
+                output[#output + 1] = string.char(first, second)
+            else
+                output[#output + 1] = string.char(first, second, value % 256)
+            end
         end
-        return string.char(byte)
-    end)
+    end
+    return table.concat(output)
 end
 
 local function validate_shortcut_icon_body(body, ext)
@@ -554,70 +626,6 @@ function M.save_shortcut_icon(request_json)
     end
 
     return cjson.encode({ error = "icon_download_failed" })
-end
-
-function M.save_artwork(shortcut_app_id, steam_app_id)
-    local account_id = get_active_account_id()
-    if not account_id then
-        return cjson.encode({ error = "Could not determine active Steam user" })
-    end
-
-    local steam_path = millennium.steam_path()
-    local grid_dir = fs.join(steam_path, "userdata", account_id, "config", "grid")
-
-    if not fs.exists(grid_dir) then
-        fs.create_directories(grid_dir)
-    end
-
-    local sid = tostring(shortcut_app_id)
-    local cdn_base = "https://cdn.akamai.steamstatic.com/steam/apps/" .. tostring(steam_app_id)
-
-    -- { CDN url, filename suffix, extension }
-    local images = {
-        { cdn_base .. "/library_600x900.jpg", "p",     "jpg" },   -- Portrait grid
-        { cdn_base .. "/library_hero.jpg",    "_hero", "jpg" },   -- Hero banner
-        { cdn_base .. "/logo.png",            "_logo", "png" },   -- Logo
-        { cdn_base .. "/header.jpg",          "",      "jpg" },   -- Wide capsule
-    }
-
-    local saved = 0
-    for _, img in ipairs(images) do
-        local url, suffix, ext = img[1], img[2], img[3]
-        local filename = sid .. suffix .. "." .. ext
-        local filepath = fs.join(grid_dir, filename)
-
-        logger:info("Downloading artwork: " .. url)
-        local ok, res = pcall(http.get, url, { timeout = 30 })
-        if ok and res and res.status == 200 and res.body and #res.body > 0 then
-            -- Remove conflicting files with different extensions
-            for _, old_ext in ipairs({"jpg", "jpeg", "png"}) do
-                if old_ext ~= ext then
-                    local old_path = fs.join(grid_dir, sid .. suffix .. "." .. old_ext)
-                    if fs.exists(old_path) then
-                        os.remove(old_path)
-                        logger:info("Removed old grid file: " .. old_path)
-                    end
-                end
-            end
-
-            local f_out = io.open(filepath, "wb")
-            if f_out then
-                f_out:write(res.body)
-                f_out:close()
-                saved = saved + 1
-                logger:info("Saved artwork: " .. filepath .. " (" .. tostring(#res.body) .. " bytes)")
-            else
-                logger:warn("Could not write artwork file: " .. filepath)
-            end
-        else
-            local err_msg = "failed"
-            if ok and res then err_msg = "HTTP " .. tostring(res.status) end
-            logger:warn("Artwork download " .. err_msg .. ": " .. url)
-        end
-    end
-
-    logger:info("Artwork save complete: " .. tostring(saved) .. "/4 for shortcut " .. sid)
-    return cjson.encode({ saved = saved, account_id = account_id })
 end
 
 function M.clear_artwork(shortcut_app_id)

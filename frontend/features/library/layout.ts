@@ -9,6 +9,73 @@ export interface NativeLibraryLayout {
 	noticeParent: Element | null;
 }
 
+type ManagedStyleProperty = 'display' | 'height' | 'minHeight' | 'alignSelf' | 'alignItems';
+type NativeStyleSnapshot = Partial<Record<ManagedStyleProperty, string>>;
+
+// Steam reuses live library nodes while changing routes. Keep the exact inline
+// values that existed before GDL touched them, per document, so a linked-game
+// cleanup cannot leak geometry into the next native game page.
+const nativeStyleSnapshots = new WeakMap<HTMLElement, NativeStyleSnapshot>();
+const managedNativeElements = new WeakMap<Document, Set<HTMLElement>>();
+
+function rememberNativeStyle(element: HTMLElement, property: ManagedStyleProperty): void {
+	let snapshot = nativeStyleSnapshots.get(element);
+	if (!snapshot) {
+		snapshot = {};
+		nativeStyleSnapshots.set(element, snapshot);
+	}
+	if (snapshot[property] === undefined) snapshot[property] = element.style[property];
+	const doc = element.ownerDocument;
+	let elements = managedNativeElements.get(doc);
+	if (!elements) {
+		elements = new Set();
+		managedNativeElements.set(doc, elements);
+	}
+	elements.add(element);
+}
+
+function setNativeStyle(element: HTMLElement, property: ManagedStyleProperty, value: string): void {
+	rememberNativeStyle(element, property);
+	element.style[property] = value;
+}
+
+export function hideNativeLibraryElement(element: HTMLElement): void {
+	setNativeStyle(element, 'display', 'none');
+	element.setAttribute('data-gdl-hidden', '1');
+}
+
+function applyNativeSurfaceTokens(target: HTMLElement, samples: Array<HTMLElement | null | undefined>): void {
+	const view = target.ownerDocument.defaultView;
+	if (!view) return;
+	for (const sample of samples) {
+		if (!sample || !sample.isConnected) continue;
+		const style = view.getComputedStyle(sample);
+		const painted = style.backgroundImage !== 'none' || !/rgba?\(0,\s*0,\s*0,\s*0\)/i.test(style.backgroundColor);
+		if (!painted) continue;
+		// Take the live Steam Notes/Media surface rather than guessing a theme.
+		target.style.setProperty('--gdl-native-panel-bg', style.background);
+		target.style.setProperty('--gdl-native-panel-border', style.borderColor);
+		break;
+	}
+}
+
+/** Restore every native inline style GDL changed in this document. */
+export function restoreNativeLibraryStyles(doc: Document): void {
+	const elements = managedNativeElements.get(doc);
+	if (!elements) return;
+	for (const element of elements) {
+		const snapshot = nativeStyleSnapshots.get(element);
+		if (!snapshot) continue;
+		for (const property of Object.keys(snapshot) as ManagedStyleProperty[]) {
+			element.style[property] = snapshot[property] || '';
+		}
+		element.removeAttribute('data-gdl-hidden');
+		nativeStyleSnapshots.delete(element);
+	}
+	elements.clear();
+	managedNativeElements.delete(doc);
+}
+
 function ancestorChain(element: Element): HTMLElement[] {
 	const chain: HTMLElement[] = [element as HTMLElement];
 	let current = element as HTMLElement;
@@ -132,15 +199,15 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 /** Restore only the geometry we intentionally need for the linked-game render. */
 export function prepareNativeLibraryLayout(layout: NativeLibraryLayout): void {
 	if (layout.contentColumn) {
-		layout.contentColumn.style.display = 'block';
-		layout.contentColumn.style.height = 'auto';
-		layout.contentColumn.style.minHeight = '0';
-		layout.contentColumn.style.alignSelf = 'flex-start';
+		setNativeStyle(layout.contentColumn, 'display', 'block');
+		setNativeStyle(layout.contentColumn, 'height', 'auto');
+		setNativeStyle(layout.contentColumn, 'minHeight', '0');
+		setNativeStyle(layout.contentColumn, 'alignSelf', 'flex-start');
 		layout.contentColumn.removeAttribute('data-gdl-hidden');
 	}
 	if (layout.twoColumnRow) {
-		layout.twoColumnRow.style.display = '';
-		layout.twoColumnRow.style.alignItems = 'flex-start';
+		setNativeStyle(layout.twoColumnRow, 'display', '');
+		setNativeStyle(layout.twoColumnRow, 'alignItems', 'flex-start');
 		layout.twoColumnRow.removeAttribute('data-gdl-hidden');
 	}
 }
@@ -154,8 +221,7 @@ export function hideLinkedShortcutNotice(noticeElement: Element, layout: NativeL
 	for (let depth = 0; depth < 4 && element; depth += 1) {
 		if (element === layout.contentColumn || element === layout.twoColumnRow) break;
 		if (depth > 0 && element.querySelector('[data-nsp]')) break;
-		element.style.display = 'none';
-		element.setAttribute('data-gdl-hidden', '1');
+		hideNativeLibraryElement(element);
 		const parent = element.parentElement;
 		if (!parent || parent.childElementCount > 1) break;
 		element = parent;
@@ -186,6 +252,7 @@ export function buildNativeSidebarSection(
 	const regionChildren = Array.from(anchorRegion.children);
 	const sourceHeading = regionChildren.find(child => child.tagName === 'H2') as HTMLElement | undefined;
 	const sourceBody = regionChildren.find(child => child.tagName === 'DIV') as HTMLElement | undefined;
+	const sourceInner = sourceBody?.firstElementChild as HTMLElement | null | undefined;
 
 	const region = doc.createElement('div');
 	region.className = anchorRegion.className;
@@ -201,7 +268,6 @@ export function buildNativeSidebarSection(
 	if (sourceBody) {
 		const body = doc.createElement('div');
 		body.className = sourceBody.className;
-		const sourceInner = sourceBody.firstElementChild as HTMLElement | null;
 		const inner = doc.createElement('div');
 		inner.id = options.innerId;
 		if ((options.cloneInnerClass ?? true) && sourceInner) inner.className = sourceInner.className;
@@ -219,6 +285,7 @@ export function buildNativeSidebarSection(
 		outer = wrapper;
 	}
 	outer.id = options.sectionId;
+	applyNativeSurfaceTokens(outer, [sourceInner, sourceBody, anchorRegion]);
 	return outer;
 }
 
@@ -232,8 +299,7 @@ export function insertMainContent(
 		for (const child of Array.from(contentColumn.children)) {
 			const element = child as HTMLElement;
 			if (child === wrapper || protectedIds.has(element.id)) continue;
-			element.style.display = 'none';
-			element.setAttribute('data-gdl-hidden', '1');
+			hideNativeLibraryElement(element);
 		}
 		contentColumn.insertBefore(wrapper, contentColumn.firstChild);
 		return;

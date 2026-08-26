@@ -26,6 +26,7 @@ import {
 	showAchievementToast,
 } from '../features/achievements/runtime';
 import { startPlaytimeTracker, stopPlaytimeTracker } from '../features/playtime/tracker';
+import { processPendingLinkJobs } from '../features/shortcuts/link-job-queue';
 let mainWindowDoc: Document | null = null;
 setLocalizationDocumentProvider(() => mainWindowDoc);
 function normalizedDomText(value: unknown): string {
@@ -131,6 +132,9 @@ function windowCreated(context: any): void {
 
 	if (isMainWindow) {
 		mainWindowDoc = popupDoc;
+		// A Properties popup may have queued work before closing. The desktop
+		// document owns the executor, so the task is independent of that popup.
+		void processPendingLinkJobs(mainWindowDoc);
 		installLocalAchievementUI(popupDoc);
 		scheduleCopiedFeedbackCleanup(popupDoc);
 		// A full CEF document replacement does require a new observer. Wait until
@@ -145,7 +149,7 @@ function windowCreated(context: any): void {
 					windowCreated({ window: popupWin, m_strName: popupName || 'SP Desktop', m_strTitle: popupTitle });
 				}
 			} catch {}
-		}, 250);
+		}, 500);
 	}
 
 	let mutationTimer: ReturnType<typeof setTimeout> | null = null;
@@ -175,21 +179,9 @@ function windowCreated(context: any): void {
 		const style = view.getComputedStyle(element);
 		return style.display !== 'none' && style.visibility !== 'hidden' && (element as HTMLElement).getClientRects().length > 0;
 	};
-	// The library list does not consistently change location.href before it
-	// starts replacing the app page.  Capture a game-row activation so pending
-	// linked-game work is invalidated before Steam can reuse the old page DOM.
-	const isLibraryGameRow = (target: EventTarget | null): boolean => {
-		if (!(target instanceof Element) || target.closest('[id^="gdl-"]')) return false;
-		const row = target.closest('[class*="AppListEntry"], [class*="appListEntry"], [class*="applist_entry"]');
-		if (row) return true;
-		const link = target.closest<HTMLAnchorElement>('a[href]');
-		return Boolean(link && /(?:games\/details|library\/app|\/app)\/\d+/i.test(link.href));
-	};
-	if (isMainWindow) {
-		lifecycle.listen(popupDoc, 'pointerdown', event => {
-			if (isLibraryGameRow(event.target)) handleLibraryNavigation(popupDoc);
-		}, true);
-	}
+	// Do not invalidate the page merely because a library row was pressed: Steam
+	// also emits pointerdown for the already-selected row. Actual URL/DOM route
+	// signals below are authoritative and prevent native-page cleanup flicker.
 	const observer = new MutationObserver((records) => {
 		const currentUrl = String(popupDoc.defaultView?.location?.href || popupDoc.location?.href || '');
 		if (currentUrl && currentUrl !== lastNavUrl) {
@@ -224,10 +216,23 @@ function windowCreated(context: any): void {
 		}, 90);
 	});
 	lifecycle.observe(observer, popupDoc.body, { childList: true, subtree: true });
-	// Steam can update the route before it mutates the library subtree. Polling
-	// the URL lightly closes that gap without observing every React attribute.
+	lifecycle.listen(popupDoc, 'visibilitychange', () => {
+		if (popupDoc.hidden) return;
+		try {
+			const currentUrl = String(popupDoc.defaultView?.location?.href || popupDoc.location?.href || '');
+			if (currentUrl && currentUrl !== lastNavUrl) {
+				lastNavUrl = currentUrl;
+				if (isMainWindow) handleLibraryNavigation(popupDoc);
+			}
+			runInjection();
+		} catch {}
+	});
+	// The mutation observer is the primary route signal. This slower fallback
+	// only covers Steam URL changes that arrive before their corresponding DOM
+	// mutation, avoiding a constant high-frequency CEF poll while idle.
 	lifecycle.interval(() => {
 		try {
+			if (popupDoc.hidden) return;
 			const currentUrl = String(popupDoc.defaultView?.location?.href || popupDoc.location?.href || '');
 			if (!currentUrl || currentUrl === lastNavUrl) return;
 			lastNavUrl = currentUrl;
@@ -235,7 +240,7 @@ function windowCreated(context: any): void {
 			if (isMainWindow) handleLibraryNavigation(popupDoc);
 			runInjection();
 		} catch {}
-	}, 120);
+	}, 500);
 
 	// Big Picture replaces its app overviews while moving between tabs and
 	// after Steam finishes loading the library. Keep the shim alive through
@@ -250,6 +255,7 @@ function windowCreated(context: any): void {
 					if (getBigPictureDocument() === popupDoc) deactivateBigPicture();
 					return;
 				}
+				if (popupDoc.hidden) return;
 				runInjection();
 			} catch (e) {
 				backendLog('Big Picture refresh error: ' + e);
@@ -289,6 +295,7 @@ export default definePlugin(() => {
 			const target = doc || mainWindowDoc;
 			return Boolean(target && (findNonSteamNotice(target) || isSteamLibraryActive(target)));
 		},
+		runPendingLinkJobs: () => { void processPendingLinkJobs(mainWindowDoc); },
 	});
 	configureSocialRuntimeHost({
 		getCurrentInjectedAppId,
@@ -312,6 +319,7 @@ export default definePlugin(() => {
 			backendLog('Loaded ' + Object.keys(mappings).length + ' mapping(s)');
 			startShortcutAutoDetector();
 			startPlaytimeTracker();
+			void processPendingLinkJobs(mainWindowDoc);
 			if (mainWindowDoc) {
 				tryInjectLibraryData(mainWindowDoc).catch(e => backendLog('Post-startup library refresh error: ' + e));
 			}
@@ -324,6 +332,10 @@ export default definePlugin(() => {
 			startShortcutAutoDetector();
 			startPlaytimeTracker();
 		});
+
+	// Retry queued work after transient Store/network failures without requiring
+	// the user to reopen Properties. The queue itself prevents concurrent runs.
+	const pendingLinkJobTimer = setInterval(() => { void processPendingLinkJobs(mainWindowDoc); }, 15000);
 
 	const unsubscribeLanguageRefresh = subscribeSteamLanguageChange((language, previousLanguage) => {
 		if (!previousLanguage || previousLanguage === language) return;
@@ -367,6 +379,7 @@ export default definePlugin(() => {
 		icon: <IconsModule.Settings />,
 		content: <SettingsContent clearAchievementCache={clearLocalAchievementCache} showAchievementToast={showAchievementToast} />,
 		onDismount: () => {
+			clearInterval(pendingLinkJobTimer);
 			disposeDocumentLifecycles();
 			unsubscribeLanguageRefresh();
 			unregisterUIModeChanged?.();

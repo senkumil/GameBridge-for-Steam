@@ -55,18 +55,49 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 /** Steam-like foil-card motion with bounded, per-card listeners. */
 export function setupTradingCardTilt(root: HTMLElement): void {
 	let activeReset: (() => void) | null = null;
-	let activeIsInside: ((clientX: number, clientY: number) => boolean) | null = null;
+	let activeContainsPoint: ((clientX: number, clientY: number) => boolean) | null = null;
+	let lastClientX = 0;
+	let lastClientY = 0;
+	const activators = new Map<HTMLElement, (clientX: number, clientY: number) => void>();
+	const doc = root.ownerDocument;
+	const trackDocumentPointer = (event: PointerEvent): void => {
+		lastClientX = event.clientX;
+		lastClientY = event.clientY;
+		if (!root.isConnected) doc.removeEventListener('pointermove', trackDocumentPointer, true);
+	};
+	// The pointer may leave the whole sidebar before the delayed leave check
+	// runs. Track it at document level so that check never uses stale in-panel
+	// coordinates and leaves a card expanded after the cursor moved away.
+	doc.addEventListener('pointermove', trackDocumentPointer, { capture: true, passive: true });
+
+	// CEF does not always emit a fresh pointerenter after an expanded card is
+	// removed from beneath the cursor. Pointer movement therefore also acts as
+	// a recovery path for the unexpanded card currently under the pointer.
+	root.addEventListener('pointermove', event => {
+		lastClientX = event.clientX;
+		lastClientY = event.clientY;
+		if (activeReset) return;
+		const target = event.target instanceof Element
+			? event.target.closest<HTMLElement>('.gdl-trading-card')
+			: null;
+		if (target && root.contains(target)) activators.get(target)?.(event.clientX, event.clientY);
+	}, { passive: true });
 
 	for (const card of Array.from(root.querySelectorAll<HTMLElement>('.gdl-trading-card'))) {
 		if (card.dataset.gdlTiltReady === '1') continue;
 		const surface = card.querySelector<HTMLElement>('.gdl-trading-card-surface');
 		if (!surface) continue;
+		const hitbox = card.ownerDocument.createElement('div');
+		hitbox.className = 'gdl-trading-card-hitbox';
+		hitbox.setAttribute('aria-hidden', 'true');
+		card.appendChild(hitbox);
 		card.dataset.gdlTiltReady = '1';
 		let frame = 0;
 		let pointerX = .5;
 		let pointerY = .5;
 		let baseRect: DOMRect | null = null;
-		let hoverRect: { left: number; top: number; width: number; height: number } | null = null;
+		let leaveTimer = 0;
+		let tiltEnabledAt = 0;
 		const view = card.ownerDocument.defaultView;
 
 		const render = (): void => {
@@ -74,19 +105,25 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			if (!card.classList.contains('gdl-card-tilt-active')) return;
 			const dx = pointerX - 0.5;
 			const dy = pointerY - 0.5;
-			const dist = Math.hypot(dx, dy) * 2;
-			const rotateY = dx * 40;
-			const rotateX = -dy * 34;
-			const translateX = dx * 10;
-			const translateY = dy * 8;
-			const lightAngle = Math.round(125 + dx * 40 + dy * 30);
-			const sheenAlpha = (0.10 + Math.min(0.24, dist * 0.18)).toFixed(3);
-			const sheenBrightness = (1 + dist * 0.08).toFixed(2);
+			const rotateY = dx * 72;
+			const rotateX = -dy * 60;
+			const translateX = dx * 15;
+			const translateY = dy * 12;
+			const lightAngle = Math.round(125 + dx * 72 + dy * 48);
+			// Match Steam foil directionality: raising the top edge catches more
+			// light, while lowering it darkens the card. Horizontal movement only
+			// moves the glint; it must not make the whole card brighter.
+			const sheenAlpha = Math.max(0.04, Math.min(0.45, 0.20 - dy * 0.50)).toFixed(3);
+			const sheenBrightness = Math.max(0.72, Math.min(1.28, 1 - dy * 0.56)).toFixed(2);
+			const cursorGlowAlpha = Math.max(0.20, Math.min(0.52, 0.38 - dy * 0.24)).toFixed(3);
 
 			card.style.setProperty('--gdl-card-angle', `${lightAngle}deg`);
 			card.style.setProperty('--gdl-sheen-alpha', sheenAlpha);
 			card.style.setProperty('--gdl-sheen-brightness', sheenBrightness);
-			surface.style.transform = `perspective(620px) translate3d(${translateX.toFixed(2)}px,${translateY.toFixed(2)}px,0) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg)`;
+			card.style.setProperty('--gdl-card-pointer-x', `${(pointerX * 100).toFixed(2)}%`);
+			card.style.setProperty('--gdl-card-pointer-y', `${(pointerY * 100).toFixed(2)}%`);
+			card.style.setProperty('--gdl-cursor-glow-alpha', cursorGlowAlpha);
+			surface.style.transform = `perspective(560px) translate3d(${translateX.toFixed(2)}px,${translateY.toFixed(2)}px,0) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg)`;
 		};
 
 		const queueRender = (): void => {
@@ -95,127 +132,148 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			if (!frame) render();
 		};
 
-		const checkInsideExpandedArea = (clientX: number, clientY: number): boolean => {
-			if (!hoverRect) return false;
-			return (
-				clientX >= hoverRect.left &&
-				clientX <= hoverRect.left + hoverRect.width &&
-				clientY >= hoverRect.top &&
-				clientY <= hoverRect.top + hoverRect.height
-			);
-		};
-
-		const cardAtBasePoint = (clientX: number, clientY: number): HTMLElement | null =>
-			Array.from(root.querySelectorAll<HTMLElement>('.gdl-trading-card')).find(candidate => {
-				if (candidate === card) return false;
-				const rect = candidate.getBoundingClientRect();
-				return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
-			}) || null;
-
 		const reset = (): void => {
+			if (leaveTimer) view?.clearTimeout(leaveTimer);
+			leaveTimer = 0;
 			if (frame && view) view.cancelAnimationFrame(frame);
 			frame = 0;
 			pointerX = .5;
 			pointerY = .5;
 			baseRect = null;
-			hoverRect = null;
+			tiltEnabledAt = 0;
 			card.classList.remove('gdl-card-tilt-active');
 			for (const property of ['left', 'top', 'width', 'height', 'transform']) surface.style.removeProperty(property);
+			for (const property of ['left', 'top', 'width', 'height']) hitbox.style.removeProperty(property);
 			card.style.removeProperty('--gdl-card-angle');
 			card.style.removeProperty('--gdl-sheen-alpha');
 			card.style.removeProperty('--gdl-sheen-brightness');
-			card.ownerDocument.removeEventListener('pointermove', onGlobalPointerMove);
+			card.style.removeProperty('--gdl-card-pointer-x');
+			card.style.removeProperty('--gdl-card-pointer-y');
+			card.style.removeProperty('--gdl-cursor-glow-alpha');
 			if (activeReset === reset) {
 				activeReset = null;
-				activeIsInside = null;
+				activeContainsPoint = null;
 			}
 		};
 
-		const onGlobalPointerMove = (event: PointerEvent): void => {
+		const onSurfacePointerMove = (event: PointerEvent): void => {
+			lastClientX = event.clientX;
+			lastClientY = event.clientY;
+			if (leaveTimer) view?.clearTimeout(leaveTimer);
+			leaveTimer = 0;
 			if (!card.classList.contains('gdl-card-tilt-active')) return;
-			const nextCard = cardAtBasePoint(event.clientX, event.clientY);
-			if (nextCard) {
-				reset();
-				nextCard.dispatchEvent(new PointerEvent('pointerenter', { clientX: event.clientX, clientY: event.clientY, bubbles: true }));
+			const now = view?.performance?.now() ?? Date.now();
+			if (now < tiltEnabledAt) {
+				pointerX = .5;
+				pointerY = .5;
+				queueRender();
 				return;
 			}
-			if (!checkInsideExpandedArea(event.clientX, event.clientY)) {
-				reset();
-				const target = card.ownerDocument.elementFromPoint(event.clientX, event.clientY);
-				const hoveredCard = target?.closest<HTMLElement>('.gdl-trading-card');
-				if (hoveredCard && hoveredCard !== card) {
-					hoveredCard.dispatchEvent(new PointerEvent('pointerenter', {
-						clientX: event.clientX,
-						clientY: event.clientY,
-						bubbles: true,
-					}));
-				}
-				return;
-			}
-			const rect = hoverRect || baseRect || card.getBoundingClientRect();
+			const rect = surface.getBoundingClientRect();
 			if (rect.width <= 0 || rect.height <= 0) return;
 			pointerX = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
 			pointerY = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
 			queueRender();
 		};
 
-		card.addEventListener('pointerenter', (event: PointerEvent) => {
-			if (activeIsInside && activeIsInside(event.clientX, event.clientY)) {
-				return;
-			}
+		const activate = (clientX: number, clientY: number): void => {
+			if (card.classList.contains('gdl-card-tilt-active')) return;
+			// An expanded card intentionally overlaps neighboring grid cells. Do
+			// not let their native pointerenter steal focus while the pointer is
+			// still inside the active card's enlarged interaction margin.
+			if (activeReset && activeReset !== reset && activeContainsPoint?.(clientX, clientY)) return;
+			if (leaveTimer) view?.clearTimeout(leaveTimer);
+			leaveTimer = 0;
 			if (activeReset && activeReset !== reset) {
 				activeReset();
 			}
 			activeReset = reset;
-			activeIsInside = checkInsideExpandedArea;
 
 			baseRect = card.getBoundingClientRect();
-			const width = baseRect.width * 1.65;
+			// 1.75 is a 20% increase over the previous 1.46x native-like preview.
+			const width = baseRect.width * 1.75;
 			const height = width * 261 / 224;
 			let left = -(width - baseRect.width) / 2;
 			let top = -(height - baseRect.height) / 2;
 
-			const container = card.closest<HTMLElement>('.gdl-trading-cards-body') || card.closest<HTMLElement>('#gdl-trading-cards-section');
-			if (container) {
-				const containerRect = container.getBoundingClientRect();
-				const absoluteLeft = baseRect.left + left;
-				const absoluteRight = absoluteLeft + width;
-				if (absoluteRight > containerRect.right - 8) {
-					left -= (absoluteRight - (containerRect.right - 8));
-				}
-				if (baseRect.left + left < containerRect.left + 8) {
-					left += ((containerRect.left + 8) - (baseRect.left + left));
-				}
-				if (baseRect.top + top < containerRect.top + 4) {
-					top += ((containerRect.top + 4) - (baseRect.top + top));
-				}
-				const absoluteBottom = baseRect.top + top + height;
-				if (absoluteBottom > containerRect.bottom - 6) {
-					top -= (absoluteBottom - (containerRect.bottom - 6));
-				}
-			}
+			// Steam lets the preview leave its sidebar panel while keeping it
+			// centered over the original card. Only protect the actual viewport
+			// edges; clamping to the panel made edge cards expand off-center.
+			const viewportWidth = view?.innerWidth || card.ownerDocument.documentElement.clientWidth;
+			const viewportHeight = view?.innerHeight || card.ownerDocument.documentElement.clientHeight;
+			const viewportMargin = 8;
+			const absoluteLeft = baseRect.left + left;
+			const absoluteRight = absoluteLeft + width;
+			if (absoluteLeft < viewportMargin) left += viewportMargin - absoluteLeft;
+			else if (absoluteRight > viewportWidth - viewportMargin) left -= absoluteRight - (viewportWidth - viewportMargin);
+			const absoluteTop = baseRect.top + top;
+			const absoluteBottom = absoluteTop + height;
+			if (absoluteTop < viewportMargin) top += viewportMargin - absoluteTop;
+			else if (absoluteBottom > viewportHeight - viewportMargin) top -= absoluteBottom - (viewportHeight - viewportMargin);
 
-			hoverRect = { left: baseRect.left + left, top: baseRect.top + top, width, height };
 			surface.style.left = `${left.toFixed(2)}px`;
 			surface.style.top = `${top.toFixed(2)}px`;
 			surface.style.width = `${width.toFixed(2)}px`;
 			surface.style.height = `${height.toFixed(2)}px`;
+			// Perspective plus the upward translation consumes part of the nominal
+			// top margin when the pointer raises the card. Compensate that visual
+			// displacement so the usable clearance feels equal on every edge.
+			const hitboxPadding = 18;
+			const hitboxTopPadding = 28;
+			hitbox.style.left = `${(left - hitboxPadding).toFixed(2)}px`;
+			hitbox.style.top = `${(top - hitboxTopPadding).toFixed(2)}px`;
+			hitbox.style.width = `${(width + hitboxPadding * 2).toFixed(2)}px`;
+			hitbox.style.height = `${(height + hitboxTopPadding + hitboxPadding).toFixed(2)}px`;
 			card.classList.add('gdl-card-tilt-active');
+			tiltEnabledAt = (view?.performance?.now() ?? Date.now()) + 180;
+			activeContainsPoint = (x: number, y: number): boolean => {
+				const rect = hitbox.getBoundingClientRect();
+				return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+			};
 
-			if (event.clientX && event.clientY && hoverRect) {
-				pointerX = Math.max(0, Math.min(1, (event.clientX - hoverRect.left) / hoverRect.width));
-				pointerY = Math.max(0, Math.min(1, (event.clientY - hoverRect.top) / hoverRect.height));
-			}
+			// Begin the lift upright. Pointer movement after the short lift-in
+			// period enables the 3D tilt, matching Steam's centered expansion.
+			pointerX = .5;
+			pointerY = .5;
 
-			card.ownerDocument.addEventListener('pointermove', onGlobalPointerMove, { passive: true });
 			queueRender();
+		};
+		activators.set(card, activate);
+		card.addEventListener('pointerenter', (event: PointerEvent) => {
+			lastClientX = event.clientX;
+			lastClientY = event.clientY;
+			activate(event.clientX, event.clientY);
 		});
 
-		card.addEventListener('pointerleave', (event: PointerEvent) => {
-			if (!checkInsideExpandedArea(event.clientX, event.clientY)) {
+		// The local hitbox follows the expanded card with equal space on all sides.
+		// Leaving either the visible surface or its margin must reset the card.
+		// Otherwise a surface can remain above a neighboring card and prevent that
+		// card from receiving its next pointer-enter event.
+		const resetWhenLeavingCard = (event: PointerEvent): void => {
+			const next = event.relatedTarget;
+			if (next instanceof Node && card.contains(next)) return;
+			if (leaveTimer) view?.clearTimeout(leaveTimer);
+			leaveTimer = view?.setTimeout(() => {
+				leaveTimer = 0;
+				const marginRect = hitbox.getBoundingClientRect();
+				const stillInside = lastClientX >= marginRect.left && lastClientX <= marginRect.right
+					&& lastClientY >= marginRect.top && lastClientY <= marginRect.bottom;
+				if (stillInside) return;
 				reset();
-			}
-		});
+
+				// Re-evaluate after the expanded surface disappears. This repairs the
+				// missing pointerenter event when another card is now under the cursor.
+				view?.requestAnimationFrame(() => {
+					const element = card.ownerDocument.elementFromPoint(lastClientX, lastClientY);
+					const hovered = element?.closest<HTMLElement>('.gdl-trading-card') || null;
+					if (hovered && root.contains(hovered)) activators.get(hovered)?.(lastClientX, lastClientY);
+				});
+			}, 110) || 0;
+		};
+		surface.addEventListener('pointermove', onSurfacePointerMove, { passive: true });
+		hitbox.addEventListener('pointermove', onSurfacePointerMove, { passive: true });
+		surface.addEventListener('pointerout', resetWhenLeavingCard);
+		hitbox.addEventListener('pointerout', resetWhenLeavingCard);
 
 		card.addEventListener('pointercancel', reset);
 		const openPreview = (): void => {
@@ -251,8 +309,8 @@ function setupTradingCardsHelpTooltip(doc: Document, button: HTMLElement): void 
 		popup = doc.createElement('div');
 		popup.className = 'gdl-trading-cards-help-popup';
 		popup.innerHTML = `
-			<div style="margin-bottom:10px;">${escapeHtml(gdlText('trading_cards_help_p1', 'Encuentra tarjetas mientras juegas. Puedes intercambiarlos con amigos (o en el mercado de la Comunidad de Steam) por tarjetas que no has podido encontrar.'))}</div>
-			<div>${escapeHtml(gdlText('trading_cards_help_p2', 'Completa todo el set de tarjetas y conviértelos en una insignia. Las insignias aumentan tu nivel de Steam y desbloquean beneficios en tu cuenta y perfil.'))}</div>
+			<div style="margin-bottom:10px;">${escapeHtml(gdlText('trading_cards_help_p1', "Find cards while playing. You can trade them with friends (or on the Steam Community Market) for cards you haven't been able to find."))}</div>
+			<div>${escapeHtml(gdlText('trading_cards_help_p2', 'Complete the full set and turn it into a badge. Badges increase your Steam level and unlock benefits for your account and profile.'))}</div>
 		`;
 		doc.body.appendChild(popup);
 
@@ -329,7 +387,8 @@ export async function renderOfficialTradingCards(
 		if (!image) return '';
 		const artwork = normalizeCommunityAssetUrl(card.artwork) || image;
 		const title = card.title || gameName;
-		return `<div class="gdl-trading-card gdl-official-card" data-gdl-card-index="${index}" data-gdl-full-image="${escapeHtml(artwork)}" role="button" tabindex="0" aria-label="${escapeHtml(title)}"><div class="gdl-trading-card-surface"><img src="${escapeHtml(image)}" alt="" /></div></div>`;
+		const foilClass = card.foil ? ' gdl-foil-card' : '';
+		return `<div class="gdl-trading-card gdl-official-card${foilClass}" data-gdl-card-index="${index}" data-gdl-full-image="${escapeHtml(artwork)}" role="button" tabindex="0" aria-label="${escapeHtml(title)}"><div class="gdl-trading-card-surface"><img src="${escapeHtml(image)}" alt="" /><span class="gdl-card-hologram" aria-hidden="true"></span></div></div>`;
 	}).filter(Boolean).join('');
 	if (!cards) return;
 

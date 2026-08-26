@@ -1,0 +1,41 @@
+[
+  {
+    "executable": "re9.exe",
+    "title": "re9",
+    "expect": { "aliasesAreHintsOnly": true, "validateTopCandidates": 3, "requireTopScoreGap": true }
+  },
+  {
+    "executable": "tlou-i.exe",
+    "title": "tlou-i",
+    "expect": { "aliasesAreHintsOnly": true, "requireOfficialStoreCandidate": true }
+  },
+  {
+    "executable": "MKKE.exe",
+    "title": "MKKE",
+    "expect": { "aliasesAreHintsOnly": true, "requireOfficialStoreCandidate": true }
+  },
+  {
+    "executable": "SparkingZERO-Win64-Shipping.exe",
+    "title": "DRAGON BALL: Sparking! ZERO",
+    "expect": { "shippingExecutableIsSupportingEvidence": true }
+  },
+  {
+    "executable": "launcher.exe",
+    "title": "Game Launcher",
+    "expect": { "genericLauncherCannotProduceHighConfidence": true }
+  },
+  {
+    "executable": "GTAIV.exe",
+    "title": "Grand Theft Auto IV: The Complete Edition",
+    "expect": { "editionsMustBeRankedAndValidated": true }
+  },
+  {
+    "executable": "re4.exe",
+    "title": "Resident Evil 4",
+    "expect": {
+      "ambiguousResultsRequireManualConfirmation": true,
+      "verifiedExecutableOutranksAlias": true,
+      "unverifiedAliasScoreIsCapped": true
+    }
+  }
+]

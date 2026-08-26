@@ -30,7 +30,7 @@ export async function loadMappings(): Promise<void> {
 		if (!parsed) throw new Error('invalid_mappings_response');
 		mappings = parsed;
 		persistMappingsSnapshot(mappings);
-		backendLog('Loaded mappings: ' + JSON.stringify(mappings));
+		backendLog('Loaded mapping snapshot (' + Object.keys(mappings).length + ' entries).');
 	} catch (e) {
 		backendLog('Failed to load mappings: ' + e);
 		// Retain the last backend-verified snapshot. Clearing it here causes all

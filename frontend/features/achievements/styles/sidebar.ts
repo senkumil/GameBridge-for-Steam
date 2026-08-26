@@ -17,13 +17,14 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 		}
 		.gdl-la-summary {
 			width:100%;min-width:0;max-width:100%;
-			background:rgba(29,36,45,.78);border:1px solid rgba(255,255,255,.035);border-radius:0;padding:0;
+			background:var(--gdl-native-panel-bg,rgba(29,36,45,.64));border:1px solid var(--gdl-native-panel-border,rgba(255,255,255,.035));border-radius:0;padding:0;
 			font-family:"Motiva Sans",Arial,Helvetica,sans-serif;color:#d6d7d8;cursor:pointer;overflow:hidden;
 			box-shadow:none;transition:border-color .12s ease,background-color .12s ease;
 		}
-		.gdl-la-summary:hover { background:rgba(33,41,51,.82);border-color:rgba(255,255,255,.055); }
-		.gdl-la-header { background:rgba(58,65,74,.60);padding:11px 10px 10px;border-bottom:1px solid rgba(0,0,0,.24); }
-		.gdl-la-body { padding:12px 10px 14px;background:rgba(18,24,31,.26);min-width:0;overflow:hidden; }
+		/* Native achievement sidebars do not brighten the entire panel on hover. */
+		.gdl-la-summary:hover { border-color:rgba(255,255,255,.055); }
+		.gdl-la-header { background:rgba(68,78,91,.48);padding:11px 10px 10px;border-bottom:1px solid rgba(0,0,0,.24); }
+		.gdl-la-body { padding:12px 10px 14px;background:rgba(18,24,31,.18);min-width:0;overflow:hidden; }
 		.gdl-la-unlocked { font-size:13px;font-weight:500;line-height:18px;margin-bottom:7px;color:#d6d7d8; }
 		.gdl-la-unlocked span.pct { color:#8f98a0;font-weight:400; }
 		.gdl-la-progress-track { height:6px;background:#050708;border-radius:2px;overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,.9); }
