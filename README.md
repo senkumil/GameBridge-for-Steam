@@ -122,17 +122,17 @@ Available achievement features include:
 
 ### Configure an achievement file
 
-GameBridge reads achievement files without modifying them. The default layout is:
+GameBridge reads achievement files without modifying them. The default GSE Saves layout is:
 
 ```text
-C:\Steam Auto\<AppID>\achievements.json
+%APPDATA%\GSE Saves\<AppID>\achievements.json
 ```
 
 You can configure the source in either of these ways:
 
 1. **Global folder:** Open GameBridge settings and select a base folder containing one subfolder per Steam AppID.
 2. **Per-game override:** Right-click the shortcut → **Properties** → **Linked Game** and select an exact `achievements.json` file or a folder containing it.
-3. **Automatic AppID lookup:** Leave the per-game path on automatic to search the configured global folders for the linked AppID.
+3. **Automatic AppID lookup:** Leave the per-game path on automatic to search GSE Saves, supported Goldberg locations, and configured global folders for the linked AppID.
 
 ### Using SteamAutoCrack / Goldberg
 
@@ -178,15 +178,11 @@ These sections recreate the Library presentation only. GameBridge does not award
 
 ---
 
-## 🌐 Localization, Performance, and Native-Game Isolation
+## 🌐 Multilingual Interface
 
-- Steam-owned labels use the active client's localization tokens whenever available.
-- Plugin-owned text includes Spanish translations and safe English fallbacks for other languages.
-- Retrying caches discard temporary failures instead of preserving an empty result until Steam restarts.
-- Core game data can render from a local cache while feeds, friends, achievements, and community content load in parallel.
-- Navigation uses generation checks so stale asynchronous work cannot modify the next game selected.
-- Native Steam styles altered during a linked-page render are restored when navigating away.
-- Injection is guarded by the shortcut's stable mapped identity; unlinked shortcuts and native Steam games are outside its intended scope.
+GameBridge automatically detects the active Steam client language and localizes the injected interface to match it. Library headings, navigation links, achievements, activity labels, community sections, game information, tooltips, and native controls reuse Steam's official localization tokens whenever they are available.
+
+Plugin-specific windows, detection messages, settings, and linking results use GameBridge's localization catalog. Spanish is included directly, while English provides the safe fallback for text that Steam does not translate. Changing the Steam client language refreshes the localized data and interface without requiring a separate plugin edition.
 
 ---
 

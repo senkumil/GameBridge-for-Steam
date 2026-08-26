@@ -122,17 +122,17 @@ Incluye:
 
 ### Configurar el archivo de logros
 
-GameBridge solo lee el archivo y no lo modifica. La estructura predeterminada es:
+GameBridge solo lee el archivo y no lo modifica. La estructura predeterminada de GSE Saves es:
 
 ```text
-C:\Steam Auto\<AppID>\achievements.json
+%APPDATA%\GSE Saves\<AppID>\achievements.json
 ```
 
 Puedes configurar la fuente de tres formas:
 
 1. **Carpeta global:** En los ajustes de GameBridge, elige una carpeta base con una subcarpeta por AppID.
 2. **Ruta por juego:** Abre el acceso directo → **Propiedades** → **Juego vinculado** y selecciona el archivo `achievements.json` o una carpeta que lo contenga.
-3. **Búsqueda automática:** Deja la ruta individual en automático para buscar el AppID dentro de las carpetas globales configuradas.
+3. **Búsqueda automática:** Deja la ruta individual en automático para buscar el AppID en GSE Saves, ubicaciones compatibles de Goldberg y las carpetas globales configuradas.
 
 ### Usar SteamAutoCrack / Goldberg
 
@@ -178,15 +178,11 @@ Estas secciones reproducen la presentación de la Biblioteca. GameBridge no entr
 
 ---
 
-## 🌐 Localización, rendimiento y aislamiento
+## 🌐 Interfaz multilenguaje
 
-- Los textos pertenecientes a Steam usan los tokens del idioma activo siempre que están disponibles.
-- Los textos propios incluyen traducción española y fallback seguro en inglés para otros idiomas.
-- Las cachés con reintentos descartan fallos temporales en vez de conservar resultados vacíos hasta reiniciar.
-- Los datos esenciales cargan desde caché mientras feed, amigos, logros y comunidad se hidratan en paralelo.
-- La navegación usa identificadores de generación para impedir que tareas antiguas modifiquen el siguiente juego.
-- Los estilos nativos tocados durante la inyección se restauran al cambiar de página.
-- La inyección exige la identidad estable del acceso vinculado; los accesos no vinculados y juegos nativos quedan fuera de su alcance previsto.
+GameBridge detecta automáticamente el idioma activo del cliente Steam y traduce la interfaz inyectada para que coincida con él. Los encabezados de Biblioteca, enlaces de navegación, logros, etiquetas del feed, secciones de comunidad, información del juego, tooltips y controles nativos reutilizan las traducciones oficiales de Steam siempre que están disponibles.
+
+Las ventanas propias del complemento, mensajes de detección, ajustes y resultados de vinculación utilizan el catálogo de localización de GameBridge. El español está incluido directamente y el inglés actúa como fallback seguro para los textos que Steam no traduzca. Al cambiar el idioma del cliente, los datos y la interfaz localizados se actualizan sin necesitar una edición separada del complemento.
 
 ---
 
