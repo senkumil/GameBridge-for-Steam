@@ -1,2 +1,6 @@
 # Auto detect text files and keep repository and working-tree text in LF.
 * text=auto eol=lf
+
+# README-only screenshots stay visible in the repository but are omitted from
+# GitHub's generated source-code archives and release source ZIP/TAR files.
+docs/screenshots/** export-ignore
