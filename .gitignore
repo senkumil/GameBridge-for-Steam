@@ -49,6 +49,10 @@ non-steam-playtimes-2.0.3/
 capturas juegos nativos steam/
 capturas*/
 docs/
+# README screenshots are release documentation and must be versioned.
+!docs/
+!docs/screenshots/
+!docs/screenshots/*.png
 
 # Archivos y carpetas temporales de pruebas y scratch
 scratch/
