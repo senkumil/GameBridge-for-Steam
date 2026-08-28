@@ -6,6 +6,7 @@ export interface LocalAchievementGameInfo {
 }
 
 const gameInfoCache = new Map<string, LocalAchievementGameInfo>();
+const MAX_GAME_INFO_CACHE_ENTRIES = 24;
 
 export async function getLocalAchievementGameInfo(appid: string): Promise<LocalAchievementGameInfo> {
 	const cached = gameInfoCache.get(appid);
@@ -16,6 +17,11 @@ export async function getLocalAchievementGameInfo(appid: string): Promise<LocalA
 		headerImage: String(data?.header_image || ''),
 	};
 	gameInfoCache.set(appid, info);
+	while (gameInfoCache.size > MAX_GAME_INFO_CACHE_ENTRIES) {
+		const oldest = gameInfoCache.keys().next().value as string | undefined;
+		if (!oldest) break;
+		gameInfoCache.delete(oldest);
+	}
 	return info;
 }
 

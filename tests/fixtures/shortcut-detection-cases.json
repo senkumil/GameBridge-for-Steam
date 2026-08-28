@@ -2,7 +2,11 @@
   {
     "executable": "re9.exe",
     "title": "re9",
-    "expect": { "aliasesAreHintsOnly": true, "validateTopCandidates": 3, "requireTopScoreGap": true }
+    "expect": {
+      "aliasesAreHintsOnly": true,
+      "validateTopCandidates": 3,
+      "requireTopScoreGap": true
+    }
   },
   {
     "executable": "tlou-i.exe",
@@ -14,24 +18,43 @@
     }
   },
   {
+    "executable": "tlou-i.exe",
+    "title": "The Last of Us™ Part I",
+    "startDir": "D:\\Juegos\\The Last of Us Part I",
+    "expect": {
+      "expectedAppId": "1888930",
+      "invalidUtf8CannotAbortDetection": true,
+      "bulkCanAcceptUniqueExactTitle": true
+    }
+  },
+  {
     "executable": "MKKE.exe",
     "title": "MKKE",
-    "expect": { "aliasesAreHintsOnly": true, "requireOfficialStoreCandidate": true }
+    "expect": {
+      "aliasesAreHintsOnly": true,
+      "requireOfficialStoreCandidate": true
+    }
   },
   {
     "executable": "SparkingZERO-Win64-Shipping.exe",
     "title": "DRAGON BALL: Sparking! ZERO",
-    "expect": { "shippingExecutableIsSupportingEvidence": true }
+    "expect": {
+      "shippingExecutableIsSupportingEvidence": true
+    }
   },
   {
     "executable": "launcher.exe",
     "title": "Game Launcher",
-    "expect": { "genericLauncherCannotProduceHighConfidence": true }
+    "expect": {
+      "genericLauncherCannotProduceHighConfidence": true
+    }
   },
   {
     "executable": "GTAIV.exe",
     "title": "Grand Theft Auto IV: The Complete Edition",
-    "expect": { "editionsMustBeRankedAndValidated": true }
+    "expect": {
+      "editionsMustBeRankedAndValidated": true
+    }
   },
   {
     "executable": "re4.exe",
@@ -50,6 +73,31 @@
       "arbitraryTitleDoesNotDiscardExecutableAlias": true,
       "maintainedAliasCanOpenReviewModal": true,
       "requiresManualConfirmation": true
+    }
+  },
+  {
+    "executable": "b1-Win64-Shipping.exe",
+    "title": "Black Myth: Wukong",
+    "expect": {
+      "exactOfficialTitleOverridesAliasCaution": true,
+      "deepGameFolderIsEvidence": true,
+      "bulkCanAcceptUniqueExactTitle": true
+    }
+  },
+  {
+    "executable": "RDR2.exe",
+    "title": "Red Dead Redemption 2",
+    "expect": {
+      "exactOfficialTitleOverridesAliasCaution": true,
+      "bulkCanAcceptUniqueExactTitle": true
+    }
+  },
+  {
+    "executable": "gta-sa.exe",
+    "title": "Grand Theft Auto: San Andreas",
+    "expect": {
+      "multipleEditionAliasesRemainDistinguishable": true,
+      "bulkRequiresUniqueExactTitle": true
     }
   }
 ]

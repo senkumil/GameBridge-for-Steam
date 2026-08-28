@@ -23,7 +23,7 @@ export function hasVisibleNativeLinksBar(doc: Document): boolean {
 		// Steam occasionally changes the hashed LinksSection class while keeping
 		// the native links themselves. Do not leave a linked-game info panel over
 		// a real Steam page merely because that private class changed.
-		return Array.from(doc.querySelectorAll<HTMLAnchorElement>('a[href]')).some(anchor => {
+		const nativeLinkCandidates = Array.from(doc.querySelectorAll<HTMLAnchorElement>('a[href]')).filter(anchor => {
 			if (anchor.closest('[id^="gdl-"]')) return false;
 			const href = String(anchor.getAttribute('href') || '');
 			if (!/store\.steampowered\.com|steamcommunity\.com|steam:\/\/openurl/i.test(href)
@@ -32,17 +32,42 @@ export function hasVisibleNativeLinksBar(doc: Document): boolean {
 			// app header and are the evidence needed for route cleanup.
 			return anchor.getBoundingClientRect().top > 100;
 		});
+		// The fallback is intentionally structural: a single Store link can occur
+		// on Library Home, in news or in the activity feed. A real details links
+		// row contains several sibling links inside one short horizontal surface.
+		return nativeLinkCandidates.some(anchor => {
+			let container = anchor.parentElement;
+			for (let depth = 0; container && depth < 4; depth += 1, container = container.parentElement) {
+				const rect = container.getBoundingClientRect();
+				const count = nativeLinkCandidates.filter(candidate => container?.contains(candidate)).length;
+				if (count >= 3 && rect.width >= 300 && rect.height > 0 && rect.height <= 120) return true;
+			}
+			return false;
+		});
 	} catch { return false; }
+}
+
+/**
+ * A public Store AppID or Steam's own Library links row is an ownership
+ * boundary: the visible page belongs to Steam, not to GameBridge.
+ *
+ * Keep this predicate read-only. Callers use it before running any Library
+ * DOM synchronization so native game pages are never used as injection hosts.
+ */
+export function isPublicSteamLibraryRoute(doc: Document): boolean {
+	const appId = routedSteamAppId(doc);
+	return Boolean((appId !== null && appId > 0 && appId < 2147483648)
+		|| hasVisibleNativeLinksBar(doc));
 }
 
 export interface LibraryNavigationState {
 	currentInjectedAppId: string | null;
 	currentInjectedShortcutAppId: string | null;
 	clearCurrentInjection: (doc: Document) => void;
-	cleanupInjection: (doc: Document) => void;
+	scheduleCleanup: (doc: Document) => void;
 }
 
-/** Remove linked-game chrome as soon as Steam starts a different route. */
+/** Invalidate linked-game state and defer DOM cleanup when Steam changes route. */
 export function reconcileLibraryNavigation(doc: Document, state: LibraryNavigationState): void {
 	try {
 		if (!doc?.body || !doc.documentElement?.isConnected || !doc.defaultView || doc.defaultView.closed) return;
@@ -53,14 +78,10 @@ export function reconcileLibraryNavigation(doc: Document, state: LibraryNavigati
 		|| doc.getElementById('gdl-game-info-panel'));
 	if (!hasGdlChrome) return;
 	const routeId = routedSteamAppId(doc);
-	// Native links are also a definitive route boundary for client builds that
-	// temporarily expose no AppID in location.href while they rebuild a page.
-	if ((routeId !== null && routeId > 0 && routeId < 2147483648)
-		|| hasVisibleNativeLinksBar(doc)) {
-		state.clearCurrentInjection(doc);
-		state.cleanupInjection(doc);
-		return;
-	}
+	// Native Library routes are deliberately outside this reconciler. The
+	// runtime's route boundary retires only GameBridge-owned nodes before this
+	// function is called and does not inspect or alter Steam's page state.
+	if (isPublicSteamLibraryRoute(doc)) return;
 	if (routeId === null) return;
 	const routeShortcutDismissed = routeId >= 2147483648 && isShortcutDismissed(routeId);
 	const routeMapping = routeId >= 2147483648 && !routeShortcutDismissed
@@ -70,6 +91,6 @@ export function reconcileLibraryNavigation(doc: Document, state: LibraryNavigati
 		&& (String(routeId) === state.currentInjectedShortcutAppId || routeMapping === state.currentInjectedAppId);
 	if (!sameLinkedGame) {
 		state.clearCurrentInjection(doc);
-		state.cleanupInjection(doc);
+		state.scheduleCleanup(doc);
 	}
 }

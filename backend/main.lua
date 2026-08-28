@@ -36,6 +36,10 @@ local deps = {
 
 deps.util = load_factory("util")(deps)
 deps.config = load_factory("config")(deps)
+deps.lru_cache = load_factory("lru_cache")(deps)
+deps.ttl_cache = load_factory("ttl_cache")(deps)
+deps.shortcut_detection_text = load_factory("shortcut_detection_text")(deps)
+deps.shortcut_detection_aliases = load_factory("shortcut_detection_aliases")(deps)
 
 local mappings = load_factory("mappings")(deps)
 local store = load_factory("store")(deps)
@@ -44,6 +48,10 @@ local news = load_factory("news")(deps)
 local social = load_factory("social")(deps)
 local community = load_factory("community")(deps)
 local artwork = load_factory("artwork")(deps)
+deps.achievement_settings = load_factory("achievement_settings")(deps)
+deps.achievement_policy = load_factory("achievement_policy")(deps)
+deps.achievement_sources = load_factory("achievement_sources")(deps)
+deps.achievement_state = load_factory("achievement_state")(deps)
 local achievements = load_factory("achievements")(deps)
 local playtime = load_factory("playtime")(deps)
 
@@ -67,10 +75,14 @@ function fetch_library_assets(request_json) return artwork.fetch_library_assets(
 function fetch_community_artwork(request_json) return artwork.fetch_community_artwork(request_json) end
 function save_shortcut_icon(request_json) return artwork.save_shortcut_icon(request_json) end
 function clear_artwork(shortcut_app_id) return artwork.clear_artwork(shortcut_app_id) end
+function clear_artwork_except_icon(shortcut_app_id) return artwork.clear_artwork_except_icon(shortcut_app_id) end
 function get_achievement_base_path() return achievements.get_achievement_base_path() end
 function set_achievement_base_path(path) return achievements.set_achievement_base_path(path) end
 function get_game_achievement_path(request_json) return achievements.get_game_achievement_path(request_json) end
 function set_game_achievement_path(request_json) return achievements.set_game_achievement_path(request_json) end
+function get_game_achievement_options(request_json) return achievements.get_game_achievement_options(request_json) end
+function set_game_achievement_options(request_json) return achievements.set_game_achievement_options(request_json) end
+function get_game_achievement_capabilities(request_json) return achievements.get_game_achievement_capabilities(request_json) end
 function fetch_local_achievement_data(request_json, language, state_app_id)
     return achievements.fetch_local_achievement_data(request_json, language, state_app_id)
 end
@@ -78,6 +90,7 @@ function start_playtime_session(request_json) return playtime.start_session(requ
 function ping_playtime_session(request_json) return playtime.ping_session(request_json) end
 function stop_playtime_session(request_json) return playtime.stop_session(request_json) end
 function get_playtime_data(request_json) return playtime.get_playtime(request_json) end
+function get_all_playtime_data(request_json) return playtime.get_all_playtime(request_json) end
 function set_playtime_data(request_json) return playtime.set_playtime(request_json) end
 function fe_log(msg)
     logger:info("[FE] " .. tostring(msg))
@@ -100,6 +113,8 @@ local function on_load()
 end
 
 local function on_unload()
+    local ok_flush, flush_err = pcall(function() playtime.flush() end)
+    if not ok_flush then logger:warn("Could not flush playtime sessions: " .. tostring(flush_err)) end
     logger:info("GameBridge for Steam plugin unloaded")
 end
 

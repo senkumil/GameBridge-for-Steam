@@ -6,6 +6,7 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
+local lru = deps.lru_cache
 local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
 local M = {}
 
@@ -98,21 +99,58 @@ end
 -- appinfo structure without authentication; return the resolved URLs and let
 -- the frontend keep using SteamClient.Apps.SetCustomArtworkForApp.
 local library_assets_cache = {}
+local LIBRARY_ASSETS_CACHE_LIMIT = 48
+
+-- Steam can publish localized library assets without a variant for every
+-- client language. Never fall back to an arbitrary table entry: Lua's pairs()
+-- order is intentionally undefined and could therefore select an Arabic,
+-- Chinese, Japanese, etc. logo for a Spanish/English client from one run to
+-- the next. Prefer only explicit language-compatible variants, then a neutral
+-- English/default asset. If none exists, return an empty value and let the
+-- frontend use its safe fallback instead of displaying the wrong language.
+local LIBRARY_LANGUAGE_ALIASES = {
+    spanish = { "latam" },
+    latam = { "spanish" },
+    portuguese = { "brazilian" },
+    brazilian = { "portuguese" },
+}
+
+local function localized_library_asset(bucket, language)
+    if type(bucket) == "string" then
+        return bucket ~= "" and bucket or ""
+    end
+    if type(bucket) ~= "table" then return "" end
+
+    local lang = tostring(language or ""):lower()
+    local ordered = {}
+    local seen = {}
+    local function add(key)
+        key = tostring(key or ""):lower()
+        if key ~= "" and not seen[key] then
+            seen[key] = true
+            table.insert(ordered, key)
+        end
+    end
+
+    add(lang)
+    for _, alias in ipairs(LIBRARY_LANGUAGE_ALIASES[lang] or {}) do add(alias) end
+    add("english")
+    add("default")
+    add("neutral")
+
+    for _, key in ipairs(ordered) do
+        local value = bucket[key]
+        if type(value) == "string" and value ~= "" then return value end
+    end
+    return ""
+end
 
 local function pick_library_asset(asset, language, prefer_2x)
     if type(asset) ~= "table" then return "" end
     local bucket_keys = prefer_2x and { "image2x", "image" } or { "image", "image2x" }
-    local lang = tostring(language or ""):lower()
     for _, bucket_key in ipairs(bucket_keys) do
-        local bucket = asset[bucket_key]
-        if type(bucket) == "string" and bucket ~= "" then return bucket end
-        if type(bucket) == "table" then
-            local value = bucket[lang] or bucket.english
-            if type(value) == "string" and value ~= "" then return value end
-            for _, fallback in pairs(bucket) do
-                if type(fallback) == "string" and fallback ~= "" then return fallback end
-            end
-        end
+        local value = localized_library_asset(asset[bucket_key], language)
+        if value ~= "" then return value end
     end
     return ""
 end
@@ -225,14 +263,17 @@ function M.fetch_library_assets(request_json)
     if not appid:match("^%d+$") then return cjson.encode({ error = "invalid_appid" }) end
 
     local cache_key = appid .. "|" .. language
-    if library_assets_cache[cache_key] then
+    local cached_entry = library_assets_cache[cache_key]
+    if cached_entry then
+        lru.touch(cached_entry)
         -- Invalidate entries created by older plugin builds that did not yet
         -- include Steam's official depot install size.
-        local cached_ok, cached_value = pcall(cjson.decode, library_assets_cache[cache_key])
+        local cached_ok, cached_value = pcall(cjson.decode, cached_entry.value)
         if cached_ok and type(cached_value) == "table" and cached_value.install_size ~= nil
             and tonumber(cached_value.install_size_algorithm) == 3
-            and tonumber(cached_value.shortcut_icon_algorithm) == 2 then
-            return library_assets_cache[cache_key]
+            and tonumber(cached_value.shortcut_icon_algorithm) == 2
+            and tonumber(cached_value.library_asset_language_algorithm) == 2 then
+            return cached_entry.value
         end
         library_assets_cache[cache_key] = nil
     end
@@ -300,6 +341,7 @@ function M.fetch_library_assets(request_json)
         shortcut_icon_extension = shortcut_icons[1] and shortcut_icons[1].extension or "",
         shortcut_icons = shortcut_icons,
         shortcut_icon_algorithm = 2,
+        library_asset_language_algorithm = 2,
         franchise = franchise,
         logo_position = type(assets.library_logo) == "table" and assets.library_logo.logo_position or nil,
         -- Fixed official install footprint from Steam depot manifests.  This
@@ -308,7 +350,7 @@ function M.fetch_library_assets(request_json)
         install_size_algorithm = 3,
     }
     local encoded = cjson.encode(result)
-    library_assets_cache[cache_key] = encoded
+    lru.put(library_assets_cache, cache_key, { value = encoded }, LIBRARY_ASSETS_CACHE_LIMIT)
     logger:info("Library assets resolved for " .. appid .. ": logo="
         .. (result.logo ~= "" and "yes" or "no") .. ", hero="
         .. (result.hero ~= "" and "yes" or "no"))
@@ -626,6 +668,28 @@ function M.save_shortcut_icon(request_json)
     end
 
     return cjson.encode({ error = "icon_download_failed" })
+end
+
+function M.clear_artwork_except_icon(shortcut_app_id)
+    local account_id = get_active_account_id()
+    if not account_id then
+        return cjson.encode({ error = "Could not determine active Steam user" })
+    end
+
+    local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
+    local sid = tostring(shortcut_app_id)
+    local removed = 0
+    for _, suffix in ipairs({ "p", "_hero", "_logo", "" }) do
+        for _, ext in ipairs({ "jpg", "jpeg", "png", "tga", "ico" }) do
+            local filepath = fs.join(grid_dir, sid .. suffix .. "." .. ext)
+            if fs.exists(filepath) then
+                os.remove(filepath)
+                removed = removed + 1
+                logger:info("Removed grid artwork file: " .. filepath)
+            end
+        end
+    end
+    return cjson.encode({ removed = removed, icon_preserved = true })
 end
 
 function M.clear_artwork(shortcut_app_id)

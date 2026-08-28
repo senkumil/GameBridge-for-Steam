@@ -23,16 +23,16 @@ lerna-debug.log*
 .pnpm-debug.log*
 
 # ------------------------------------------------------------------------------
-# 3. Datos de Usuario y Estado en Tiempo de Ejecución (Archivos locales/personales)
+# 3. Datos de Usuario y Estado en Tiempo de Ejecución (¡Nunca subir datos personales!)
 # ------------------------------------------------------------------------------
-# Mapeos locales generados por el plugin
+# Mapeos locales de accesos directos generados por el plugin
 mappings.json
 mappings.json.tmp
 mappings.json.bak
 *.bak
 *.tmp
 
-# Configuraciones locales de logros y sesiones de tiempo de juego
+# Configuraciones locales de logros de usuario y sesiones de tiempo de juego
 achievement_base_path.txt
 achievement_paths.json
 playtime_sessions.json
@@ -40,29 +40,26 @@ sessions.json
 steam_appid.txt
 
 # ------------------------------------------------------------------------------
-# 4. Archivos Temporales, Capturas y Backups
+# 4. Carpetas y Archivos Locales / Descontinuados / Capturas
 # ------------------------------------------------------------------------------
-capturas/
+[g]ame-data-linker-DESCONTINUADO/
+non-steam-playtimes-2.0.3/
+*DESCONTINUADO*
+*descontinuado*
+capturas juegos nativos steam/
 capturas*/
-screenshots/
-scratch/
-temp/
-tmp/
-coverage/
+docs/
 
-# Scripts temporales o de pruebas locales
+# Archivos y carpetas temporales de pruebas y scratch
+scratch/
 scratch_*.cjs
-scratch_*.js
-scratch_*.mjs
 test_*.cjs
-test_*.js
-test_*.mjs
+copy_def.cjs
+export_schema.cjs
 _*.py
 _*.ps1
-_*.cjs
-_*.js
 
-# Paquetes comprimidos y backups
+# Paquetes comprimidos de backups
 *.zip
 *.tar.gz
 *.rar
@@ -71,7 +68,10 @@ _*.js
 # ------------------------------------------------------------------------------
 # 5. Salida de Compilación y Cachés de Herramientas
 # ------------------------------------------------------------------------------
-# Se permite .millennium/Dist/ para que el plugin funcione recién clonado/distribuido
+# Nota: .millennium/Dist/ contiene el bundle listo para Millennium en Steam
+# Si deseas ignorar Dist descomenta la siguiente línea:
+# .millennium/Dist/
+# Por defecto permitimos .millennium/Dist para que el plugin funcione recién clonado.
 !.millennium/Dist/
 
 *.tsbuildinfo
@@ -87,11 +87,13 @@ _*.js
 *.tgz
 
 # ------------------------------------------------------------------------------
-# 6. Variables de Entorno y Secretos
+# 6. Variables de Entorno y Credenciales
 # ------------------------------------------------------------------------------
 .env
 .env.local
-.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # ------------------------------------------------------------------------------
 # 7. Editores e IDEs

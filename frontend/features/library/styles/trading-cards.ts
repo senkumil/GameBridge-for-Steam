@@ -25,6 +25,8 @@ export function ensureTradingCardStyles(doc: Document): void {
 		.gdl-trading-cards-help-btn { width:17px;height:17px;border-radius:50%;background:rgba(255,255,255,0.16);border:0;color:#dcdedf;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:"Motiva Sans",Arial,sans-serif;cursor:pointer;margin-inline-start:8px;vertical-align:middle;padding:0;line-height:1;transition:background .15s,color .15s; }
 		.gdl-trading-cards-help-btn:hover { background:rgba(255,255,255,0.30);color:#fff; }
 		.gdl-trading-cards-help-popup { background:#3d4450;border:1px solid rgba(255,255,255,0.08);box-shadow:0 8px 24px rgba(0,0,0,0.65);border-radius:2px;padding:14px 16px;color:#c6d4df;font-family:"Motiva Sans",Arial,sans-serif;font-size:12.5px;line-height:1.45;font-weight:400;text-transform:none;letter-spacing:0;pointer-events:none;box-sizing:border-box; }
+		#gdl-trading-cards-section h2 > :not(:first-child) { display:none !important; }
+		#gdl-trading-cards-section h2::before,#gdl-trading-cards-section h2::after { display:none !important; }
 		#gdl-trading-card-preview { position:fixed;inset:0;z-index:2147483605;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;background:rgba(5,8,12,.86);opacity:0;transition:opacity .14s ease; }
 		#gdl-trading-card-preview.is-visible { opacity:1; }
 		.gdl-trading-card-preview-panel { position:relative;display:flex;flex-direction:column;align-items:center;width:min(1500px,calc(100vw - 30px));max-height:calc(100vh - 24px);padding:16px 16px 12px;box-sizing:border-box;background:#2b313a;border:1px solid #506070;box-shadow:0 18px 70px rgba(0,0,0,.82); }

@@ -2,7 +2,6 @@ import { backendLog } from '../../api/backend';
 import type { FriendCategories, SteamGameData } from '../../domain/types';
 import { loc } from '../../steam/localization';
 import {
-	cacheLocalAchievements,
 	getCachedLocalAchievements,
 	makeLinkedAchievementsClickable,
 	openLocalAchievementsModal,
@@ -44,15 +43,22 @@ export function renderLinkedSidebarCore(
 
 	const total = options.data.achievements?.total || 0;
 	if (total <= 0) return;
-	let cachedAchievements = getCachedLocalAchievements(options.steamAppId, options.shortcutAppId);
-	if (!cachedAchievements && options.data.achievements && options.data.achievements.total > 0) {
+	const cachedAchievements = getCachedLocalAchievements(options.steamAppId, options.shortcutAppId);
+	let initialAchievements = cachedAchievements;
+	if (!initialAchievements && options.data.achievements && options.data.achievements.total > 0) {
 		const highlighted = options.data.achievements.highlighted || [];
-		cachedAchievements = {
+		const missingCount = Math.max(0, options.data.achievements.total - highlighted.length);
+		// Remote highlights contain no local earned state. Show them immediately as
+		// a provisional locked 0/N box, padding the unseen schema entries so the +N
+		// tile reflects the real Store total instead of only the highlight count.
+		// This object is deliberately never passed to cacheLocalAchievements.
+		initialAchievements = {
 			found: true,
 			appid: options.steamAppId,
+			metadata_source: 'store_highlights_pending',
 			unlocked: 0,
 			total: options.data.achievements.total,
-			achievements: highlighted.map((h, i) => ({
+			achievements: [...highlighted.map((h, i) => ({
 				name: h.name || `ACH_${i}`,
 				display_name: h.name || `ACH_${i}`,
 				description: '',
@@ -64,13 +70,24 @@ export function renderLinkedSidebarCore(
 				earned_time: 0,
 				progress: 0,
 				max_progress: 0,
-			})),
+			})), ...Array.from({ length: missingCount }, (_, index) => ({
+				name: `GDL_PENDING_${index}`,
+				display_name: '',
+				description: '',
+				icon: '',
+				icon_gray: '',
+				hidden: true,
+				global_percent: 0,
+				earned: false,
+				earned_time: 0,
+				progress: 0,
+				max_progress: 0,
+			}))],
 		};
-		cacheLocalAchievements(cachedAchievements, options.steamAppId, options.shortcutAppId);
 	}
 
-	const initialBody = cachedAchievements
-		? renderLocalAchievementSidebarHtml(cachedAchievements)
+	const initialBody = initialAchievements
+		? renderLocalAchievementSidebarHtml(initialAchievements)
 		: '';
 	const node = buildNativeSidebarSection(doc, layout, {
 		sectionId: 'gdl-achievements-section',
@@ -80,6 +97,7 @@ export function renderLinkedSidebarCore(
 		cloneInnerClass: false,
 	});
 	if (!node) return;
+	if (!cachedAchievements) node.dataset.gdlAchievementsPending = '1';
 
 	if (cachedAchievements) {
 		const summary = node.querySelector('.gdl-la-summary');

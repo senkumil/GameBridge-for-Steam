@@ -17,6 +17,10 @@ function blueprintKey(key: NativeUiBlueprintKey): string {
 	return `${steamLanguageSync() || 'english'}:${key}`;
 }
 
+function hasNativeUiBlueprint(key: NativeUiBlueprintKey): boolean {
+	return nativeUiBlueprints.has(blueprintKey(key));
+}
+
 export function clearNativeUiBlueprints(): void {
 	nativeUiBlueprints.clear();
 }
@@ -94,15 +98,40 @@ export interface CaptureNativeUiBlueprintOptions {
 	skip?: () => boolean;
 }
 
+/** Locate Steam's own information control semantically. Controller presence
+ * changes the number and order of play-bar buttons, so position is never a
+ * valid identity signal. */
+export function findNativeInfoButton(doc: Document): HTMLElement | null {
+	const ps = PLAYBAR_CLASSES();
+	const showInfo = normalizedUiText(loc('GameAction_ViewDetails', gdlText('show_game_details', 'Show game details')));
+	const hideInfo = normalizedUiText(loc('GameAction_ViewDetails_Collapse', gdlText('hide_game_details', 'Hide game details')));
+	for (const buttons of elementsWithCssModuleClass(doc, ps.AppButtonsContainer)) {
+		const candidates = Array.from(buttons.querySelectorAll<HTMLElement>('button,[role="button"]'))
+			.filter(button => !button.closest('[data-gdl-game-info-button]') && isRenderedElement(doc, button));
+		const labeled = candidates.find(button => {
+			const text = normalizedUiText(button.getAttribute('aria-label') || button.getAttribute('title') || '');
+			return !!text && (text === showInfo || text === hideInfo);
+		});
+		if (labeled) return labeled;
+		// An information SVG is the only safe fallback while Steam temporarily
+		// omits the localized accessibility text during a route rebuild.
+		const iconMatched = candidates.find(button =>
+			Boolean(button.querySelector('.SVGIcon_Information, svg[class*="Information"]')));
+		if (iconMatched) return iconMatched;
+	}
+	return null;
+}
+
 /**
  * Learns only small, self-contained controls from the current Steam session.
  * Large structural containers are not persisted across sessions/client builds.
  */
 export function captureNativeUiBlueprints(doc: Document, options: CaptureNativeUiBlueprintOptions = {}): void {
 	if (!doc.body || options.skip?.()) return;
+	if (Object.values(NATIVE_UI_BLUEPRINT_KEYS).every(hasNativeUiBlueprint)) return;
 	const ps = PLAYBAR_CLASSES();
 
-	try {
+	if (!hasNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements)) try {
 		const nativeAchStat = elementsWithCssModuleClass(doc, ps.GameStatsSection)
 			.flatMap(section => elementsWithCssModuleClass(section, ps.GameStat))
 			.find(stat => hasCssModuleClass(stat, ps.MiniAchievements)
@@ -110,40 +139,18 @@ export function captureNativeUiBlueprints(doc: Document, options: CaptureNativeU
 		if (nativeAchStat) saveNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements, nativeAchStat);
 	} catch {}
 
-	try {
+	if (!hasNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.cloudStatus)) try {
 		const nativeCloud = elementsWithCssModuleClass(doc, ps.PlayBarCloudStatusContainer)
 			.find(el => !el.closest('[data-gdl-cloud-status]') && isRenderedElement(doc, el));
 		if (nativeCloud) saveNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.cloudStatus, nativeCloud);
 	} catch {}
 
-	try {
-		const showInfo = normalizedUiText(loc('GameAction_ViewDetails', gdlText('show_game_details', 'Show game details')));
-		const hideInfo = normalizedUiText(loc('GameAction_ViewDetails_Collapse', gdlText('hide_game_details', 'Hide game details')));
-		for (const buttons of elementsWithCssModuleClass(doc, ps.AppButtonsContainer)) {
-			const candidates = Array.from(buttons.querySelectorAll<HTMLElement>('button,[role="button"]'))
-				.filter(button => !button.closest('[data-gdl-game-info-button]') && isRenderedElement(doc, button));
-			let nativeInfoButton = candidates.find(button => {
-				const text = normalizedUiText(button.getAttribute('aria-label') || button.getAttribute('title') || '');
-				return !!text && (text === showInfo || text === hideInfo);
-			}) || null;
-			if (!nativeInfoButton) {
-				const menus = candidates.filter(button => {
-					if (!hasCssModuleClass(button, ps.MenuButton) || hasCssModuleClass(button, ps.FavoriteButton)) return false;
-					const text = normalizedUiText(button.getAttribute('aria-label') || button.getAttribute('title') || '');
-					if (/controller|gamepad|mando|manette|steuer|joystick/i.test(text)) return false;
-					if (button.querySelector('svg[class*="Controller"], svg[class*="Gamepad"], [class*="Controller"]')) return false;
-					return true;
-				});
-				nativeInfoButton = menus.length >= 2 ? menus[menus.length - 1] : null;
-			}
-			if (nativeInfoButton) {
-				saveNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.infoButton, nativeInfoButton);
-				break;
-			}
-		}
+	if (!hasNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.infoButton)) try {
+		const nativeInfoButton = findNativeInfoButton(doc);
+		if (nativeInfoButton) saveNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.infoButton, nativeInfoButton);
 	} catch {}
 
-	try {
+	if (!hasNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.primaryLinks)) try {
 		const ls = LINKS_BAR_CLASSES();
 		const nativeLinksBar = elementsWithCssModuleClass(doc, ls.LinksSection)
 			.find(el => !el.closest('#gdl-library-injected') && !el.id?.startsWith('gdl-') && isRenderedElement(doc, el));

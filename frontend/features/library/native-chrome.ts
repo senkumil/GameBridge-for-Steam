@@ -47,10 +47,14 @@ export function removeNativeGameChrome(doc: Document, clearModel = false): void 
 	removeNativeInfoButton(doc);
 	removeNativeInfoPanel(doc);
 	doc.querySelectorAll('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements').forEach(element => element.remove());
-	if (clearModel) {
-		currentNativeGameInfo = null;
-		clearNativeInfoSessionState();
-	}
+	if (clearModel) clearNativeGameChromeState();
+}
+
+/** Clear only GameBridge's in-memory linked-game model. No Steam DOM or React
+ * state is inspected or modified. */
+export function clearNativeGameChromeState(): void {
+	currentNativeGameInfo = null;
+	clearNativeInfoSessionState();
 }
 
 export function getCurrentNativeGameInfo(): NativeGameInfo | null {

@@ -5,6 +5,7 @@ import { gdlText, loc } from '../../steam/localization';
 import { GDL_INJECTED } from './constants';
 import type { NativeLibraryLayout } from './layout';
 import { renderUnifiedActivityFeed, setupStatusPostBox } from './social';
+import { renderActivityFeedSkeletonHtml } from './activity-skeleton';
 
 export interface ActivityViewOptions {
 	steamAppId: string;
@@ -27,7 +28,12 @@ export function createActivityView(
 
 	const postClasses = POST_CLASSES();
 	const feedClasses = FEED_CLASSES();
-	const feedHtml = renderUnifiedActivityFeed(options.steamAppId, options.shortcutAppId, options.newsItems, options.headerImage);
+	// An empty array while the asynchronous streams are unresolved is not proof
+	// that the game has no activity. Keep an honest placeholder until the feed
+	// request publishes either content or a confirmed empty result.
+	const feedHtml = options.newsItems.length > 0
+		? renderUnifiedActivityFeed(options.steamAppId, options.shortcutAppId, options.newsItems, options.headerImage)
+		: renderActivityFeedSkeletonHtml(gdlText('activity', loc('AppDetails_SectionTitle_Activity', 'Activity')));
 	wrapper.innerHTML = `
 		<div class="gdl-native-activity-heading-fallback" style="font-family:'Motiva Sans',Arial,Helvetica,sans-serif;font-size:13.5px;font-weight:700;letter-spacing:1.5px;color:#8f98a0;margin:0 0 12px 0 !important;padding:0 !important;text-transform:uppercase;">${escapeHtml(gdlText('activity', loc('AppDetails_SectionTitle_Activity', 'Activity')).toUpperCase())}</div>
 		<div class="${feedClasses.AddToFeed || ''} ${feedClasses.PostTextEntry || ''} gdl-status-box-container ${postClasses.PostTextEntry || ''}" style="display:block !important;margin:0 0 16px 0 !important;min-height:0 !important;position:relative !important;z-index:50 !important;">

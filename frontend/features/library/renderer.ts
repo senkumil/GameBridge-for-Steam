@@ -28,6 +28,7 @@ export interface LinkedGameRenderContext {
 const INJECTED_SECTION_IDS = [
 	GDL_INJECTED,
 	'gdl-skeleton',
+	'gdl-sidebar-skeleton',
 	'gdl-friends-section',
 	'gdl-achievements-section',
 	'gdl-trading-cards-section',

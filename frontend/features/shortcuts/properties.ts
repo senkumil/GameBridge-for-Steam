@@ -1,27 +1,18 @@
 import type { ShortcutDetectionCandidate, ShortcutDetectionContext } from '../../domain/types';
-import { backendLog, getGameAchievementPathBackend, setGameAchievementPathBackend } from '../../api/backend';
-import { shortcutMappingKey } from '../../core/mappings';
-import { escapeHtml, normalizeTitle, templateToRegex } from '../../core/text';
+import { backendLog } from '../../api/backend';
+import { escapeHtml, templateToRegex } from '../../core/text';
 import { gdlText, loc } from '../../steam/localization';
 import { findActiveShortcutAppId, findShortcutAppIdByName, shortcutPathBasename } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForShortcut, isUnrealShippingExecutable } from './registry';
 import { buildShortcutDetectionContext, detectShortcutCandidates } from './detection';
 import { enqueueLinkJob } from './link-job-queue';
+import { unlinkShortcutFromSteam } from './unlinking';
+import { undismissShortcut } from './dismissed';
+import { rememberedShortcutSteamAppId } from './link-history';
+import { bindShortcutAchievementSettings, shortcutAchievementSettingsHtml } from './achievement-properties';
 
 const GDL_PROP = 'gdl-properties-injected';
-
-/** IPC may return a string, an object, or an empty value while Steam is restarting. */
-function parseIpcObject<T extends object>(raw: unknown): T | null {
-	if (raw && typeof raw === 'object') return raw as T;
-	if (typeof raw !== 'string' || !raw.trim()) return null;
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as T : null;
-	} catch {
-		return null;
-	}
-}
 
 export function tryInjectPropertiesField(doc: Document, popupTitle: string): void {
 	if (!doc || !doc.body || doc.querySelector(`.${GDL_PROP}`)) return;
@@ -151,14 +142,14 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 
 	if (!gameTitle) return;
 
-	let titleKey = normalizeTitle(gameTitle);
 	const initialShortcutId = findActiveShortcutAppId(doc, gameTitle) || (findShortcutAppIdByName(gameTitle) ? String(findShortcutAppIdByName(gameTitle)) : null);
 	let managedShortcutId = initialShortcutId ? Number(initialShortcutId) : null;
-	const mappingAliases = new Set<string>([titleKey]);
 	const currentRaw = findMappingForShortcut(initialShortcutId, gameTitle) || '';
 	// Only numeric Steam AppIDs are active; old external-platform mappings stay hidden
 	// until the user replaces them with a Steam link.
-	const currentLinked = /^\d+$/.test(currentRaw) ? currentRaw : '';
+	let currentLinked = /^\d+$/.test(currentRaw) ? currentRaw : '';
+	const rememberedAppId = rememberedShortcutSteamAppId(managedShortcutId);
+	const initialAppId = currentLinked || rememberedAppId;
 
 	// Build UI section
 	const section = doc.createElement('div');
@@ -181,31 +172,18 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		</div>
 		<div style="display: flex; gap: 8px; align-items: center;">
 			<input class="gdl-appid-input" type="text" placeholder="${escapeHtml(gdlText('appid_placeholder', 'Steam AppID or Steam store link'))}"
-				value="${escapeHtml(currentLinked)}"
+				value="${escapeHtml(initialAppId)}"
 				style="flex:1; padding:8px 12px; background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.1); border-radius:3px; color:#dcdedf; font-size:13px; outline:none;" />
 			<button class="gdl-save-btn" style="padding:8px 18px; background:#1a9fff; border:none; border-radius:3px; color:#fff; font-size:12px; font-weight:500; cursor:pointer; white-space:nowrap;">${escapeHtml(gdlText('save', 'Save'))}</button>
+			<button class="gdl-unlink-btn" ${currentLinked ? '' : 'disabled'} style="display:block;padding:8px 14px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);border-radius:3px;color:${currentLinked ? '#c7d5e0' : '#68737f'};font-size:12px;cursor:${currentLinked ? 'pointer' : 'default'};white-space:nowrap;opacity:${currentLinked ? '1' : '.65'};">${escapeHtml(currentLinked ? gdlText('unlink', 'Unlink') : gdlText('game_unlinked_status', 'Unlinked'))}</button>
 		</div>
-		<div class="gdl-game-achievement-source" style="margin-top:16px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);">
-			<div style="font-size:12px; font-weight:500; color:#8f98a0; text-transform:uppercase; letter-spacing:.5px; margin-bottom:7px;">
-				${escapeHtml(gdlText('game_achievement_path_title', 'Achievement progress file'))}
-			</div>
-			<div style="font-size:11px; color:#6c7580; margin-bottom:9px; line-height:1.4;">
-				${escapeHtml(gdlText('game_achievement_path_description', 'Optional. Paste this game\'s achievements JSON file, or a folder that contains achievements.json. This source is checked before the global AppID folders.'))}
-			</div>
-			<div style="display:flex; gap:8px; align-items:center;">
-				<input class="gdl-game-achievement-path-input" type="text" placeholder="${escapeHtml(gdlText('game_achievement_path_placeholder', 'Example: D:\\Game\\achievements.json'))}"
-					style="flex:1; min-width:0; padding:8px 12px; background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.1); border-radius:3px; color:#dcdedf; font-size:12px; outline:none;" />
-				<button class="gdl-game-achievement-path-save" style="padding:8px 14px; background:#1a9fff; border:0; border-radius:3px; color:#fff; font-size:12px; font-weight:500; cursor:pointer; white-space:nowrap;">${escapeHtml(gdlText('game_achievement_path_save', 'Save path'))}</button>
-				<button class="gdl-game-achievement-path-clear" style="padding:8px 12px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.06); border-radius:3px; color:#8f98a0; font-size:12px; cursor:pointer; white-space:nowrap;">${escapeHtml(gdlText('game_achievement_path_clear', 'Use automatic'))}</button>
-			</div>
-			<div class="gdl-game-achievement-path-status" style="font-size:11px; color:#8f98a0; margin-top:7px; min-height:16px;"></div>
-		</div>
+		${shortcutAchievementSettingsHtml()}
 		<label class="gdl-skip-launcher" style="display:none; align-items:flex-start; gap:8px; margin-top:10px; color:#acb2b8; font-size:11px; cursor:pointer;">
 			<input class="gdl-skip-launcher-input" type="checkbox" style="margin-top:2px;" />
 			<span><strong style="font-weight:500; color:#dcdedf;">${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('skip_launcher_help', 'Adds -nolauncher while preserving your current launch options. Enable it only if this game supports that argument.'))}</span>
 		</label>
 		<label class="gdl-tracking-executable" style="display:none; align-items:flex-start; gap:8px; margin-top:10px; padding:9px 10px; background:rgba(91,163,43,.10); border:1px solid rgba(91,163,43,.25); color:#acb2b8; font-size:11px; cursor:pointer;">
-			<input class="gdl-tracking-executable-input" type="checkbox" checked style="margin-top:2px;" />
+			<input class="gdl-tracking-executable-input" type="checkbox" style="margin-top:2px;" />
 			<span class="gdl-tracking-executable-copy"></span>
 		</label>
 		<div class="gdl-status" style="font-size: 11px; color: #8f98a0; margin-top: 8px; min-height: 16px;"></div>
@@ -215,6 +193,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 
 	const input = section.querySelector('.gdl-appid-input') as HTMLInputElement;
 	const saveBtn = section.querySelector('.gdl-save-btn') as HTMLButtonElement;
+	const unlinkBtn = section.querySelector('.gdl-unlink-btn') as HTMLButtonElement;
 	const statusEl = section.querySelector('.gdl-status') as HTMLElement;
 	const autoTitle = section.querySelector('.gdl-auto-detect-title') as HTMLElement;
 	const autoSelect = section.querySelector('.gdl-auto-candidates') as HTMLSelectElement;
@@ -224,10 +203,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	const trackingExecutableLabel = section.querySelector('.gdl-tracking-executable') as HTMLElement;
 	const trackingExecutableInput = section.querySelector('.gdl-tracking-executable-input') as HTMLInputElement;
 	const trackingExecutableCopy = section.querySelector('.gdl-tracking-executable-copy') as HTMLElement;
-	const gameAchievementPathInput = section.querySelector('.gdl-game-achievement-path-input') as HTMLInputElement;
-	const gameAchievementPathSave = section.querySelector('.gdl-game-achievement-path-save') as HTMLButtonElement;
-	const gameAchievementPathClear = section.querySelector('.gdl-game-achievement-path-clear') as HTMLButtonElement;
-	const gameAchievementPathStatus = section.querySelector('.gdl-game-achievement-path-status') as HTMLElement;
 	let detectionContext: ShortcutDetectionContext | null = null;
 
 	const renderCandidatePreview = (candidates: ShortcutDetectionCandidate[], selectedAppId: string): void => {
@@ -270,87 +245,11 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		}
 	};
 
-	const gameAchievementPathRequest = (path?: string) => JSON.stringify({
-		shortcut_app_id: managedShortcutId ? String(managedShortcutId) : '',
-		steam_app_id: /^\d+$/.test(input?.value?.trim() || '') ? input.value.trim() : currentLinked,
-		path: path ?? '',
+	bindShortcutAchievementSettings({
+		section,
+		shortcutAppId: () => managedShortcutId ? String(managedShortcutId) : '',
+		steamAppId: () => /^\d+$/.test(input.value.trim()) ? input.value.trim() : currentLinked,
 	});
-
-	if (gameAchievementPathInput && gameAchievementPathStatus) {
-		gameAchievementPathInput.addEventListener('keydown', (e) => {
-			if (e.key === 'Enter') {
-				e.preventDefault();
-				gameAchievementPathSave?.click();
-			}
-		});
-		gameAchievementPathStatus.textContent = gdlText('game_achievement_path_loading', 'Loading achievement source...');
-		void getGameAchievementPathBackend({ request_json: gameAchievementPathRequest() })
-			.then(raw => {
-				const result = parseIpcObject<{ ok?: boolean; configured?: boolean; path?: string; usable?: boolean; error?: string }>(raw) || {};
-				if (!result.ok) {
-					gameAchievementPathStatus.textContent = result.error === 'missing_game_id'
-						? gdlText('game_achievement_path_link_first', 'Link this shortcut to a Steam AppID first.')
-						: gdlText('game_achievement_path_failed', 'The achievement source could not be loaded.');
-					gameAchievementPathStatus.style.color = '#d94126';
-					return;
-				}
-				gameAchievementPathInput.value = result.path || '';
-				gameAchievementPathStatus.textContent = result.configured
-					? (result.usable
-						? gdlText('game_achievement_path_ready', 'This game will use the selected achievement file.')
-						: gdlText('game_achievement_path_saved_missing', 'The path is saved, but no readable achievements JSON was found there.'))
-					: gdlText('game_achievement_path_automatic', 'Using automatic AppID folders from the global plugin setting.');
-				gameAchievementPathStatus.style.color = result.configured && !result.usable ? '#d6b24c' : '#8f98a0';
-			})
-			.catch(() => {
-				gameAchievementPathStatus.textContent = gdlText('game_achievement_path_failed', 'The achievement source could not be loaded.');
-				gameAchievementPathStatus.style.color = '#d94126';
-			});
-	}
-
-	if (gameAchievementPathSave && gameAchievementPathInput && gameAchievementPathStatus) {
-		gameAchievementPathSave.addEventListener('click', async () => {
-			const path = gameAchievementPathInput.value.trim();
-			if (!path) {
-				gameAchievementPathStatus.textContent = gdlText('game_achievement_path_enter', 'Enter a JSON file or folder path.');
-				gameAchievementPathStatus.style.color = '#d6b24c';
-				return;
-			}
-			gameAchievementPathSave.disabled = true;
-			gameAchievementPathSave.style.opacity = '.65';
-			try {
-				const raw = await setGameAchievementPathBackend({ request_json: gameAchievementPathRequest(path) });
-				const result = parseIpcObject<{ ok?: boolean; usable?: boolean; error?: string }>(raw) || {};
-				if (!result.ok) throw new Error(result.error || 'save_failed');
-				gameAchievementPathStatus.textContent = result.usable
-					? gdlText('game_achievement_path_saved', 'Achievement source saved for this game.')
-					: gdlText('game_achievement_path_saved_missing', 'The path is saved, but no readable achievements JSON was found there.');
-				gameAchievementPathStatus.style.color = result.usable ? '#66c0f4' : '#d6b24c';
-			} catch {
-				gameAchievementPathStatus.textContent = gdlText('game_achievement_path_failed', 'The achievement source could not be saved.');
-				gameAchievementPathStatus.style.color = '#d94126';
-			} finally {
-				gameAchievementPathSave.disabled = false;
-				gameAchievementPathSave.style.opacity = '1';
-			}
-		});
-	}
-
-	if (gameAchievementPathClear && gameAchievementPathInput && gameAchievementPathStatus) {
-		gameAchievementPathClear.addEventListener('click', async () => {
-			try {
-				const raw = await setGameAchievementPathBackend({ request_json: gameAchievementPathRequest('') });
-				const result = parseIpcObject<{ ok?: boolean; error?: string }>(raw) || {};
-				if (!result.ok) throw new Error(result.error || 'clear_failed');
-				gameAchievementPathInput.value = '';
-				gameAchievementPathStatus.textContent = gdlText('game_achievement_path_cleared', 'Custom source removed; automatic AppID folders will be used.');
-				gameAchievementPathStatus.style.color = '#8f98a0';
-			} catch {
-				gameAchievementPathStatus.textContent = gdlText('game_achievement_path_failed', 'The achievement source could not be saved.');
-				gameAchievementPathStatus.style.color = '#d94126';
-			}
-		});
-	}
 
 	if (managedShortcutId && input && statusEl && autoSelect && autoTitle) {
 		statusEl.textContent = gdlText('detecting_game', 'Detecting the game automatically...');
@@ -369,11 +268,14 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				return;
 			}
 			const options: HTMLOptionElement[] = [];
-			if (currentLinked && !viable.some(c => c.appid === currentLinked)) {
-				const currentOpt = doc.createElement('option');
-				currentOpt.value = currentLinked;
-				currentOpt.textContent = gdlText('current_linked_option', 'Currently linked game (AppID {appid})', { appid: currentLinked });
-				options.push(currentOpt);
+			const preferredAppId = currentLinked || rememberedAppId;
+			if (preferredAppId && !viable.some(c => c.appid === preferredAppId)) {
+				const rememberedOpt = doc.createElement('option');
+				rememberedOpt.value = preferredAppId;
+				rememberedOpt.textContent = currentLinked
+					? gdlText('current_linked_option', 'Currently linked game (AppID {appid})', { appid: preferredAppId })
+					: `Steam AppID ${preferredAppId}`;
+				options.push(rememberedOpt);
 			}
 			for (const candidate of viable) {
 				const option = doc.createElement('option');
@@ -383,13 +285,15 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				options.push(option);
 			}
 			autoSelect.replaceChildren(...options);
-			if (!currentLinked && viable.length > 0) {
+			if (!currentLinked && viable.length > 0 && !rememberedAppId) {
 				input.value = viable[0].appid;
 				autoSelect.value = viable[0].appid;
 				autoTitle.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Save to link it.', { name: viable[0].name });
-			} else if (currentLinked) {
-				autoSelect.value = currentLinked;
-				const currentCandidate = viable.find(c => c.appid === currentLinked);
+			} else if (currentLinked || rememberedAppId) {
+				const preferredAppId = currentLinked || rememberedAppId;
+				input.value = preferredAppId;
+				autoSelect.value = preferredAppId;
+				const currentCandidate = viable.find(c => c.appid === preferredAppId);
 				autoTitle.textContent = currentCandidate
 					? gdlText('detected_game', 'Detected: {name}. Review the result and press Save to link it.', { name: currentCandidate.name })
 					: gdlText('shortcut_suggestions_title', 'Steam AppID suggestions:');
@@ -424,11 +328,51 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		});
 	}
 
+	if (unlinkBtn && input && statusEl) {
+		unlinkBtn.addEventListener('click', async () => {
+			const shortcutId = managedShortcutId || Number(findActiveShortcutAppId(doc, gameTitle) || 0) || findShortcutAppIdByName(gameTitle);
+			if (!shortcutId) {
+				statusEl.textContent = gdlText('unlink_failed', 'Could not identify this shortcut to unlink it.');
+				statusEl.style.color = '#ff6b6b';
+				return;
+			}
+			unlinkBtn.disabled = true;
+			saveBtn.disabled = true;
+			statusEl.textContent = gdlText('unlinking', 'Removing the link and its saved artwork...');
+			statusEl.style.color = '#8f98a0';
+			const result = await unlinkShortcutFromSteam({
+				doc,
+				shortcutAppId: shortcutId,
+				title: gameTitle,
+				steamAppId: currentLinked || undefined,
+				exePath: detectionContext?.exePath || '',
+			});
+			if (result.ok) {
+				managedShortcutId = result.shortcutAppId || shortcutId;
+				const preservedAppId = currentLinked || rememberedAppId || input.value.trim();
+				if (preservedAppId) input.value = preservedAppId;
+				currentLinked = '';
+				unlinkBtn.disabled = true;
+				unlinkBtn.textContent = gdlText('game_unlinked_status', 'Unlinked');
+				unlinkBtn.style.display = 'block';
+				unlinkBtn.style.color = '#68737f';
+				unlinkBtn.style.cursor = 'default';
+				unlinkBtn.style.opacity = '.65';
+				statusEl.textContent = gdlText('unlink_success', 'Link removed. You can link this same shortcut again without deleting it from Steam.');
+				statusEl.style.color = '#5ba32b';
+			} else {
+				statusEl.textContent = gdlText('unlink_failed', 'The link could not be removed.');
+				statusEl.style.color = '#ff6b6b';
+				unlinkBtn.disabled = false;
+			}
+			saveBtn.disabled = false;
+		});
+	}
+
 	if (saveBtn && input && statusEl) {
 		saveBtn.addEventListener('click', async () => {
 			let val = input.value.trim();
 			if (!val) { statusEl.textContent = gdlText('enter_appid', 'Enter an AppID or store link.'); return; }
-			if (managedShortcutId) mappingAliases.add(shortcutMappingKey(managedShortcutId));
 			// Accept store/community links (e.g. https://store.steampowered.com/app/2947440/Name/)
 			const urlMatch = val.match(/(?:store\.steampowered\.com|steamcommunity\.com|steamdb\.info)\/app\/(\d+)/i)
 				|| val.match(/s\.team\/a\/(\d+)/i);
@@ -438,6 +382,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			}
 			if (!/^\d+$/.test(val)) { statusEl.textContent = gdlText('enter_numeric_appid', 'Enter a numeric AppID or a store page link.'); return; }
 
+			if (managedShortcutId) undismissShortcut(managedShortcutId);
 			enqueueLinkJob({
 				title: gameTitle,
 				shortcutAppId: managedShortcutId,
@@ -446,6 +391,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				existingLaunchOptions: detectionContext?.launchOptions || '',
 				trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
 				trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
+				shortcutExecutable: detectionContext?.exePath || '',
 			});
 			statusEl.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
 			statusEl.style.color = '#66c0f4';

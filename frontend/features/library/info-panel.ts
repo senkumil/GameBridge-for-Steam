@@ -24,6 +24,17 @@ function informationSvg(): string {
 	return `<svg class="SVGIcon_Button SVGIcon_Information" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 10.4v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.2" r="1.15" fill="currentColor"/></svg>`;
 }
 
+function normalizeInformationButtonIcon(button: HTMLElement, nativeWrapperClass = ''): void {
+	const existing = button.querySelector('svg');
+	if (existing) {
+		existing.outerHTML = informationSvg();
+		return;
+	}
+	// A validated native blueprint normally contains an SVG. Keep a defensive
+	// fallback so a Steam markup change still produces the correct semantic icon.
+	button.innerHTML = `<div class="${nativeWrapperClass}">${informationSvg()}</div>`;
+}
+
 function nativeFeatureSvg(feature: NativeGameFeature): string {
 	switch (feature.kind) {
 		case 'cloud':
@@ -97,6 +108,11 @@ function resizeFallbackInfoPanel(panel: HTMLElement): void {
 function setNativeInfoExpanded(doc: Document, key: string, expanded: boolean): void {
 	if (expanded) expandedNativeGameInfoKeys.add(key);
 	else expandedNativeGameInfoKeys.delete(key);
+	while (expandedNativeGameInfoKeys.size > 128) {
+		const oldest = expandedNativeGameInfoKeys.values().next().value as string | undefined;
+		if (!oldest) break;
+		expandedNativeGameInfoKeys.delete(oldest);
+	}
 	const panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
 	const outerModule = GAME_INFO_OUTER_CLASS_MODULE();
 	if (panel && panel.dataset.gameKey === key) {
@@ -127,9 +143,10 @@ function setNativeInfoExpanded(doc: Document, key: string, expanded: boolean): v
 	}
 }
 
-export function removeNativeInfoPanel(doc: Document): void {
+export function removeNativeInfoPanel(doc: Document, preserveExpansion = false): void {
 	const panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
 	if (!panel) return;
+	if (!preserveExpansion) expandedNativeGameInfoKeys.delete(panel.dataset.gameKey || '');
 	nativeInfoResizeObservers.get(panel)?.disconnect();
 	panel.remove();
 }
@@ -138,7 +155,10 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 	let panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
 	const signature = nativeInfoSignature(model);
 	if (panel && (panel.dataset.gameKey !== model.key || panel.dataset.signature !== signature)) {
-		removeNativeInfoPanel(doc);
+		// A metadata refresh within the same route may rebuild the panel. Preserve
+		// the user's current choice only for that rebuild; ordinary route cleanup
+		// deletes it so returning to any game always starts collapsed.
+		removeNativeInfoPanel(doc, panel.dataset.gameKey === model.key);
 		panel = null;
 	}
 	if (!panel) {
@@ -195,10 +215,11 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 			button.dataset.gdlGameInfoButton = '1';
 			button.dataset.gameKey = model.key;
 			if (!button.className) button.className = playbarModule.native ? `${classes.MenuButton || ''}` : 'gdl-info-button-fallback';
-			// Preserve Steam's captured button markup and SVG exactly. It carries
-			// Steam's own hover lighting/animation. Only builds without a native
-			// blueprint use our structurally compatible fallback.
+			// Preserve Steam's native button structure/classes for hover lighting,
+			// but never trust a captured SVG: controller-driven play-bar rebuilds can
+			// otherwise leak an unrelated arrow icon into this information action.
 			if (!usesNativeBlueprint) button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
+			normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
 			button.setAttribute('type', 'button');
 			button.setAttribute('aria-label', gdlText('show_game_details', 'Show game details'));
 			button.addEventListener('click', event => {
@@ -210,8 +231,8 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 			let favorite = elementsWithCssModuleClass(container, classes.FavoriteButton)[0] || null;
 			while (favorite && favorite.parentElement !== container) favorite = favorite.parentElement;
 			container.insertBefore(button, favorite);
-		} else if (button.dataset.gdlNativeBlueprint !== '1' && !button.querySelector('.SVGIcon_Information')) {
-			button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
+		} else if (!button.querySelector('.SVGIcon_Information')) {
+			normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
 		}
 		button.dataset.gameKey = model.key;
 	}

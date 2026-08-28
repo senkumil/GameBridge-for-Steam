@@ -10,12 +10,14 @@ export interface RequestCacheOptions<T> {
 	ttlMs: number;
 	retries?: number;
 	baseDelayMs?: number;
+	maxEntries?: number;
 	isCacheable?: (value: T | null) => value is T;
 }
 
 interface CachedValue<T> {
 	value: T;
 	expiresAt: number;
+	lastAccessAt: number;
 }
 
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -30,7 +32,10 @@ export class RetryingRequestCache<T> {
 	async get(key: string, loader: () => Promise<T | null>): Promise<T | null> {
 		const cached = this.values.get(key);
 		if (cached) {
-			if (cached.expiresAt > Date.now()) return cached.value;
+			if (cached.expiresAt > Date.now()) {
+				cached.lastAccessAt = Date.now();
+				return cached.value;
+			}
 			this.values.delete(key);
 		}
 		const active = this.inFlight.get(key);
@@ -41,7 +46,9 @@ export class RetryingRequestCache<T> {
 		request = this.loadWithRetry(loader)
 			.then(value => {
 				if (requestEpoch === this.epoch && this.isCacheable(value)) {
-					this.values.set(key, { value, expiresAt: Date.now() + this.options.ttlMs });
+					const now = Date.now();
+					this.values.set(key, { value, expiresAt: now + this.options.ttlMs, lastAccessAt: now });
+					this.prune();
 				}
 				return value;
 			})
@@ -61,6 +68,7 @@ export class RetryingRequestCache<T> {
 			this.values.delete(key);
 			return null;
 		}
+		cached.lastAccessAt = Date.now();
 		return cached.value;
 	}
 
@@ -74,6 +82,20 @@ export class RetryingRequestCache<T> {
 
 	private isCacheable(value: T | null): value is T {
 		return this.options.isCacheable ? this.options.isCacheable(value) : value !== null;
+	}
+
+	private prune(): void {
+		const now = Date.now();
+		for (const [key, value] of this.values) {
+			if (value.expiresAt <= now) this.values.delete(key);
+		}
+		const maxEntries = Math.max(1, this.options.maxEntries ?? 64);
+		if (this.values.size <= maxEntries) return;
+		const oldest = Array.from(this.values.entries()).sort((a, b) => a[1].lastAccessAt - b[1].lastAccessAt);
+		for (const [key] of oldest) {
+			if (this.values.size <= maxEntries) break;
+			this.values.delete(key);
+		}
 	}
 
 	private async loadWithRetry(loader: () => Promise<T | null>): Promise<T | null> {

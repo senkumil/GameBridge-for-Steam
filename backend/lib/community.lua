@@ -6,6 +6,7 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
+local lru = deps.lru_cache
 local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
 local M = {}
 local detection_url_encode = util.url_encode
@@ -158,10 +159,11 @@ function M.fetch_community_content(steam_app_id, language)
     local safe_language = requested_language:match("^[%w_-]+$") or "english"
     local items = {}
 
-    -- Steam paginates community hub cards. Gather two pages from each native
-    -- subsection so the UI can progressively reveal further results on scroll.
+    -- One page per native subsection already supplies up to 48 cards. Loading
+    -- additional pages multiplied network/HTML parsing cost for content that is
+    -- normally below the fold and rarely reached.
     local function fetch_pages(subsection, fallback_type, label)
-        for page = 1, 2 do
+        for page = 1, 1 do
             local url = "https://steamcommunity.com/app/" .. appid
                 .. "/homecontent/?l=" .. detection_url_encode(safe_language) .. "&browsefilter=trend&numperpage=24&p=" .. page
                 .. "&appid=" .. appid .. "&appHubSubSection=" .. subsection .. "&forceanon=1"
@@ -192,6 +194,7 @@ end
 -- page below provides the AppID -> CDN URL index.  Results are cached for the
 -- lifetime of the backend so navigating between games does not repeat work.
 local community_items_catalog_cache = {}
+local COMMUNITY_ITEMS_CACHE_LIMIT = 32
 
 local function community_items_clean(value)
     local text = html_unescape(tostring(value or ""))
@@ -329,7 +332,8 @@ function M.fetch_community_items_catalog(steam_app_id, language)
 
     local cache_key = appid .. "|" .. requested_language
     if community_items_catalog_cache[cache_key] then
-        return community_items_catalog_cache[cache_key]
+        lru.touch(community_items_catalog_cache[cache_key])
+        return community_items_catalog_cache[cache_key].value
     end
 
     local market_url = "https://steamcommunity.com/market/search/render/"
@@ -386,7 +390,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
     end
 
     local encoded = cjson.encode(result)
-    community_items_catalog_cache[cache_key] = encoded
+    lru.put(community_items_catalog_cache, cache_key, { value = encoded }, COMMUNITY_ITEMS_CACHE_LIMIT)
     return encoded
 end
 

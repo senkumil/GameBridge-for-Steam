@@ -6,9 +6,16 @@ local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
+local lru = deps.lru_cache
 local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
 local M = {}
 local html_unescape = util.html_unescape
+-- A delisted/retired AppID still has a Steam library entry, but its News Hub
+-- often responds with the generic Store shell instead of an events payload.
+-- Remember that terminal capability result for this plugin session so Spanish
+-- + English fallback requests do not repeat a known-useless fetch or warning.
+local partner_events_unavailable = {}
+local PARTNER_UNAVAILABLE_CACHE_LIMIT = 64
 function M.fetch_news(steam_app_id, language)
     steam_app_id = tostring(steam_app_id or "")
     local lang = tostring(language or "")
@@ -65,34 +72,49 @@ local function scrape_partner_events(appid, lang, max)
     lang = tostring(lang or "english")
     max = max or 10
 
+    if partner_events_unavailable[appid] then
+        lru.touch(partner_events_unavailable[appid])
+        return {}, true
+    end
+
+    local function mark_unavailable()
+        lru.put(partner_events_unavailable, appid, {}, PARTNER_UNAVAILABLE_CACHE_LIMIT)
+    end
+
     -- The old ajaxgetpartnereventspage endpoint is gone; the news hub page
     -- embeds the same event data in its data-initialEvents attribute
     local url = "https://store.steampowered.com/news/app/" .. appid .. "?l=" .. lang
-    logger:info("Fetching partner events: " .. url)
-
     local ok, res = pcall(http.get, url, {
         headers = { ["Accept"] = "text/html,*/*" },
         timeout = 20
     })
     if not ok or not res or res.status ~= 200 or not res.body then
-        logger:warn("Partner events fetch failed for appid " .. appid)
-        return {}
+        -- A missing/deleted Store application is an expected no-content case.
+        -- Do not turn it into a warning that looks like a plugin failure.
+        if res and (res.status == 404 or res.status == 410) then
+            mark_unavailable()
+            return {}, true
+        end
+        return {}, false
     end
 
     local marker = 'data-initialEvents="'
     local a = res.body:find(marker, 1, true)
     if not a then
-        logger:warn("Partner events: data-initialEvents not found for appid " .. appid)
-        return {}
+        mark_unavailable()
+        return {}, true
     end
     local vstart = a + #marker
     local vend = res.body:find('"', vstart, true)
-    if not vend then return {} end
+    if not vend then
+        mark_unavailable()
+        return {}, true
+    end
 
     local ok2, body = pcall(cjson.decode, html_unescape(res.body:sub(vstart, vend - 1)))
     if not ok2 or type(body) ~= "table" or type(body.events) ~= "table" then
-        logger:warn("Partner events parse failed for appid " .. appid)
-        return {}
+        mark_unavailable()
+        return {}, true
     end
 
     local items = {}
@@ -139,8 +161,7 @@ local function scrape_partner_events(appid, lang, max)
         end
     end
 
-    logger:info("Partner events: " .. tostring(#items) .. " item(s) for appid " .. appid)
-    return items
+    return items, false
 end
 
 function M.fetch_partner_events(steam_app_id, language)
@@ -153,7 +174,8 @@ function M.fetch_partner_events(steam_app_id, language)
     end
     lang = lang:gsub("[^%w_]", "")
     if lang == "" then lang = "english" end
-    return cjson.encode({ items = scrape_partner_events(appid, lang, 50) })
+    local items, unavailable = scrape_partner_events(appid, lang, 50)
+    return cjson.encode({ items = items, unavailable = unavailable == true })
 end
 
 return M

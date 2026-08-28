@@ -128,6 +128,16 @@ export const GAME_INFO_OUTER_CLASSES_FALLBACK: CssClasses = {
 	GameInfoShadow: '_1FXWy2UilVZIppT-PetDWw',
 };
 
+/** Library Home portrait/card classes. These are resolved dynamically; the
+ * fallback only covers the Steam client build against which this release was
+ * verified. Keeping this small avoids depending on the complete card layout. */
+export const APP_PORTRAIT_CLASSES_FALLBACK: CssClasses = {
+	LibraryItemBox: 'WYgDg9NyCcMIVuMyZ_NBC',
+	PlaytimeDetails: '_3bkuozxKIatrWG3aeisthc',
+	PlayedRecent: '_3JWBBEulYkYmDLJr485oex',
+	PlayedTotal: 'ma8y_VgPze1mscYhW6-oS',
+};
+
 export const GAME_INFO_CLASSES_FALLBACK: CssClasses = {
 	Container: '_2jPMy2QZr8bWi6yrk5ZzHA',
 	InnerContainer: '_37mmOlZM_8n5yJAG5CHiW7',
@@ -186,6 +196,7 @@ let _achClassModule: ResolvedCssClasses | null = null;
 let _postClassModule: ResolvedCssClasses | null = null;
 let _playbarClassModule: ResolvedCssClasses | null = null;
 let _gameInfoOuterClassModule: ResolvedCssClasses | null = null;
+let _appPortraitClassModule: ResolvedCssClasses | null = null;
 let _gameInfoClassModule: ResolvedCssClasses | null = null;
 let _linksBarClassModule: ResolvedCssClasses | null = null;
 
@@ -233,6 +244,15 @@ export const GAME_INFO_OUTER_CLASS_MODULE = (): ResolvedCssClasses =>
 		GAME_INFO_OUTER_CLASSES_FALLBACK,
 	));
 
+export const APP_PORTRAIT_CLASS_MODULE = (): ResolvedCssClasses =>
+	(_appPortraitClassModule ||= resolveClassModule(
+		module => module.LibraryItemBox
+			&& module.PlaytimeDetails
+			&& module.PlayedRecent
+			&& module.PlayedTotal,
+		APP_PORTRAIT_CLASSES_FALLBACK,
+	));
+
 export const GAME_INFO_CLASS_MODULE = (): ResolvedCssClasses =>
 	(_gameInfoClassModule ||= resolveClassModule(
 		module => module.InnerContainer
@@ -256,6 +276,7 @@ export const ACH_CLASSES = (): CssClasses => ACH_CLASS_MODULE().classes;
 export const POST_CLASSES = (): CssClasses => POST_CLASS_MODULE().classes;
 export const PLAYBAR_CLASSES = (): CssClasses => PLAYBAR_CLASS_MODULE().classes;
 export const GAME_INFO_OUTER_CLASSES = (): CssClasses => GAME_INFO_OUTER_CLASS_MODULE().classes;
+export const APP_PORTRAIT_CLASSES = (): CssClasses => APP_PORTRAIT_CLASS_MODULE().classes;
 export const GAME_INFO_CLASSES = (): CssClasses => GAME_INFO_CLASS_MODULE().classes;
 export const LINKS_BAR_CLASSES = (): CssClasses => LINKS_BAR_CLASS_MODULE().classes;
 
@@ -270,6 +291,7 @@ export function resetResolvedCssClassModules(): void {
 	_postClassModule = null;
 	_playbarClassModule = null;
 	_gameInfoOuterClassModule = null;
+	_appPortraitClassModule = null;
 	_gameInfoClassModule = null;
 	_linksBarClassModule = null;
 }

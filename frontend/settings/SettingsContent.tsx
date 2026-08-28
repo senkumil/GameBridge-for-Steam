@@ -1,5 +1,4 @@
 import React from 'react';
-import { Toggle } from '@steambrew/client';
 import type { LocalAchievementItem } from '../domain/types';
 import {
 	backendLog,
@@ -9,8 +8,20 @@ import {
 } from '../api/backend';
 import { gdlText, subscribeSteamLanguageChange } from '../steam/localization';
 import { fetchLocalAchievementData } from '../features/achievements/service';
+import { refreshLocalAchievementUI } from '../features/achievements/runtime';
 import { clearLibraryAssetCaches } from '../features/library/artwork';
 import { getPreferences, setPreferences, subscribePreferences } from '../core/preferences';
+import { subscribeMappings } from '../core/mappings';
+import {
+	clearNativeAddAutoPromptSuppressions,
+	getCommittedShortcutSteamAppId,
+	getNativeAddAutoPromptSuppressions,
+	getAllShortcutRecords,
+	linkAllShortcutsExperimental,
+	requestManualShortcutLink,
+	unlinkAllShortcutsFromSteam,
+	unlinkShortcutFromSteam,
+} from '../features/shortcuts/runtime';
 
 const DEFAULT_ACHIEVEMENT_BASE_PATH = '%APPDATA%\\GSE Saves';
 
@@ -21,27 +32,95 @@ export interface SettingsContentProps {
 
 interface SettingsToggleProps {
 	checked: boolean;
+	disabled?: boolean;
 	label: string;
 	onChange: (checked: boolean) => void;
 }
 
-/** Use Steam's own control: it participates in the CEF focus/input system. */
-const SettingsToggle = ({ checked, label, onChange }: SettingsToggleProps): React.ReactElement => {
-	const handleChange = (value: boolean | { target?: { checked?: boolean }; currentTarget?: { checked?: boolean } }): void => {
-		// Steam has shipped both Toggle(onChange: boolean) and Toggle(onChange:
-		// event) implementations. Supporting both prevents an event object from
-		// being sanitized to false by the preference store.
-		const fromEvent = typeof value === 'object'
-			? (value.currentTarget?.checked ?? value.target?.checked)
-			: undefined;
-		onChange(typeof value === 'boolean' ? value : (typeof fromEvent === 'boolean' ? fromEvent : !checked));
-	};
+/**
+ * Keep global settings fully controlled by React. Steam has shipped different
+ * Toggle onChange contracts across client builds, and some builds leave a
+ * controlled toggle visually frozen even after its preference was persisted.
+ */
+const SettingsToggle = ({ checked, disabled = false, label, onChange }: SettingsToggleProps): React.ReactElement => {
+	const controlRef = React.useRef<HTMLButtonElement>(null);
+	const current = React.useRef({ checked, disabled, onChange });
+	current.current = { checked, disabled, onChange };
+	React.useEffect(() => {
+		const control = controlRef.current;
+		if (!control) return undefined;
+		const activate = (event: Event): void => {
+			if (current.current.disabled) return;
+			event.preventDefault();
+			event.stopPropagation();
+			const next = !current.current.checked;
+			// Paint immediately. The following preference update performs the
+			// authoritative controlled render, but Steam cannot visually swallow
+			// the interaction while that render is scheduled.
+			current.current.checked = next;
+			control.setAttribute('aria-checked', next ? 'true' : 'false');
+			control.style.background = next ? '#1a9fff' : '#4b5869';
+			const knob = control.firstElementChild as HTMLElement | null;
+			if (knob) knob.style.left = next ? '21px' : '3px';
+			current.current.onChange(next);
+		};
+		const handlePointerDown = (event: PointerEvent): void => {
+			if (event.button === 0) activate(event);
+		};
+		const handleKeyDown = (event: KeyboardEvent): void => {
+			if (event.key === 'Enter' || event.key === ' ') activate(event);
+		};
+		// Native listeners are intentional. React's delegated events can be
+		// consumed by Steam's settings navigation layer before reaching plugins.
+		control.addEventListener('pointerdown', handlePointerDown);
+		control.addEventListener('keydown', handleKeyDown);
+		return () => {
+			control.removeEventListener('pointerdown', handlePointerDown);
+			control.removeEventListener('keydown', handleKeyDown);
+		};
+	}, []);
 	return (
-		<div title={label} style={{ display: 'inline-flex', flex: '0 0 auto', alignItems: 'center' }}>
-			<Toggle value={checked} onChange={handleChange} />
-		</div>
+		<button
+			ref={controlRef}
+			type="button"
+			role="switch"
+			aria-checked={checked}
+			aria-label={label}
+			title={label}
+			disabled={disabled}
+			style={{
+				position: 'relative', width: '42px', height: '24px', flex: '0 0 42px', padding: 0,
+				border: 0, borderRadius: '12px', background: checked ? '#1a9fff' : '#4b5869',
+				cursor: disabled ? 'default' : 'pointer', opacity: disabled ? .45 : 1, pointerEvents: 'auto',
+			}}
+		>
+			<span aria-hidden="true" style={{
+				position: 'absolute', top: '3px', left: checked ? '21px' : '3px', width: '18px', height: '18px',
+				borderRadius: '50%', background: '#f1f1f1', transition: 'left .12s ease',
+			}} />
+		</button>
 	);
 };
+
+function bulkLinkReasonLabel(reason: string | undefined): string {
+	switch (String(reason || '')) {
+		case 'ambiguous_or_low_confidence':
+			return gdlText('bulk_link_reason_ambiguous', 'No sufficiently reliable match was found.');
+		case 'context_unavailable':
+			return gdlText('bulk_link_reason_context', 'The shortcut information could not be read.');
+		case 'detection_failed':
+			return gdlText('bulk_link_reason_detection', 'Candidate detection failed.');
+		case 'invalid_appid':
+			return gdlText('bulk_link_reason_invalid_appid', 'The detected Steam AppID was invalid.');
+		case 'refusing_to_modify_native_steam_app':
+			return gdlText('bulk_link_reason_native', 'The entry was not recognized as a non-Steam shortcut.');
+		case 'canonical_data_unavailable':
+		case 'setup_incomplete':
+			return gdlText('bulk_link_reason_incomplete', 'The link could not finish all required resources.');
+		default:
+			return gdlText('bulk_link_reason_failed', 'The link could not be completed.');
+	}
+}
 
 export const SettingsContent = ({ clearAchievementCache, showAchievementToast }: SettingsContentProps) => {
 	const [, setLanguageRevision] = React.useState(0);
@@ -52,12 +131,46 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 	const [pathStatus, setPathStatus] = React.useState<{ text: string; color: string } | null>(null);
 	const [preferences, setPreferencesState] = React.useState(() => getPreferences());
 	React.useEffect(() => subscribePreferences(setPreferencesState), []);
+	const [shortcutRevision, setShortcutRevision] = React.useState(0);
+	const [shortcutActionBusy, setShortcutActionBusy] = React.useState<string>('');
+	const [shortcutActionStatus, setShortcutActionStatus] = React.useState<{ text: string; color: string } | null>(null);
+	const [bulkLinkProgress, setBulkLinkProgress] = React.useState<{ phase: 'analyzing' | 'linking'; done: number; total: number; title: string } | null>(null);
+	const [bulkLinkStatus, setBulkLinkStatus] = React.useState<{ text: string; color: string } | null>(null);
+	const [bulkLinkReport, setBulkLinkReport] = React.useState<Awaited<ReturnType<typeof linkAllShortcutsExperimental>> | null>(null);
+	React.useEffect(() => {
+		const refresh = (): void => setShortcutRevision(value => value + 1);
+		const unsubscribeMappings = subscribeMappings(refresh);
+		const onVisible = (): void => { if (!document.hidden) refresh(); };
+		window.addEventListener('gdl:shortcuts-changed', refresh);
+		window.addEventListener('focus', refresh);
+		document.addEventListener('visibilitychange', onVisible);
+		return () => {
+			unsubscribeMappings();
+			window.removeEventListener('gdl:shortcuts-changed', refresh);
+			window.removeEventListener('focus', refresh);
+			document.removeEventListener('visibilitychange', onVisible);
+		};
+	}, []);
+	const shortcutRows = React.useMemo(() => getAllShortcutRecords()
+		.map(record => ({
+			id: record.id,
+			title: record.title,
+			steamAppId: String(getCommittedShortcutSteamAppId(record.id) || ''),
+		}))
+		.sort((a, b) => a.title.localeCompare(b.title)), [shortcutRevision]);
+	const linkedShortcutCount = shortcutRows.filter(row => /^\d+$/.test(row.steamAppId)).length;
+	const bulkNotLinked = bulkLinkReport?.outcomes.filter(item => item.status === 'skipped' || item.status === 'failed') || [];
+	const bulkQueued = bulkLinkReport?.outcomes.filter(item => item.status === 'queued') || [];
+	const suppressedAutoSuggestions = React.useMemo(() => getNativeAddAutoPromptSuppressions(), [shortcutRevision]);
 
 	const updatePreferences = (patch: Parameters<typeof setPreferences>[0]): void => {
 		const next = setPreferences(patch);
 		setPreferencesState(next);
 		if ('steamGridDbApiKey' in patch || 'autoCommunityArtwork' in patch) clearLibraryAssetCaches();
 		clearAchievementCache();
+		if ('simulateAchievements' in patch || 'unlockOnlineAchievements' in patch) {
+			refreshLocalAchievementUI();
+		}
 	};
 
 	React.useEffect(() => {
@@ -180,6 +293,82 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 		}
 	};
 
+	const linkAllShortcuts = async (): Promise<void> => {
+		if (shortcutActionBusy) return;
+		setShortcutActionBusy('bulk-link');
+		setBulkLinkReport(null);
+		setBulkLinkProgress(null);
+		setBulkLinkStatus({ text: gdlText('bulk_link_running', 'Analyzing and linking high-confidence matches...'), color: '#66c0f4' });
+		try {
+			const result = await linkAllShortcutsExperimental((done, total, title, phase) => {
+				setBulkLinkProgress({ phase, done, total, title });
+				setBulkLinkStatus({
+					text: phase === 'analyzing'
+						? gdlText('bulk_link_analyzing_progress', 'Analyzing {done}/{total}: {game}', { done: String(done), total: String(total), game: title })
+						: gdlText('bulk_link_progress', 'Linking {done}/{total}: {game}', { done: String(done), total: String(total), game: title }),
+					color: '#66c0f4',
+				});
+			});
+			setShortcutRevision(value => value + 1);
+			setBulkLinkReport(result);
+			setBulkLinkProgress(null);
+			if (result.total === 0) {
+				setBulkLinkStatus({ text: gdlText('bulk_link_none', 'There are no unlinked games to review.'), color: '#8f98a0' });
+			} else {
+				setBulkLinkStatus({
+					text: gdlText('bulk_link_result', 'Bulk link finished: {linked} linked, {queued} queued for retry, {skipped} ambiguous skipped, {failed} failed.', {
+						linked: String(result.linked), queued: String(result.queued), skipped: String(result.skipped), failed: String(result.failed),
+					}),
+					color: result.failed > 0 || result.skipped > 0 ? '#d6b25e' : '#59bf40',
+				});
+			}
+		} catch (error) {
+			backendLog('Experimental bulk link failed: ' + String(error));
+			setBulkLinkProgress(null);
+			setBulkLinkStatus({ text: gdlText('bulk_link_failed', 'Bulk linking could not be completed.'), color: '#d94126' });
+		} finally {
+			setShortcutActionBusy('');
+		}
+	};
+
+	const unlinkAllShortcuts = async (): Promise<void> => {
+		if (shortcutActionBusy) return;
+		setShortcutActionBusy('all');
+		setShortcutActionStatus({ text: gdlText('bulk_unlinking', 'Unlinking all GameBridge games...'), color: '#8f98a0' });
+		try {
+			const result = await unlinkAllShortcutsFromSteam();
+			setShortcutRevision(value => value + 1);
+			setShortcutActionStatus({
+				text: result.ok
+					? gdlText('bulk_unlink_success', 'All linked games were unlinked. Automatic prompts remain suppressed until you explicitly link again.')
+					: gdlText('bulk_unlink_partial', 'Some games could not be unlinked ({failed} failed).', { failed: String(result.failed) }),
+				color: result.ok ? '#59bf40' : '#d6b25e',
+			});
+		} catch (error) {
+			backendLog('Bulk unlink failed: ' + String(error));
+			setShortcutActionStatus({ text: gdlText('bulk_unlink_failed', 'Could not unlink all games.'), color: '#d94126' });
+		} finally {
+			setShortcutActionBusy('');
+		}
+	};
+
+	const unlinkOneShortcut = async (row: { id: number; title: string; steamAppId: string }): Promise<void> => {
+		if (shortcutActionBusy) return;
+		setShortcutActionBusy(String(row.id));
+		try {
+			const result = await unlinkShortcutFromSteam({ shortcutAppId: row.id, title: row.title, steamAppId: row.steamAppId || undefined });
+			setShortcutRevision(value => value + 1);
+			setShortcutActionStatus({
+				text: result.ok
+					? gdlText('settings_unlink_one_success', 'Unlinked: {game}', { game: row.title })
+					: gdlText('settings_unlink_one_failed', 'Could not unlink: {game}', { game: row.title }),
+				color: result.ok ? '#59bf40' : '#d94126',
+			});
+		} finally {
+			setShortcutActionBusy('');
+		}
+	};
+
 	const disabled = loadingPath || savingPath;
 	return (
 		<div style={{
@@ -193,6 +382,10 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 			overflowX: 'hidden',
 			overflowWrap: 'anywhere',
 			paddingRight: '2px',
+			// Steam reserves the bottom edge of this sidebar window for native
+			// resize gestures. Extra scrollable space keeps the final controls out
+			// of that hit-test area at every UI scale and window size.
+			paddingBottom: '64px',
 		}}>
 			{/* ── Tarjeta Guía Rápida Paso a Paso ──────────────────────── */}
 			<div style={{
@@ -340,18 +533,174 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 				{testStatus && <div style={{ marginTop: '6px', color: testStatus.color, fontSize: '11.5px' }}>{testStatus.text}</div>}
 			</div>
 
-			{/* ── Detección automática de accesos directos ─────────────── */}
+			{/* ── Gestión manual de vinculaciones ──────────────────────── */}
 			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
 				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
-					{gdlText('auto_detect_title', 'Automatic shortcut detection')}
+					{gdlText('link_management_title', 'Game link management')}
 				</div>
-				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
-					{gdlText('auto_detect_description', 'Suggests a link when new non-Steam games are added to your library.')}
+				<div style={{ marginBottom: '8px', color: '#8f98a0', fontSize: '11.5px' }}>
+					{gdlText('link_management_description', 'Link or unlink individual non-Steam games. Automatic review, when enabled, is isolated to Steam’s native Add a Non-Steam Game flow.')}
 				</div>
-				<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
-					<SettingsToggle checked={preferences.autoDetectShortcuts} onChange={checked => updatePreferences({ autoDetectShortcuts: checked })} label={gdlText('auto_detect_shortcuts_toggle', 'Show a linking suggestion when adding a non-Steam game')} />
-					<span style={{ fontSize: '12px' }}>{gdlText('auto_detect_shortcuts_toggle', 'Show a linking suggestion when adding a non-Steam game')}</span>
+
+				<div style={{ padding: '10px 11px', background: 'rgba(27,40,56,.55)', border: '1px solid rgba(255,255,255,.09)', borderRadius: '3px' }}>
+					<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+						<div>
+							<div style={{ color: '#8f98a0', fontSize: '11.5px' }}>
+								{gdlText('link_management_summary', '{linked} of {total} non-Steam game(s) are linked.', { linked: String(linkedShortcutCount), total: String(shortcutRows.length) })}
+							</div>
+						</div>
+						<div style={{ display: 'flex', gap: '7px', flexWrap: 'wrap' }}>
+							<button
+								type="button"
+								disabled={Boolean(shortcutActionBusy) || shortcutRows.length === 0}
+								onClick={(): void => { void unlinkAllShortcuts(); }}
+								style={{ padding: '6px 10px', color: '#dcdedf', background: '#3d4450', border: 0, borderRadius: '2px', cursor: shortcutActionBusy ? 'default' : 'pointer', fontSize: '11.5px' }}
+							>
+								{shortcutActionBusy === 'all' ? gdlText('bulk_unlinking_short', 'Unlinking...') : gdlText('unlink_all_button', 'Unlink all')}
+							</button>
+						</div>
+					</div>
+					{shortcutActionStatus && <div style={{ marginTop: '8px', color: shortcutActionStatus.color, fontSize: '11.5px' }}>{shortcutActionStatus.text}</div>}
+					<div style={{ marginTop: '9px', maxHeight: '250px', overflowY: 'auto', borderTop: '1px solid rgba(255,255,255,.07)' }}>
+						{shortcutRows.length === 0 ? (
+							<div style={{ padding: '9px 0 2px', color: '#8f98a0', fontSize: '11.5px' }}>{gdlText('link_management_empty', 'No non-Steam games are currently available.')}</div>
+						) : shortcutRows.map(row => {
+							const linked = /^\d+$/.test(row.steamAppId);
+							const busy = shortcutActionBusy === String(row.id);
+							return (
+								<div key={row.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,.055)' }}>
+									<div style={{ minWidth: 0, flex: 1 }}>
+										<div title={row.title} style={{ color: '#dcdedf', fontSize: '11.8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.title}</div>
+										<div style={{ marginTop: '2px', color: linked ? '#59bf40' : '#8f98a0', fontSize: '10.8px' }}>
+											{linked ? gdlText('game_linked_appid', 'Linked · Steam AppID {appid}', { appid: row.steamAppId }) : gdlText('game_unlinked_status', 'Unlinked')}
+										</div>
+									</div>
+									{linked ? (
+										<button
+											type="button"
+											disabled={Boolean(shortcutActionBusy)}
+											onClick={(): void => { void unlinkOneShortcut(row); }}
+											style={{ flex: '0 0 auto', padding: '5px 9px', color: '#dcdedf', background: '#3d4450', border: 0, borderRadius: '2px', cursor: shortcutActionBusy ? 'default' : 'pointer', fontSize: '11px' }}
+										>
+											{busy ? gdlText('bulk_unlinking_short', 'Unlinking...') : gdlText('unlink', 'Unlink')}
+										</button>
+									) : (
+										<button
+											type="button"
+											disabled={Boolean(shortcutActionBusy)}
+											onClick={(): void => {
+												const opened = requestManualShortcutLink(row.id);
+												setShortcutActionStatus({
+													text: opened ? gdlText('manual_link_review_started', 'Link review opened for {game}.', { game: row.title }) : gdlText('manual_link_review_failed', 'Could not start link review for {game}.', { game: row.title }),
+													color: opened ? '#66c0f4' : '#d94126',
+												});
+											}}
+											style={{ flex: '0 0 auto', padding: '5px 9px', color: '#fff', background: 'linear-gradient(90deg,#06bfff,#2d73ff)', border: 0, borderRadius: '2px', cursor: shortcutActionBusy ? 'default' : 'pointer', fontSize: '11px' }}
+										>
+											{gdlText('link_button', 'Link')}
+										</button>
+									)}
+								</div>
+							);
+						})}
+					</div>
 				</div>
+
+				<div style={{ marginTop: '12px', padding: '10px 11px', background: 'rgba(229,173,55,.07)', border: '1px solid rgba(229,173,55,.28)', borderRadius: '3px' }}>
+					<div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '4px' }}>
+						<div style={{ fontWeight: 600, color: '#e5c07b', fontSize: '12px' }}>{gdlText('experimental_title', 'Experimental')}</div>
+					</div>
+					<div style={{ color: '#9da4ab', fontSize: '11.3px', lineHeight: 1.45 }}>
+						{gdlText('experimental_description', 'These tools prioritize safety: bulk linking skips ambiguous matches, and automatic review can only run after Steam’s native Add a Non-Steam Game dialog closes.')}
+					</div>
+
+					<div style={{ marginTop: '10px', paddingTop: '9px', borderTop: '1px solid rgba(255,255,255,.07)' }}>
+						<div style={{ fontWeight: 600, color: '#dcdedf', fontSize: '11.8px' }}>{gdlText('bulk_link_experimental_title', 'Fast bulk link')}</div>
+						<div style={{ marginTop: '3px', color: '#8f98a0', fontSize: '11px', lineHeight: 1.4 }}>{gdlText('bulk_link_experimental_description', 'Links high-confidence matches in the background without opening one dialog per game. Ambiguous games remain unlinked for manual review.')}</div>
+						<button
+							type="button"
+							disabled={Boolean(shortcutActionBusy) || shortcutRows.length === linkedShortcutCount}
+							onClick={(): void => { void linkAllShortcuts(); }}
+							style={{ marginTop: '8px', padding: '6px 10px', color: '#fff', background: shortcutActionBusy ? '#3d4450' : 'linear-gradient(90deg,#06bfff,#2d73ff)', border: 0, borderRadius: '2px', cursor: shortcutActionBusy ? 'default' : 'pointer', fontSize: '11.5px' }}
+						>
+							{shortcutActionBusy === 'bulk-link' ? gdlText('bulk_linking_short', 'Linking...') : gdlText('link_all_button', 'Link all')}
+						</button>
+						{bulkLinkProgress && shortcutActionBusy === 'bulk-link' && (
+							<div style={{ marginTop: '9px' }}>
+								<div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', color: '#c6d4df', fontSize: '11px' }}>
+									<span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+										{bulkLinkProgress.phase === 'analyzing'
+											? gdlText('bulk_link_analyzing_game', 'Analyzing: {game}', { game: bulkLinkProgress.title })
+											: gdlText('bulk_link_linking_game', 'Linking: {game}', { game: bulkLinkProgress.title })}
+									</span>
+									<strong style={{ flex: '0 0 auto', color: '#66c0f4' }}>{bulkLinkProgress.done}/{bulkLinkProgress.total}</strong>
+								</div>
+								<div style={{ height: '4px', marginTop: '6px', background: 'rgba(255,255,255,.08)', borderRadius: '2px', overflow: 'hidden' }}>
+									<div style={{ height: '100%', width: `${bulkLinkProgress.total > 0 ? Math.min(100, (bulkLinkProgress.done / bulkLinkProgress.total) * 100) : 0}%`, background: '#1a9fff', transition: 'width .18s ease' }} />
+								</div>
+							</div>
+						)}
+						{bulkLinkStatus && <div style={{ marginTop: '7px', color: bulkLinkStatus.color, fontSize: '11px', lineHeight: 1.4 }}>{bulkLinkStatus.text}</div>}
+						{bulkNotLinked.length > 0 && (
+							<div style={{ marginTop: '9px', padding: '8px 9px', background: 'rgba(217,65,38,.07)', border: '1px solid rgba(217,65,38,.18)', borderRadius: '2px' }}>
+								<div style={{ color: '#e7b39f', fontWeight: 600, fontSize: '11px' }}>
+									{gdlText('bulk_link_not_linked_title', 'Could not be linked ({count})', { count: String(bulkNotLinked.length) })}
+								</div>
+								<div style={{ marginTop: '5px', maxHeight: '130px', overflowY: 'auto' }}>
+									{bulkNotLinked.map(item => (
+										<div key={`${item.shortcutAppId}:${item.status}`} style={{ padding: '4px 0', borderTop: '1px solid rgba(255,255,255,.045)' }}>
+											<div style={{ color: '#dcdedf', fontSize: '10.8px' }}>{item.title}</div>
+											<div style={{ marginTop: '1px', color: '#8f98a0', fontSize: '10.2px' }}>{bulkLinkReasonLabel(item.reason)}</div>
+										</div>
+									))}
+								</div>
+							</div>
+						)}
+						{bulkQueued.length > 0 && (
+							<div style={{ marginTop: '7px', color: '#d6b25e', fontSize: '10.8px', lineHeight: 1.4 }}>
+								{gdlText('bulk_link_retrying_games', 'Still completing in the background ({count}): {games}', {
+									count: String(bulkQueued.length), games: bulkQueued.map(item => item.title).join(', '),
+								})}
+							</div>
+						)}
+					</div>
+
+					<div style={{ marginTop: '10px', paddingTop: '9px', borderTop: '1px solid rgba(255,255,255,.07)' }}>
+						<div style={{ fontWeight: 600, color: '#dcdedf', fontSize: '11.8px' }}>{gdlText('auto_detect_title', 'Native add-game detection')}</div>
+						<div style={{ marginTop: '3px', color: '#8f98a0', fontSize: '11px', lineHeight: 1.4 }}>{gdlText('auto_detect_native_add_description', 'Only watches the session created by Steam’s Add a Non-Steam Game dialog. Startup, navigation, language changes and unlinking can never trigger this prompt. Closing or rejecting an automatic prompt permanently suppresses it for that game.')}</div>
+						<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+							<SettingsToggle checked={preferences.autoDetectShortcuts} onChange={checked => updatePreferences({ autoDetectShortcuts: checked })} label={gdlText('auto_detect_shortcuts_toggle', 'Suggest linking only after adding a game through Steam’s native Add a Non-Steam Game dialog')} />
+							<span style={{ fontSize: '11.5px', color: '#c6d4df' }}>{gdlText('auto_detect_shortcuts_toggle', 'Suggest linking only after adding a game through Steam’s native Add a Non-Steam Game dialog')}</span>
+						</div>
+						{suppressedAutoSuggestions.length > 0 && (
+							<div style={{ marginTop: '9px', padding: '8px 9px', background: 'rgba(229,173,55,.07)', border: '1px solid rgba(229,173,55,.18)', borderRadius: '2px' }}>
+								<div style={{ color: '#d6b25e', fontSize: '10.8px', lineHeight: 1.4 }}>
+									{gdlText('auto_detect_suppressed_count', 'Permanently suppressed automatic suggestions: {count}.', { count: String(suppressedAutoSuggestions.length) })}
+								</div>
+								<div style={{ marginTop: '6px', maxHeight: '120px', overflowY: 'auto', borderTop: '1px solid rgba(255,255,255,.06)' }}>
+									{suppressedAutoSuggestions.map(item => (
+										<div key={item.key} title={item.executable} style={{ padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,.045)' }}>
+											<div style={{ color: '#dcdedf', fontSize: '10.8px' }}>{item.title}</div>
+											{!item.presentInLibrary && (
+												<div style={{ marginTop: '1px', color: '#8f98a0', fontSize: '10.1px' }}>
+													{gdlText('auto_detect_suppressed_missing', 'Shortcut is no longer present in the Library')}
+												</div>
+											)}
+										</div>
+									))}
+								</div>
+								<button
+									type="button"
+									onClick={(): void => { clearNativeAddAutoPromptSuppressions(); setShortcutRevision(value => value + 1); }}
+									style={{ marginTop: '7px', padding: '6px 9px', border: 0, borderRadius: '2px', background: '#3d4450', color: '#dcdedf', cursor: 'pointer', fontSize: '10.8px' }}
+								>
+									{gdlText('auto_detect_reset_suppressed', 'Reset rejected automatic suggestions')}
+								</button>
+							</div>
+						)}
+					</div>
+				</div>
+
 				<div style={{ marginTop: '12px', padding: '10px 11px', background: 'rgba(102,192,244,.06)', border: '1px solid rgba(102,192,244,.16)', borderRadius: '3px' }}>
 					<div style={{ fontWeight: 600, color: '#dcdedf', fontSize: '12px' }}>{gdlText('steamgriddb_artwork_title', 'Community artwork (SteamGridDB)')}</div>
 					<div style={{ marginTop: '4px', color: '#8f98a0', fontSize: '11.5px', lineHeight: 1.4 }}>
@@ -387,17 +736,23 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 				</div>
 			</div>
 
-			{/* ── Logros de prueba ───────────────────────────────────────── */}
+			{/* ── Política global de logros simulados ─────────────────────── */}
 			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
 				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
-					{gdlText('simulated_achievements_title', 'Test achievements')}
+					{gdlText('simulated_achievements_title', 'Simulated achievements')}
 				</div>
 				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
-					{gdlText('simulated_achievements_description', 'Use only to preview the interface when the game does not have a local progress file.')}
+					{gdlText('simulated_achievements_description', 'Global defaults for linked games. Per-game settings can override these values.')}
 				</div>
-				<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-					<SettingsToggle checked={preferences.simulateAchievements} onChange={checked => updatePreferences({ simulateAchievements: checked })} label={gdlText('simulate_achievements', 'Show deterministic test achievements when no local progress file exists')} />
-					<span style={{ fontSize: '12px' }}>{gdlText('simulate_achievements', 'Show deterministic test achievements when no local progress file exists')}</span>
+				<div style={{ display: 'grid', gap: '8px' }}>
+					<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+						<SettingsToggle checked={preferences.simulateAchievements} onChange={checked => updatePreferences({ simulateAchievements: checked })} label={gdlText('simulate_achievements', 'Enable simulated achievements when no local progress file exists')} />
+						<span style={{ fontSize: '12px' }}>{gdlText('simulate_achievements', 'Enable simulated achievements when no local progress file exists')}</span>
+					</div>
+					<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+						<SettingsToggle checked={preferences.unlockOnlineAchievements} onChange={checked => updatePreferences({ unlockOnlineAchievements: checked })} label={gdlText('unlock_online_achievements_toggle', 'Unlock only achievements identified as online or multiplayer')} />
+						<span style={{ fontSize: '12px' }}>{gdlText('unlock_online_achievements_toggle', 'Unlock only achievements identified as online or multiplayer')}</span>
+					</div>
 				</div>
 			</div>
 		</div>

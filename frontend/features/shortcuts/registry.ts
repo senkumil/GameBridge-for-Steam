@@ -1,5 +1,5 @@
 import { findMappingByExe, findMappingForTitle, mappings, shortcutMappingKey } from '../../core/mappings';
-import { getShortcutAppById, getSteamAppStore, readShortcutOverviewField, shortcutExecutableIdentity, shortcutPathBasename } from '../../steam/shortcuts';
+import { getSteamAppStore, readShortcutOverviewField, shortcutExecutableIdentity, shortcutPathBasename } from '../../steam/shortcuts';
 
 export interface ShortcutRecord {
 	id: number;
@@ -75,7 +75,16 @@ export function shortcutAlreadyLinked(id: number): boolean {
 	return /^\d+$/.test(String(mappings[shortcutMappingKey(id)] || ''));
 }
 
-/** Resolve existing mapping for a shortcut via ID, exact duplicate launch, executable path, or title. */
+export function getCommittedShortcutSteamAppId(id: number): string | null {
+	const value = String(mappings[shortcutMappingKey(id)] || '').trim();
+	return /^\d+$/.test(value) ? value : null;
+}
+
+/** Resolve an existing mapping without allowing one shortcut to inherit the
+ * identity of another franchise-relative title. Once a concrete Shortcut AppID
+ * is known, only exact ID, exact duplicate launch definition, or exact full
+ * executable path are accepted. Title/stem aliases are fallback-only when no
+ * concrete shortcut identity exists. */
 export function findMappingForShortcut(
 	shortcutAppId?: string | number | null,
 	title?: string | null,
@@ -84,26 +93,15 @@ export function findMappingForShortcut(
 	const numId = normalizedShortcutAppId(shortcutAppId);
 	if (numId) {
 		const exact = mappings[shortcutMappingKey(numId)];
-		if (exact && /^\d+$/.test(String(exact))) return String(exact);
-		const dup = findMappingForDuplicateShortcut(numId);
-		if (dup && /^\d+$/.test(String(dup))) return String(dup);
+		return exact && /^\d+$/.test(String(exact)) ? String(exact) : null;
 	}
+
 	if (exePath) {
 		const byExe = findMappingByExe(exePath);
 		if (byExe && /^\d+$/.test(String(byExe))) return String(byExe);
 	}
-	if (numId) {
-		const app = getShortcutAppById(numId);
-		if (app) {
-			const appExe = readShortcutOverviewField(app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
-			if (appExe) {
-				const byExe = findMappingByExe(appExe);
-				if (byExe && /^\d+$/.test(String(byExe))) return String(byExe);
-			}
-		}
-	}
 	if (title) {
-		const byTitle = findMappingForTitle(title, shortcutAppId);
+		const byTitle = findMappingForTitle(title);
 		if (byTitle && /^\d+$/.test(String(byTitle))) return String(byTitle);
 	}
 	return null;

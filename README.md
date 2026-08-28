@@ -46,6 +46,29 @@ The page renders cached core information immediately and hydrates network-backed
 
 ---
 
+## 📸 Screenshots
+
+These captures show the visual difference between an unlinked shortcut and a linked game, plus the achievement/feed surfaces and Big Picture integration.
+
+<p align="center">
+  <img src="docs/screenshots/library-before.png" alt="Before linking: a non-Steam shortcut with the default empty Library page" width="49%">
+  <img src="docs/screenshots/library-after.png" alt="After linking: official Steam artwork, activity and achievement data" width="49%">
+</p>
+<p align="center"><em>Before linking · After linking</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/library-achievements-feed.png" alt="Linked Library page with Steam achievements, news feed and trading cards" width="75%">
+</p>
+<p align="center"><em>Achievements, activity feed and community surfaces</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/big-picture-library.png" alt="Big Picture installed games grid with linked titles" width="49%">
+  <img src="docs/screenshots/big-picture-recent.png" alt="Big Picture recent games shelf with linked playtime" width="49%">
+</p>
+<p align="center"><em>Big Picture library · Big Picture recent games and playtime</em></p>
+
+---
+
 ## 🔍 Smart Automatic Detection and Linking
 
 When a newly added non-Steam shortcut is opened, GameBridge can suggest the most likely Steam release automatically.

@@ -1,16 +1,16 @@
 import type { ShortcutLinkResult, SteamGameData } from '../../domain/types';
 import { backendLog } from '../../api/backend';
-import { getGameData } from '../../core/game-data';
-import { normalizeTitle } from '../../core/text';
-import { exeMappingKey, exeStemMappingKey, shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
+import { getCanonicalGameData, getGameData } from '../../core/game-data';
+import { shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { gdlText } from '../../steam/localization';
-import { cleanShortcutPath, findActiveShortcutAppId, findShortcutAppIdByName, getShortcutAppById, readShortcutOverviewField, shortcutPathDirectory } from '../../steam/shortcuts';
-import { applyOfficialShortcutIcon, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult } from '../library/artwork';
+import { findActiveShortcutAppId, findShortcutAppIdByName, getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
+import { applyOfficialShortcutIcon, clearLibraryAssetCaches, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult } from '../library/artwork';
 import { saveLinkedGameNote } from './linked-notes';
 import { shortcutRuntimeHost } from './host';
+import { isShortcutDismissed, undismissShortcut } from './dismissed';
 import { getAllShortcutRecords } from './registry';
+import { rememberShortcutSteamAppId } from './link-history';
 
-const VERIFIED_AUTO_NO_LAUNCHER_APP_IDS = new Set<string>(['1817070']);
 let shortcutIdentityMutationDepth = 0;
 
 export function isShortcutIdentityMutationInProgress(): boolean {
@@ -22,77 +22,44 @@ export type ShortcutLinkStatus = (message: string, color?: string) => void;
 /**
  * Steam adds shortcuts picked from its "Add a Non-Steam Game" list
  * asynchronously. The confirmation dialog can be accepted before that entry
- * is visible through appStore, so resolve it over a short bounded window
- * rather than falling back to a title-only mapping and skipping its rename.
+ * is visible through appStore, so resolve it over a short bounded window. A
+ * stale pre-rename ID must fall through to title/executable recovery.
  */
-async function resolveShortcutForLink(doc: Document | null | undefined, title: string, initialId?: number | null): Promise<number | null> {
-	const waits = [0, 100, 250, 500, 900, 1500];
+async function resolveShortcutForLink(
+	doc: Document | null | undefined,
+	title: string,
+	initialId?: number | null,
+	executableHint = '',
+): Promise<number | null> {
+	const waits = [0, 100, 250, 500, 900, 1500, 2500];
+	const expectedExecutable = shortcutExecutableIdentity(executableHint);
 	for (const wait of waits) {
 		if (wait) await new Promise(resolve => setTimeout(resolve, wait));
-		const candidates = [
-			initialId ? Number(initialId) : null,
-			doc ? Number(findActiveShortcutAppId(doc, title) || 0) : null,
-			findShortcutAppIdByName(title),
-		];
-		for (const candidate of candidates) {
-			if (candidate && Number.isFinite(candidate) && candidate >= 2147483648 && getShortcutAppById(candidate)) return candidate;
+		if (initialId) {
+			const exact = Number(initialId);
+			if (Number.isFinite(exact) && exact >= 2147483648 && getShortcutAppById(exact)) return exact;
+		}
+		const routed = doc ? Number(findActiveShortcutAppId(doc, title) || 0) : 0;
+		if (routed >= 2147483648 && getShortcutAppById(routed)) return routed;
+		const byName = findShortcutAppIdByName(title);
+		if (byName && getShortcutAppById(byName)) return byName;
+		if (expectedExecutable) {
+			const executableMatches = getAllShortcutRecords().filter(record => shortcutExecutableIdentity(readShortcutOverviewField(
+				record.app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
+			)) === expectedExecutable);
+			if (executableMatches.length === 1) return executableMatches[0].id;
 		}
 	}
 	return null;
 }
 
-export function mergeNoLauncherOption(existing: string): string {
-	const current = String(existing || '').trim();
-	if (/(^|\s)-nolauncher(?=\s|$)/i.test(current)) return current;
-	return current ? `${current} -nolauncher` : '-nolauncher';
-}
-
-export function hasNoLauncherOption(value: string): boolean {
-	return /(^|\s)-nolauncher(?=\s|$)/i.test(String(value || '').trim());
-}
-
-export function shouldAutoApplyNoLauncher(steamAppId: string): boolean {
-	return VERIFIED_AUTO_NO_LAUNCHER_APP_IDS.has(String(steamAppId || '').trim());
-}
-
-export function applyNoLauncherOption(shortcutAppId: number, fallbackOptions = '', automatic = false): boolean {
-	if (!Number.isFinite(shortcutAppId) || shortcutAppId < 2147483648) return false;
-	const apps = (window as any).SteamClient?.Apps;
-	if (typeof apps?.SetShortcutLaunchOptions !== 'function') return false;
-	const app = getShortcutAppById(shortcutAppId);
-	const existing = readShortcutOverviewField(app, 'strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options') || fallbackOptions;
-	const merged = mergeNoLauncherOption(existing);
-	if (merged === String(existing || '').trim()) return true;
-	try {
-		apps.SetShortcutLaunchOptions(shortcutAppId, merged);
-		backendLog(`${automatic ? 'Automatically added verified' : 'Added user-selected'} -nolauncher option to shortcut ${shortcutAppId}`);
-		return true;
-	} catch (e) {
-		backendLog(`Could not update launch options for shortcut ${shortcutAppId}: ${e}`);
-		return false;
-	}
-}
-
-function applyTrackingExecutable(shortcutAppId: number, executablePath: string, startDir = ''): boolean {
-	if (!Number.isFinite(shortcutAppId) || shortcutAppId < 2147483648) return false;
-	const apps = (window as any).SteamClient?.Apps;
-	const executable = cleanShortcutPath(executablePath);
-	const directory = cleanShortcutPath(startDir) || shortcutPathDirectory(executable);
-	if (!executable || typeof apps?.SetShortcutExe !== 'function') return false;
-	try {
-		// Steam's own file picker passes the plain path to this API. It handles
-		// quoting paths with spaces when persisting shortcuts.vdf.
-		apps.SetShortcutExe(shortcutAppId, executable);
-		if (directory && typeof apps?.SetShortcutStartDir === 'function') {
-			apps.SetShortcutStartDir(shortcutAppId, directory);
-		}
-		backendLog(`Shortcut ${shortcutAppId} tracking executable changed to ${executable}`);
-		return true;
-	} catch (e) {
-		backendLog(`Could not update tracking executable for shortcut ${shortcutAppId}: ${e}`);
-		return false;
-	}
-}
+// Compatibility helpers retained for callers from older builds. Linking may
+// update the display name, but it never alters executable, start directory or
+// launch options.
+export function mergeNoLauncherOption(existing: string): string { return String(existing || '').trim(); }
+export function hasNoLauncherOption(value: string): boolean { return /(^|\s)-nolauncher(?=\s|$)/i.test(String(value || '').trim()); }
+export function shouldAutoApplyNoLauncher(_steamAppId: string): boolean { return false; }
+export function applyNoLauncherOption(_shortcutAppId: number, _fallbackOptions = '', _automatic = false): boolean { return false; }
 
 export interface ShortcutIdentitySyncResult {
 	shortcutAppId: number;
@@ -103,21 +70,28 @@ export interface ShortcutIdentitySyncResult {
 	trackingApplied: boolean;
 	noLauncherConfigured: boolean;
 	artwork: ArtworkApplyResult;
+	complete: boolean;
 }
 
-/** Keep one concrete non-Steam shortcut associated with its official Steam
- * identity. Both SetShortcutExe and SetShortcutName can regenerate Steam's
- * local shortcut AppID, so each mutation is resolved before the next one. */
+/** Apply the official display name before assets and mapping are committed.
+ *
+ * Steam may regenerate its local non-Steam AppID after SetShortcutName. The
+ * executable/start directory/launch options are deliberately left untouched;
+ * the renamed shortcut is re-resolved by exact executable identity before any
+ * artwork or mapping is written.
+ */
 export async function synchronizeShortcutOfficialIdentity(options: {
 	shortcutAppId: number;
 	currentTitle: string;
 	steamAppId: string;
 	data?: SteamGameData | null;
+	canonicalName?: string;
 	trackingExecutable?: string;
 	trackingStartDir?: string;
 	skipLauncher?: boolean;
 	existingLaunchOptions?: string;
 	onIdentityResolved?: (shortcutAppId: number, officialName: string, relatedShortcutAppIds: number[]) => void;
+	refreshLibrary?: boolean;
 }): Promise<ShortcutIdentitySyncResult> {
 	const originalShortcutId = options.shortcutAppId;
 	if (!Number.isFinite(originalShortcutId) || originalShortcutId < 2147483648) {
@@ -125,91 +99,90 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 	}
 	let shortcutAppId = originalShortcutId;
 	const data = options.data || await getGameData(options.steamAppId);
-	const officialName = String(data?.name || options.currentTitle).trim();
+	const officialName = String(options.canonicalName || data?.name || options.currentTitle).trim();
 	shortcutIdentityMutationDepth += 1;
 	try {
-	const staleIds = new Set<number>([originalShortcutId]);
-	let trackingApplied = false;
-	let nameApplied = false;
+		const staleIds = new Set<number>([originalShortcutId]);
+		const trackingApplied = false;
+		const noLauncherConfigured = false;
+		let nameApplied = false;
+		let nameReady = false;
 
-	if (options.trackingExecutable) {
-		const beforeTracking = new Set(getAllShortcutRecords().map(record => record.id));
-		trackingApplied = applyTrackingExecutable(shortcutAppId, options.trackingExecutable, options.trackingStartDir || '');
-		if (trackingApplied) {
-			shortcutAppId = await resolveShortcutIdAfterRename(
-				options.currentTitle,
-				shortcutAppId,
-				beforeTracking,
-				options.trackingExecutable,
-			);
-			staleIds.add(shortcutAppId);
-		}
-	}
-
-	// The selector can prefill a near-identical display name. Preserve Steam's
-	// exact canonical title anyway (punctuation, trademark marks and edition
-	// labels included), not merely its normalized search representation.
-	const nameNeedsUpdate = Boolean(officialName && officialName !== String(options.currentTitle || '').trim());
-	if (nameNeedsUpdate) {
-		const beforeRename = new Set(getAllShortcutRecords().map(record => record.id));
-		const apps = (window as any).SteamClient?.Apps;
-		if (typeof apps?.SetShortcutName === 'function') {
-			try {
-				await Promise.resolve(apps.SetShortcutName(shortcutAppId, officialName));
-				nameApplied = true;
-				const expectedExe = options.trackingExecutable
-					|| readShortcutOverviewField(getShortcutAppById(shortcutAppId), 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
-				shortcutAppId = await resolveShortcutIdAfterRename(officialName, shortcutAppId, beforeRename, expectedExe);
-				staleIds.add(shortcutAppId);
-				backendLog(`Shortcut ${originalShortcutId} renamed to official Steam title: ${officialName}`);
-			} catch (e) {
-				backendLog('Official shortcut rename failed: ' + e);
+		const shortcutBeforeRename = getShortcutAppById(shortcutAppId);
+		const currentName = String(shortcutBeforeRename?.display_name
+			|| shortcutBeforeRename?.m_strDisplayName
+			|| shortcutBeforeRename?.strDisplayName
+			|| options.currentTitle
+			|| '').trim();
+		const expectedExecutable = readShortcutOverviewField(
+			shortcutBeforeRename, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
+		);
+		const nameNeedsUpdate = Boolean(officialName && officialName !== currentName);
+		if (!nameNeedsUpdate) {
+			nameReady = Boolean(officialName);
+		} else {
+			const apps = (window as any).SteamClient?.Apps;
+			if (typeof apps?.SetShortcutName === 'function') {
+				const idsBeforeRename = new Set(getAllShortcutRecords().map(record => record.id));
+				try {
+					await Promise.resolve(apps.SetShortcutName(shortcutAppId, officialName));
+					nameApplied = true;
+					shortcutAppId = await resolveShortcutIdAfterRename(
+						officialName, shortcutAppId, idsBeforeRename, expectedExecutable,
+					);
+					staleIds.add(shortcutAppId);
+					const renamedShortcut = getShortcutAppById(shortcutAppId);
+					const renamedTitle = String(renamedShortcut?.display_name
+						|| renamedShortcut?.m_strDisplayName
+						|| renamedShortcut?.strDisplayName
+						|| '').trim();
+					nameReady = renamedTitle === officialName;
+					backendLog(`Shortcut ${originalShortcutId} rename ${nameReady ? 'confirmed' : 'pending'} as "${officialName}" (resolved ID ${shortcutAppId}).`);
+				} catch (error) {
+					backendLog('Official shortcut rename failed: ' + error);
+				}
 			}
 		}
-	}
 
-	const exactKey = shortcutMappingKey(shortcutAppId);
-	const mappingSet: Record<string, string> = { [exactKey]: options.steamAppId };
-	for (const alias of [options.currentTitle, officialName]) {
-		const aliasKey = normalizeTitle(alias);
-		if (aliasKey) mappingSet[aliasKey] = options.steamAppId;
-	}
-	const targetApp = getShortcutAppById(shortcutAppId);
-	const exeTarget = options.trackingExecutable
-		|| readShortcutOverviewField(targetApp, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath')
-		|| '';
-	if (exeTarget) {
-		mappingSet[exeMappingKey(exeTarget)] = options.steamAppId;
-		const stem = exeStemMappingKey(exeTarget);
-		if (stem) mappingSet[stem] = options.steamAppId;
-	}
-	if (options.trackingExecutable && options.trackingExecutable !== exeTarget) {
-		mappingSet[exeMappingKey(options.trackingExecutable)] = options.steamAppId;
-		const stem = exeStemMappingKey(options.trackingExecutable);
-		if (stem) mappingSet[stem] = options.steamAppId;
-	}
+		let artwork: ArtworkApplyResult = { complete: false, slots: [], missing: ['not_attempted'], communitySlots: [] };
+		let iconApplied = false;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			if (attempt > 0) {
+				clearLibraryAssetCaches();
+				await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+			}
+			artwork = await spoofArtwork(shortcutAppId, options.steamAppId, officialName || options.currentTitle, false);
+			iconApplied = await applyOfficialShortcutIcon(shortcutAppId, options.steamAppId, false);
+			if (artwork.complete && iconApplied) break;
+			backendLog(`Incomplete link resources for ${shortcutAppId}; retry ${attempt + 1}/3 (artwork=${artwork.complete}, icon=${iconApplied})`);
+		}
 
-	const mappingRemove = Array.from(staleIds)
-		.filter(staleId => staleId !== shortcutAppId)
-		.map(staleId => shortcutMappingKey(staleId));
-	if (!(await updateMappingsChecked({ set: mappingSet, remove: mappingRemove }))) {
-		throw new Error('mapping_identity_update_failed');
-	}
-	try { options.onIdentityResolved?.(shortcutAppId, officialName, Array.from(staleIds)); }
-	catch (error) { backendLog('Post-link library handoff failed: ' + error); }
+		const complete = Boolean(nameReady && iconApplied && artwork.complete);
+		if (complete) {
+			// An explicit unlink wins over any link job that was already running.
+			// Manual link entry points clear the dismissal before starting; therefore
+			// seeing it here means the user cancelled/unlinked during this operation.
+			if (isShortcutDismissed(shortcutAppId)) throw new Error('link_cancelled_by_unlink');
+			// A concrete shortcut owns exactly one source-of-truth mapping. Title,
+			// executable and launch-fingerprint aliases are deliberately not written:
+			// two different library entries may share any of those values.
+			const mappingSet: Record<string, string> = { [shortcutMappingKey(shortcutAppId)]: options.steamAppId };
+			const mappingRemove = Array.from(staleIds)
+				.filter(staleId => staleId !== shortcutAppId)
+				.map(staleId => shortcutMappingKey(staleId));
+			if (!(await updateMappingsChecked({ set: mappingSet, remove: mappingRemove }))) {
+				throw new Error('mapping_identity_update_failed');
+			}
+			rememberShortcutSteamAppId(shortcutAppId, options.steamAppId);
+			try { options.onIdentityResolved?.(shortcutAppId, officialName, Array.from(staleIds)); }
+			catch (error) { backendLog('Post-link library handoff failed: ' + error); }
+		}
 
-	const automaticNoLauncher = shouldAutoApplyNoLauncher(options.steamAppId);
-		const noLauncherConfigured = automaticNoLauncher || options.skipLauncher
-			? applyNoLauncherOption(shortcutAppId, options.existingLaunchOptions || '', automaticNoLauncher)
-			: false;
-		const artwork = await spoofArtwork(shortcutAppId, options.steamAppId, officialName || options.currentTitle, true);
-		const iconApplied = await applyOfficialShortcutIcon(shortcutAppId, options.steamAppId);
-		// Steam may rebuild the shortcut's CEF route after applying artwork. Keep
-		// the final navigation at the end of the mutation sequence so the linked
-		// library view is refreshed against the stable shortcut identity.
-		shortcutRuntimeHost().refreshLibraryArtwork?.(shortcutAppId);
-
-		return { shortcutAppId, officialName, nameApplied, nameReady: !nameNeedsUpdate || nameApplied, iconApplied, trackingApplied, noLauncherConfigured, artwork };
+		if (options.refreshLibrary !== false) shortcutRuntimeHost().refreshLibraryArtwork?.(shortcutAppId);
+		return {
+			shortcutAppId, officialName, nameApplied, nameReady, iconApplied,
+			trackingApplied, noLauncherConfigured, artwork, complete,
+		};
 	} finally {
 		shortcutIdentityMutationDepth = Math.max(0, shortcutIdentityMutationDepth - 1);
 	}
@@ -224,7 +197,9 @@ export async function linkShortcutToSteam(options: {
 	existingLaunchOptions?: string;
 	trackingExecutable?: string;
 	trackingStartDir?: string;
+	shortcutExecutable?: string;
 	onStatus?: ShortcutLinkStatus;
+	refreshLibrary?: boolean;
 }): Promise<ShortcutLinkResult> {
 	const steamAppId = String(options.steamAppId || '').trim();
 	const title = String(options.title || '').trim();
@@ -232,84 +207,75 @@ export async function linkShortcutToSteam(options: {
 	if (!/^\d+$/.test(steamAppId)) return { ok: false, error: 'invalid_appid' };
 	shortcutIdentityMutationDepth += 1;
 	try {
-
-	onStatus(gdlText('verifying_steam', 'Verifying on Steam...'), '#8f98a0');
-	const data = await getGameData(steamAppId);
-	if (!data) {
-		onStatus(gdlText('appid_not_found', 'AppID {id} was not found on Steam.', { id: steamAppId }), '#ff6b6b');
-		return { ok: false, error: 'appid_not_found' };
-	}
-
-	try {
-		let shortcutAppId = await resolveShortcutForLink(options.doc, title, options.shortcutAppId);
-		let titleKey = normalizeTitle(title);
-		const aliases = new Set<string>([titleKey]);
-		const mappingKey = shortcutAppId ? shortcutMappingKey(shortcutAppId) : titleKey;
-		const initialSet: Record<string, string> = { [mappingKey]: steamAppId };
-		if (shortcutAppId && mappingKey !== titleKey && titleKey) initialSet[titleKey] = steamAppId;
-		if (options.trackingExecutable) {
-			initialSet[exeMappingKey(options.trackingExecutable)] = steamAppId;
-			const stem = exeStemMappingKey(options.trackingExecutable);
-			if (stem) initialSet[stem] = steamAppId;
+		onStatus(gdlText('verifying_steam', 'Verifying on Steam...'), '#8f98a0');
+		const data = await getGameData(steamAppId);
+		if (!data) {
+			onStatus(gdlText('appid_not_found', 'AppID {id} was not found on Steam.', { id: steamAppId }), '#ff6b6b');
+			return { ok: false, error: 'appid_not_found' };
 		}
-		if (shortcutAppId) {
-			const app = getShortcutAppById(shortcutAppId);
-			const exe = readShortcutOverviewField(app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
-			if (exe) {
-				initialSet[exeMappingKey(exe)] = steamAppId;
-				const stem = exeStemMappingKey(exe);
-				if (stem) initialSet[stem] = steamAppId;
+
+		try {
+			let shortcutAppId = await resolveShortcutForLink(
+				options.doc, title, options.shortcutAppId, options.shortcutExecutable || options.trackingExecutable || '',
+			);
+			if (!shortcutAppId) throw new Error('shortcut_not_ready');
+			const aliases = new Set<string>();
+			const canonicalData = await getCanonicalGameData(steamAppId);
+			if (!canonicalData?.name) {
+				onStatus(gdlText('link_incomplete_retrying', 'The link is not complete yet. GameBridge will retry until name, icon and artwork are ready.'), '#e5ad37');
+				return { ok: false, data, shortcutAppId, aliases: Array.from(aliases), error: 'canonical_data_unavailable' };
 			}
-		}
-		if (!(await updateMappingsChecked({ set: initialSet }))) throw new Error('mapping_write_failed');
-		aliases.add(mappingKey);
-		onStatus(gdlText('linked_updating', '✓ Linked to "{name}". Updating name, icon and artwork...', { name: data.name }), '#5ba32b');
-		if (shortcutAppId) {
+			onStatus(gdlText('linked_updating', '✓ Match verified for "{name}". Applying name, icon and artwork...', { name: data.name }), '#5ba32b');
+
 			const synced = await synchronizeShortcutOfficialIdentity({
 				shortcutAppId,
 				currentTitle: title,
 				steamAppId,
 				data,
+				canonicalName: String(canonicalData.name),
 				trackingExecutable: options.trackingExecutable,
 				trackingStartDir: options.trackingStartDir,
 				skipLauncher: options.skipLauncher,
 				existingLaunchOptions: options.existingLaunchOptions,
+				refreshLibrary: options.refreshLibrary,
 			});
 			shortcutAppId = synced.shortcutAppId;
-			titleKey = normalizeTitle(synced.officialName);
-			aliases.add(titleKey);
 			aliases.add(shortcutMappingKey(shortcutAppId));
-			let finalMessage = synced.nameReady && synced.iconApplied && synced.artwork.complete
-				? gdlText('linked_official', '✓ Linked to "{name}". Official name and icon updated.', { name: synced.officialName })
-				: synced.nameApplied
-					? gdlText('linked_name', '✓ Linked to "{name}". Official name updated; the official icon was unavailable.', { name: synced.officialName })
-					: gdlText('linked_reopen', '✓ Linked to "{name}". You may need to reopen Steam to update the name or icon.', { name: synced.officialName });
+
+			if (!synced.complete) {
+				onStatus(gdlText('link_incomplete_retrying', 'The link is not complete yet. GameBridge will retry until name, icon and artwork are ready.'), '#e5ad37');
+				return {
+					ok: false, data, shortcutAppId, aliases: Array.from(aliases), error: 'setup_incomplete',
+					setup: {
+						nameReady: synced.nameReady,
+						iconApplied: synced.iconApplied,
+						artworkComplete: synced.artwork.complete,
+						missingArtwork: synced.artwork.missing,
+						communityArtwork: synced.artwork.communitySlots,
+					},
+				};
+			}
+
+			undismissShortcut(shortcutAppId);
+			let finalMessage = gdlText('linked_official', '✓ Linked to "{name}". Official name, icon and artwork updated.', { name: synced.officialName });
 			if (synced.trackingApplied) finalMessage += gdlText('tracking_executable_updated', ' Steam will now launch the long-running game executable so playtime can be tracked.');
 			if (shouldAutoApplyNoLauncher(steamAppId) && synced.noLauncherConfigured) finalMessage += ' -nolauncher.';
-			if (synced.artwork.missing.length) finalMessage += ` Artwork pending: ${synced.artwork.missing.join(', ')}.`;
 			if (await saveLinkedGameNote(synced.officialName || title, data, steamAppId)) finalMessage += gdlText('local_note_updated', ' Local note updated.');
 			onStatus(finalMessage, '#5ba32b');
-			shortcutRuntimeHost().resetLibraryInjection?.(true, options.doc);
-			return { ok: true, data, shortcutAppId, aliases: Array.from(aliases), setup: {
-				nameReady: synced.nameReady,
-				iconApplied: synced.iconApplied,
-				artworkComplete: synced.artwork.complete,
-				missingArtwork: synced.artwork.missing,
-				communityArtwork: synced.artwork.communitySlots,
-			} };
-		} else {
-			onStatus(gdlText('linked_open_save', '✓ Linked to "{name}". Open the game page and click Save again to update its name and icon.', { name: data.name }), '#5ba32b');
+			if (options.refreshLibrary !== false) shortcutRuntimeHost().resetLibraryInjection?.(true, options.doc);
+			return {
+				ok: true, data, shortcutAppId, aliases: Array.from(aliases),
+				setup: {
+					nameReady: true, iconApplied: true, artworkComplete: true,
+					missingArtwork: synced.artwork.missing,
+					communityArtwork: synced.artwork.communitySlots,
+				},
+			};
+		} catch (e) {
+			backendLog('Save error: ' + e);
+			onStatus(gdlText('save_failed', 'Could not complete the link. It remains unlinked and can be retried.'), '#ff6b6b');
+			return { ok: false, data, error: String(e) };
 		}
-
-		// Stable legacy order: finish every shortcut mutation, navigate to the
-		// final shortcut, then clear stale DOM state and inject once more.
-		shortcutRuntimeHost().resetLibraryInjection?.(true, options.doc);
-		return { ok: true, data, shortcutAppId, aliases: Array.from(aliases) };
-	} catch (e) {
-		backendLog('Save error: ' + e);
-		onStatus(gdlText('save_failed', 'Could not save.'), '#ff6b6b');
-		return { ok: false, data, error: String(e) };
-	}
 	} finally {
 		shortcutIdentityMutationDepth = Math.max(0, shortcutIdentityMutationDepth - 1);
 	}

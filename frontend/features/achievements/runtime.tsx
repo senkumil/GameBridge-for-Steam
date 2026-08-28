@@ -10,9 +10,17 @@ export type { AchievementProgress } from './progress';
 export { achievementPercentText, getAchievementProgress, renderAchievementsPanel } from './progress';
 export { deterministicTestUnlockCount, formatLocalUnlockDate, localAchievementPercent } from './format';
 export { makeLinkedAchievementsClickable, focusAchievementsSection, detectLinkedSteamAppId } from './navigation';
-export { registerNativeAchievementToastWindow, showAchievementToast } from './notifications';
-export { renderLocalAchievementSidebarHtml, renderLocalAchievementSidebar } from './sidebar';
+export {
+	registerNativeAchievementToastWindow,
+	unregisterNativeAchievementToastWindow,
+	showAchievementToast,
+	isEveryLaunchAchievementReplayEnabled,
+	setEveryLaunchAchievementReplayEnabled,
+	subscribeAchievementReplayPreferences,
+} from './notifications';
+export { startFirstLaunchAchievementWatcher, stopFirstLaunchAchievementWatcher } from './launch-watcher';
+export { renderLocalAchievementSidebarHtml, renderLocalAchievementSidebar, revealPendingAchievementSidebar } from './sidebar';
 export { findVisibleTextElement, ensureLocalPlaybarStat } from './playbar';
 export { openLocalAchievementsModal } from './modal';
 export { getCachedLocalAchievements, hasCachedLocalAchievements, cacheLocalAchievements, clearLocalAchievementCache } from './cache';
-export { installLocalAchievementUI, disposeLocalAchievementUI, disposeAchievementRuntime } from './lifecycle';
+export { installLocalAchievementUI, disposeLocalAchievementUI, refreshLocalAchievementUI, disposeAchievementRuntime } from './lifecycle';

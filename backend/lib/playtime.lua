@@ -2,10 +2,18 @@ return function(deps)
 local logger = deps.logger
 local cjson = deps.cjson
 local config = deps.config
+local fs = deps.fs
 local M = {}
 
 local SESSIONS_FILE = config.path("playtime_sessions.json")
 local STORE = { version = 2, sessions = {}, aliases = {} }
+local STORE_LOADED = false
+local STORE_DIRTY = false
+local LAST_SAVE_AT = 0
+local LAST_EXTERNAL_CHECK_AT = 0
+local LAST_FILE_MTIME = 0
+local EXTERNAL_CHECK_INTERVAL_SECONDS = 2
+local HEARTBEAT_FLUSH_INTERVAL_SECONDS = 30
 
 local function normalize_title_key(title)
     local text = tostring(title or ""):lower()
@@ -99,10 +107,24 @@ end
 local function save_sessions()
     local ok, err = config.write_json_atomic(SESSIONS_FILE, STORE)
     if not ok then logger:warn("Could not save playtime sessions: " .. tostring(err or "write_failed")) end
+    if ok then
+        STORE_DIRTY = false
+        LAST_SAVE_AT = os.time()
+        LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
+    end
     return ok
 end
 
 local function load_sessions()
+    local now = os.time()
+    if STORE_LOADED then
+        if STORE_DIRTY or now - LAST_EXTERNAL_CHECK_AT < EXTERNAL_CHECK_INTERVAL_SECONDS then return end
+        LAST_EXTERNAL_CHECK_AT = now
+        local modified = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
+        if modified == LAST_FILE_MTIME then return end
+    end
+    STORE_LOADED = true
+    LAST_EXTERNAL_CHECK_AT = now
     local data = config.read_text(SESSIONS_FILE)
     if not data or data == "" then
         -- Import the predecessor's optional file once, if it exists.
@@ -110,12 +132,14 @@ local function load_sessions()
     end
     if not data or data == "" then
         STORE = empty_store()
+        LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
         return
     end
 
     local ok, decoded = pcall(cjson.decode, data)
     if not ok or type(decoded) ~= "table" then
         STORE = empty_store()
+        LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
         logger:warn("Could not parse playtime sessions; starting with an empty store")
         return
     end
@@ -133,6 +157,7 @@ local function load_sessions()
             end
         end
         STORE = loaded
+        LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
         return
     end
 
@@ -140,6 +165,12 @@ local function load_sessions()
     if save_sessions() then
         logger:info("Migrated playtime sessions to canonical storage")
     end
+end
+
+local function flush_if_due(force)
+    if not STORE_DIRTY then return true end
+    if not force and os.time() - LAST_SAVE_AT < HEARTBEAT_FLUSH_INTERVAL_SECONDS then return true end
+    return save_sessions()
 end
 
 local function register_aliases(keys, canonical)
@@ -151,12 +182,16 @@ end
 
 local function canonical_from_request(req, keys)
     local direct = valid_shortcut_id(req.shortcut_app_id or req.state_app_id or req.local_app_id)
-    if direct then return direct end
+    -- Steam regenerates a shortcut AppID when identity inputs such as its name
+    -- or executable change. Prefer that ID only once it owns sessions; until
+    -- then recover the existing canonical history through the official AppID
+    -- or normalized-title alias before creating a new empty timeline.
+    if direct and STORE.sessions[direct] then return direct end
     for _, key in ipairs(keys) do
         local canonical = valid_shortcut_id(STORE.aliases[key])
         if canonical and STORE.sessions[canonical] then return canonical end
     end
-    return nil
+    return direct
 end
 
 local function find_sessions_list(req, keys)
@@ -221,6 +256,7 @@ function M.start_session(request_json)
         sessions[#sessions + 1] = { instance_id = instance_id, started_at = now, ended_at = now }
     end
 
+    STORE_DIRTY = true
     local saved = save_sessions()
     logger:info("Playtime session started for " .. tostring(req.title or canonical) .. " (" .. instance_id .. ")")
     return cjson.encode({ ok = saved, instance_id = instance_id, error = saved and nil or "save_failed" })
@@ -241,7 +277,8 @@ function M.ping_session(request_json)
             end
         end
     end
-    if updated and not save_sessions() then return cjson.encode({ ok = false, error = "save_failed" }) end
+    if updated then STORE_DIRTY = true end
+    if updated and not flush_if_due(false) then return cjson.encode({ ok = false, error = "save_failed" }) end
     return cjson.encode({ ok = updated })
 end
 
@@ -261,15 +298,14 @@ function M.stop_session(request_json)
             end
         end
         collapse_sessions(sessions)
-        if not save_sessions() then return cjson.encode({ ok = false, error = "save_failed" }) end
+        STORE_DIRTY = true
+        if not flush_if_due(true) then return cjson.encode({ ok = false, error = "save_failed" }) end
     end
     logger:info("Playtime session stopped for " .. tostring(req.title or canonical or ""))
     return cjson.encode({ ok = stopped })
 end
 
-function M.get_playtime(request_json)
-    load_sessions()
-    local req = parse_request(request_json)
+local function calculate_playtime(req)
     local keys = candidate_keys(req.shortcut_app_id, req.steam_app_id, req.title)
     local sessions = find_sessions_list(req, keys) or {}
     local two_weeks_ago, unix_epoch = os.time() - (14 * 24 * 60 * 60), 0
@@ -284,12 +320,36 @@ function M.get_playtime(request_json)
         if started ~= unix_epoch and ended > last_played_at then last_played_at = ended end
     end
 
-    return cjson.encode({
+    return {
         ok = true,
         minutes_forever = math.floor((seconds_forever / 60) + 0.5),
         minutes_last_two_weeks = math.floor((seconds_last_two_weeks / 60) + 0.5),
         last_played_at = last_played_at > 0 and last_played_at or nil,
-    })
+    }
+end
+
+function M.get_playtime(request_json)
+    load_sessions()
+    return cjson.encode(calculate_playtime(parse_request(request_json)))
+end
+
+-- Library Home and Big Picture refresh every mapped shortcut together. One
+-- batch call avoids reopening IPC N times and guarantees all cards see the
+-- same in-memory snapshot.
+function M.get_all_playtime(request_json)
+    load_sessions()
+    local request = parse_request(request_json)
+    local requests = type(request.requests) == "table" and request.requests or request
+    local items = {}
+    for index, item in ipairs(type(requests) == "table" and requests or {}) do
+        if type(item) == "table" then
+            local stats = calculate_playtime(item)
+            stats.key = tostring(item.key or item.shortcut_app_id or index)
+            stats.shortcut_app_id = tostring(item.shortcut_app_id or "")
+            items[#items + 1] = stats
+        end
+    end
+    return cjson.encode({ ok = true, items = items })
 end
 
 function M.set_playtime(request_json)
@@ -301,9 +361,14 @@ function M.set_playtime(request_json)
     if not sessions then return cjson.encode({ ok = false, error = "missing_shortcut_app_id" }) end
 
     STORE.sessions[canonical] = { { started_at = 0, ended_at = math.floor(minutes * 60) } }
+    STORE_DIRTY = true
     local saved = save_sessions()
     logger:info("Playtime manually set for " .. tostring(req.title or canonical) .. ": " .. tostring(minutes) .. " mins")
     return cjson.encode({ ok = saved, minutes_forever = minutes, error = saved and nil or "save_failed" })
+end
+
+function M.flush()
+    return flush_if_due(true)
 end
 
 load_sessions()

@@ -23,7 +23,7 @@
 	},
 	"type": "module",
 	"name": "gamebridge-for-steam",
-	"version": "2.0.0",
+	"version": "2.1.0",
 	"description": "Vincula juegos no-Steam con metadatos oficiales de Steam para mostrar datos reales en la biblioteca.",
 	"main": "./frontend/index.tsx",
 	"author": "David Miranda (Davidjarod11)",

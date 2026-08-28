@@ -26,6 +26,7 @@ export const fetchCommunityArtworkBackend = callable<[{ request_json: string }],
 export const saveShortcutIconBackend = callable<[{ request_json: string }], string>('save_shortcut_icon');
 
 export const clearArtworkBackend  = callable<[{ shortcut_app_id: string }], string>('clear_artwork');
+export const clearArtworkExceptIconBackend = callable<[{ shortcut_app_id: string }], string>('clear_artwork_except_icon');
 
 export const detectGameCandidatesBackend = callable<[{ request_json: string }], string>('detect_game_candidates');
 
@@ -39,9 +40,29 @@ export const getGameAchievementPathBackend = callable<[{ request_json: string }]
 
 export const setGameAchievementPathBackend = callable<[{ request_json: string }], string>('set_game_achievement_path');
 
+export const getGameAchievementOptionsBackend = callable<[{ request_json: string }], string>('get_game_achievement_options');
+
+export const setGameAchievementOptionsBackend = callable<[{ request_json: string }], string>('set_game_achievement_options');
+
+export const getGameAchievementCapabilitiesBackend = callable<[{ request_json: string }], string>('get_game_achievement_capabilities');
+
+const recentBackendLogs = new Map<string, number>();
+const BACKEND_LOG_DEDUP_MS = 5000;
+
 export function backendLog(msg: string): void {
+	const normalized = String(msg);
+	const now = Date.now();
+	const previous = recentBackendLogs.get(normalized) || 0;
+	if (now - previous < BACKEND_LOG_DEDUP_MS) return;
+	recentBackendLogs.delete(normalized);
+	recentBackendLogs.set(normalized, now);
+	while (recentBackendLogs.size > 64) {
+		const oldest = recentBackendLogs.keys().next().value as string | undefined;
+		if (!oldest) break;
+		recentBackendLogs.delete(oldest);
+	}
 	console.log('[GDL]', msg);
-	feLogBackend({ msg }).catch(() => {});
+	feLogBackend({ msg: normalized }).catch(() => {});
 }
 
 export function backendResultStatus(raw: unknown): string {
@@ -117,5 +138,7 @@ export const pingPlaytimeSessionBackend = callable<[{ request_json: string }], s
 export const stopPlaytimeSessionBackend = callable<[{ request_json: string }], string>('stop_playtime_session');
 
 export const getPlaytimeDataBackend = callable<[{ request_json: string }], string>('get_playtime_data');
+
+export const getAllPlaytimeDataBackend = callable<[{ request_json: string }], string>('get_all_playtime_data');
 
 export const setPlaytimeDataBackend = callable<[{ request_json: string }], string>('set_playtime_data');

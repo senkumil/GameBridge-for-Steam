@@ -13,6 +13,7 @@ import {
 	findVisibleTextElement,
 	focusAchievementsSection,
 	getAchievementProgress,
+	revealPendingAchievementSidebar,
 	renderLocalAchievementSidebar,
 } from '../achievements/runtime';
 import { fetchLocalAchievementData } from '../achievements/service';
@@ -110,5 +111,8 @@ export async function finalizeLinkedAchievements(doc: Document, context: LinkedA
 	}
 
 	await injectPlayBarAchievements(doc, context);
-	if (context.isCurrent()) ensureCloudStatus(doc);
+	if (context.isCurrent()) {
+		revealPendingAchievementSidebar(doc);
+		ensureCloudStatus(doc);
+	}
 }

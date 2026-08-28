@@ -137,8 +137,21 @@ const lastInjectedNews = new Map<string, NewsItem[]>();
 const lastInjectedFriendActivity = new Map<string, string>();
 
 const visibleActivityNewsCount = new Map<string, number>();
+const activityEndReached = new Map<string, boolean>();
 
 const ACTIVITY_NEWS_PAGE_SIZE = 8;
+const MAX_ACTIVITY_GAME_ENTRIES = 32;
+
+function trimActivityCaches(): void {
+	while (lastInjectedNews.size > MAX_ACTIVITY_GAME_ENTRIES) {
+		const oldest = lastInjectedNews.keys().next().value as string | undefined;
+		if (!oldest) break;
+		lastInjectedNews.delete(oldest);
+		lastInjectedFriendActivity.delete(oldest);
+		visibleActivityNewsCount.delete(oldest);
+		activityEndReached.delete(oldest);
+	}
+}
 
 export function renderUnifiedActivityFeed(
 	steamAppId: string,
@@ -149,6 +162,7 @@ export function renderUnifiedActivityFeed(
 ): string {
 	if (Array.isArray(newsItems) && newsItems.length > 0) {
 		lastInjectedNews.set(steamAppId, newsItems);
+		trimActivityCaches();
 	} else if (lastInjectedNews.has(steamAppId)) {
 		newsItems = lastInjectedNews.get(steamAppId)!;
 	}
@@ -230,7 +244,13 @@ export function renderUnifiedActivityFeed(
 		}
 		feedHtml += '</div>';
 	}
-	if (visibleNews < sortedNews.length) {
+	const endReached = activityEndReached.get(steamAppId) === true;
+	if (endReached && visibleNews < sortedNews.length) {
+		activityEndReached.delete(steamAppId);
+	}
+	if (activityEndReached.get(steamAppId) === true) {
+		feedHtml += `<div class="gdl-activity-end"><span>${escapeHtml(gdlText('activity_end', 'End of activity'))}</span></div>`;
+	} else {
 		feedHtml += `<div class="gdl-load-more-row"><button type="button" class="${FEED_CLASSES().FetchMoreContainer} gdl-load-more-activity">${escapeHtml(gdlText('fetch_more', loc('AppActivity_FetchMore', 'Load more activity')))}</button></div>`;
 	}
 	return feedHtml;
@@ -292,9 +312,17 @@ export function setupPostDeleteHandlers(
 		if (loadMore) {
 			event.preventDefault();
 			event.stopPropagation();
+			const sourceNews = Array.isArray(newsItems) && newsItems.length > 0
+				? newsItems
+				: (lastInjectedNews.get(steamAppId) || []);
+			const availableNews = sourceNews
+				.filter(item => item && item.title && Number(item.date || 0) > 0)
+				.length;
 			const current = visibleActivityNewsCount.get(steamAppId) || ACTIVITY_NEWS_PAGE_SIZE;
-			visibleActivityNewsCount.set(steamAppId, current + ACTIVITY_NEWS_PAGE_SIZE);
-			feedContainer.innerHTML = renderUnifiedActivityFeed(steamAppId, shortcutAppId, newsItems, fallbackImage);
+			const next = Math.min(current + ACTIVITY_NEWS_PAGE_SIZE, availableNews);
+			if (next > current) visibleActivityNewsCount.set(steamAppId, next);
+			if (availableNews <= current || next >= availableNews) activityEndReached.set(steamAppId, true);
+			feedContainer.innerHTML = renderUnifiedActivityFeed(steamAppId, shortcutAppId, sourceNews, fallbackImage);
 			return;
 		}
 		const button = target.closest('.gdl-delete-post-btn') as HTMLElement | null;
@@ -321,4 +349,5 @@ export function clearActivityFeedCaches(): void {
 	lastInjectedNews.clear();
 	lastInjectedFriendActivity.clear();
 	visibleActivityNewsCount.clear();
+	activityEndReached.clear();
 }

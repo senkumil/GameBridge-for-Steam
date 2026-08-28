@@ -7,6 +7,32 @@ export function ensureActivityStyles(doc: Document): void {
 		.gdl-activity-container,
 		#gdl-activity-feed,
 		#gdl-game-data { font-family:"Motiva Sans",Arial,Helvetica,sans-serif; }
+		@keyframes gdl-feed-skeleton-shimmer {
+			0% { background-position:180% 0; }
+			100% { background-position:-80% 0; }
+		}
+		.gdl-linked-loading-composer { margin-bottom:18px;opacity:.74; }
+		.gdl-feed-skeleton { display:grid;gap:14px;width:100%;min-width:0;overflow:hidden;pointer-events:none;contain:layout paint; }
+		.gdl-feed-skeleton-date { display:flex;align-items:center;gap:12px;height:18px;margin-top:2px; }
+		.gdl-feed-skeleton-shape {
+			background-image:linear-gradient(100deg,rgba(58,68,79,.38) 18%,rgba(105,122,139,.58) 42%,rgba(58,68,79,.38) 66%);
+			background-size:240% 100%;background-position:180% 0;animation:gdl-feed-skeleton-shimmer 1.55s ease-in-out infinite;
+		}
+		.gdl-feed-skeleton-date-label { width:92px;height:12px;border-radius:2px; }
+		.gdl-feed-skeleton-date-rule { flex:1;height:1px;opacity:.72; }
+		.gdl-feed-skeleton-card { display:grid;grid-template-columns:minmax(170px,30%) minmax(0,1fr);gap:16px;min-height:176px;padding:12px;background:rgba(32,40,49,.44);border:1px solid rgba(255,255,255,.045);box-shadow:0 2px 5px rgba(0,0,0,.16);box-sizing:border-box;overflow:hidden; }
+		.gdl-feed-skeleton-image { width:100%;min-height:150px;aspect-ratio:16/9;align-self:stretch; }
+		.gdl-feed-skeleton-copy { display:flex;flex-direction:column;align-items:flex-start;min-width:0;padding:8px 10px 8px 0; }
+		.gdl-feed-skeleton-type { width:22%;min-width:72px;height:9px;margin-bottom:11px;border-radius:2px; }
+		.gdl-feed-skeleton-title { width:76%;height:18px;margin-bottom:17px;border-radius:2px; }
+		.gdl-feed-skeleton-line { height:10px;margin-bottom:10px;border-radius:2px; }
+		.gdl-feed-skeleton-line.is-long { width:96%; }
+		.gdl-feed-skeleton-line.is-medium { width:82%; }
+		.gdl-feed-skeleton-line.is-short { width:58%; }
+		.gdl-feed-skeleton-card.is-compact { grid-template-columns:48px minmax(0,1fr);min-height:76px;padding:13px 14px;align-items:center; }
+		.gdl-feed-skeleton-card.is-compact .gdl-feed-skeleton-copy { padding:0;justify-content:center; }
+		.gdl-feed-skeleton-patch-icon { width:44px;height:44px;border-radius:2px; }
+		.gdl-feed-skeleton-title.is-compact { width:62%;height:15px;margin:0; }
 		.gdl-activity-container .${event.AppActivityDate},
 		#gdl-activity-feed .${event.AppActivityDate},
 		#gdl-game-data .${event.AppActivityDate} { font-family:"Motiva Sans",Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;color:#8f98a0;letter-spacing:1px;text-transform:uppercase;display:flex;align-items:center;gap:12px;margin:0 0 8px; }
@@ -71,9 +97,13 @@ export function ensureActivityStyles(doc: Document): void {
 		#gdl-activity-feed .gdl-patch-note .gdl-news-type { margin-bottom:3px; }
 		#gdl-activity-feed .gdl-patch-note .gdl-news-title { margin:0;font-size:17px; }
 		#gdl-activity-feed .gdl-load-more-row { display:flex;justify-content:center;margin:26px 0 8px; }
+		#gdl-activity-feed .gdl-activity-end { display:flex;align-items:center;gap:22px;margin:26px 0 8px;color:#8f98a0;font-size:13px;line-height:1;white-space:nowrap; }
+		#gdl-activity-feed .gdl-activity-end::before,#gdl-activity-feed .gdl-activity-end::after { content:"";height:1px;flex:1 1 auto;background:rgba(255,255,255,.08); }
+		#gdl-activity-feed .gdl-activity-end span { flex:0 0 auto; }
 		#gdl-activity-feed .gdl-load-more-activity { display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 24px;background:#2b323c;color:#9da4ab;font-size:13px;text-decoration:none;border:0;border-radius:2px;cursor:pointer;box-shadow:none; }
 		#gdl-activity-feed .gdl-load-more-activity:hover { background:#353e49;color:#d6d7d8; }
 		#gdl-game-data,.gdl-activity-container { display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;flex:none;height:auto;min-height:0;overflow:visible; }
-		@media (max-width:1050px) { #gdl-activity-feed .gdl-news-image { flex-basis:210px;width:210px;min-height:118px; } #gdl-activity-feed .${event.PartnerEventMediumImage_TextColumn}.gdl-news-copy { max-height:none; } }
+		@media (max-width:1050px) { #gdl-activity-feed .gdl-news-image { flex-basis:210px;width:210px;min-height:118px; } #gdl-activity-feed .${event.PartnerEventMediumImage_TextColumn}.gdl-news-copy { max-height:none; } .gdl-feed-skeleton-card { grid-template-columns:minmax(150px,29%) minmax(0,1fr); } }
+		@media (prefers-reduced-motion:reduce) { .gdl-feed-skeleton-shape { animation:none;background:rgba(65,76,88,.46); } }
 	`);
 }

@@ -38,6 +38,28 @@ export function shortcutExecutableIdentity(value: string): string {
 	return cleanShortcutPath(value).replace(/\//g, '\\').replace(/\\+/g, '\\').toLocaleLowerCase();
 }
 
+/** Language-independent identity for the concrete launch definition. Steam's
+ * non-Steam AppID can change when its display name changes, so persistent
+ * decisions must never rely on AppID/title alone. */
+export function shortcutStableIdentity(app: any): string {
+	if (!app) return '';
+	const executable = shortcutExecutableIdentity(readShortcutOverviewField(
+		app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
+	));
+	if (!executable) return '';
+	const startDir = shortcutExecutableIdentity(readShortcutOverviewField(
+		app, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir',
+	));
+	const launchOptions = readShortcutOverviewField(
+		app, 'strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strArguments',
+	).replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+	return `${executable}|${startDir}|${launchOptions}`;
+}
+
+export function shortcutStableIdentityById(shortcutAppId: number): string {
+	return shortcutStableIdentity(getShortcutAppById(shortcutAppId));
+}
+
 export function toSignedShortcutAppId(shortcutAppId: number): number {
 	return shortcutAppId >= SHORTCUT_THRESHOLD ? shortcutAppId - 4294967296 : shortcutAppId;
 }
@@ -67,16 +89,18 @@ function canonicalizeGameTitle(value: string): string {
 	return text.replace(/\s+/g, '');
 }
 
+/** Identity-safe display-title comparison.
+ *
+ * Never use substring matching here. Franchise titles such as "God of War"
+ * and "God of War Ragnarök" must remain distinct shortcuts even though one
+ * normalized title is a prefix of the other. The canonical fallback only
+ * removes packaging/noise tokens and still requires full equality. */
 export function looseMatchTitle(a: string, b: string): boolean {
 	if (!a || !b) return false;
 	if (normalizeTitle(a) === normalizeTitle(b)) return true;
 	const cleanA = canonicalizeGameTitle(a);
 	const cleanB = canonicalizeGameTitle(b);
-	if (cleanA === cleanB && cleanA !== '') return true;
-	if (cleanA.length >= 5 && cleanB.length >= 5) {
-		if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
-	}
-	return false;
+	return cleanA !== '' && cleanA === cleanB;
 }
 
 export function getSteamAppStore(): any | null {
@@ -100,19 +124,29 @@ export function getSteamAppStore(): any | null {
 	return null;
 }
 
-/** Find a non-Steam shortcut's internal AppID by its exact display name. */
+/** Find a non-Steam shortcut's internal AppID by its display name.
+ * Exact normalized equality wins. Canonical equality is allowed only when it
+ * identifies a single shortcut; ambiguous franchise/name matches return null. */
 export function findShortcutAppIdByName(title: string): number | null {
 	const appStore = getSteamAppStore();
 	if (!appStore?.m_mapApps) return null;
+	const normalizedTarget = normalizeTitle(title);
+	const canonicalTarget = canonicalizeGameTitle(title);
+	const exact: number[] = [];
+	const canonical: number[] = [];
 	for (const [id, app] of appStore.m_mapApps) {
 		const rawId = Number(id);
 		if (!Number.isFinite(rawId)) continue;
 		const numId = rawId < 0 ? (rawId >>> 0) : rawId;
 		if (numId < SHORTCUT_THRESHOLD) continue;
-		const name = app?.display_name || app?.m_strDisplayName || '';
-		if (name && looseMatchTitle(name, title)) return numId;
+		const name = String(app?.display_name || app?.m_strDisplayName || '').trim();
+		if (!name) continue;
+		if (normalizedTarget && normalizeTitle(name) === normalizedTarget) exact.push(numId);
+		else if (canonicalTarget && canonicalizeGameTitle(name) === canonicalTarget) canonical.push(numId);
 	}
-	return null;
+	if (exact.length === 1) return exact[0];
+	if (exact.length > 1) return null;
+	return canonical.length === 1 ? canonical[0] : null;
 }
 
 /** Resolve the shortcut ID represented by a Steam library document. */
@@ -127,15 +161,9 @@ export function findActiveShortcutAppId(doc: Document, title: string): string | 
 		const match = url.match(/(?:games\/details|library\/app|app)\/(\d+)/i);
 		if (match && Number(match[1]) >= SHORTCUT_THRESHOLD) {
 			const candidateId = Number(match[1]);
-			const app = getShortcutAppById(candidateId);
-			if (app) {
-				const name = app?.display_name || app?.m_strDisplayName || '';
-				if (!trimmedTitle || (name && looseMatchTitle(name, trimmedTitle))) {
-					return String(candidateId);
-				}
-				// Title didn't match this app's display name, check next
-				continue;
-			}
+			// The route is the strongest identity signal Steam exposes. Do not
+			// override a concrete shortcut route with fuzzy/title-based matching.
+			if (getShortcutAppById(candidateId)) return String(candidateId);
 			if (trimmedTitle) {
 				const byName = findShortcutAppIdByName(trimmedTitle);
 				if (byName && byName === candidateId) return String(byName);
@@ -217,10 +245,10 @@ export async function getShortcutPlaytimeMinutes(shortcutAppId: number): Promise
 	return retryable;
 }
 
-export function getMappedShortcuts(): Array<{ id: number; title: string }> {
-	const appStore = (window as any).appStore;
+export function getMappedShortcuts(): Array<{ id: number; title: string; steamAppId: string }> {
+	const appStore = getSteamAppStore();
 	if (!appStore?.m_mapApps) return [];
-	const result: Array<{ id: number; title: string }> = [];
+	const result: Array<{ id: number; title: string; steamAppId: string }> = [];
 	const entries: Array<[unknown, any]> = [];
 	try { for (const [id, app] of appStore.m_mapApps) entries.push([id, app]); } catch {}
 	try { for (const app of Array.from(appStore.allApps || []) as any[]) entries.push([app?.appid, app]); } catch {}
@@ -232,7 +260,7 @@ export function getMappedShortcuts(): Array<{ id: number; title: string }> {
 		if (!Number.isFinite(shortcutId) || shortcutId < SHORTCUT_THRESHOLD || !title) continue;
 		const steamAppId = findMappingForTitle(title, shortcutId);
 		if (/^\d+$/.test(String(steamAppId || '')) && !seen.has(shortcutId)) {
-			result.push({ id: shortcutId, title });
+			result.push({ id: shortcutId, title, steamAppId: String(steamAppId) });
 			seen.add(shortcutId);
 		}
 	}

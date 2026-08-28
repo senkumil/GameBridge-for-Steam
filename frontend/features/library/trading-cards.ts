@@ -8,9 +8,16 @@ import type { NativeLibraryLayout } from './layout';
 import { buildNativeSidebarSection } from './layout';
 
 const tradingCardPreviewCleanup = new WeakMap<Document, () => void>();
+const responsiveGridCleanups = new Map<HTMLElement, () => void>();
 
 export function disposeTradingCardPreview(doc: Document): void {
 	tradingCardPreviewCleanup.get(doc)?.();
+}
+
+export function disposeResponsiveTradingCardGrids(doc: Document): void {
+	for (const [section, cleanup] of Array.from(responsiveGridCleanups)) {
+		if (section.ownerDocument === doc) cleanup();
+	}
 }
 
 function openTradingCardPreview(doc: Document, imageUrl: string, gameName: string): void {
@@ -347,6 +354,7 @@ function setupTradingCardsHelpTooltip(doc: Document, button: HTMLElement): void 
 
 /** Steam reflows cards into fewer columns before it reduces their visual size. */
 function installResponsiveTradingCardGrid(section: HTMLElement): void {
+	responsiveGridCleanups.get(section)?.();
 	const body = section.querySelector<HTMLElement>('.gdl-trading-cards-body');
 	const grid = section.querySelector<HTMLElement>('.gdl-trading-card-grid');
 	if (!body || !grid) return;
@@ -360,14 +368,11 @@ function installResponsiveTradingCardGrid(section: HTMLElement): void {
 	if (typeof ResizeObserverCtor !== 'function') return;
 	const observer = new ResizeObserverCtor(update);
 	observer.observe(body);
-	const MutationObserverCtor = section.ownerDocument.defaultView?.MutationObserver;
-	if (typeof MutationObserverCtor !== 'function' || !section.ownerDocument.body) return;
-	const lifecycle = new MutationObserverCtor(() => {
-		if (section.isConnected) return;
+	const cleanup = (): void => {
 		observer.disconnect();
-		lifecycle.disconnect();
-	});
-	lifecycle.observe(section.ownerDocument.body, { childList: true, subtree: true });
+		responsiveGridCleanups.delete(section);
+	};
+	responsiveGridCleanups.set(section, cleanup);
 }
 
 export async function renderOfficialTradingCards(
@@ -416,6 +421,13 @@ export async function renderOfficialTradingCards(
 		help.setAttribute('aria-label', gdlText('trading_cards', 'Trading Cards'));
 		text.appendChild(help);
 		setupTradingCardsHelpTooltip(doc, help);
+
+		const headingChildren = Array.from(heading.children) as HTMLElement[];
+		const textRoot = headingChildren.find(child => child === text || child.contains(text)) || null;
+		for (const child of headingChildren) {
+			if (child === textRoot) continue;
+			child.style.display = 'none';
+		}
 	}
 
 	const dlcNode = doc.getElementById('gdl-dlc-section');

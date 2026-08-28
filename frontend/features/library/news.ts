@@ -72,6 +72,8 @@ export async function getNews(steamAppId: string): Promise<NewsItem[]> {
 			...(Array.isArray(announcements.items) ? announcements.items : []),
 			...(Array.isArray(englishAnnouncements.items) ? englishAnnouncements.items : []),
 		];
+		const partnerEventsUnavailable = preferred?.unavailable === true
+			&& (preferredLanguage === 'english' || english?.unavailable === true);
 		if (partnerItems.length > 0 || officialAnnouncements.length > 0) {
 			const items: NewsItem[] = [
 				...partnerItems.map((e: any) => ({
@@ -108,7 +110,13 @@ export async function getNews(steamAppId: string): Promise<NewsItem[]> {
 			cacheSet(cacheKey, merged);
 			return merged;
 		}
-		backendLog('Official Steam activity feed empty for ' + steamAppId);
+		// A retired AppID may no longer have a Store News Hub. Cache that expected
+		// empty state so returning to the game does not call the dead endpoint again.
+		if (partnerEventsUnavailable) {
+			const merged = mergeSupplementalPatchNotes(steamAppId, []);
+			cacheSet(cacheKey, merged);
+			return merged;
+		}
 	} catch (e) {
 		backendLog('Official Steam activity fetch error: ' + e);
 	}

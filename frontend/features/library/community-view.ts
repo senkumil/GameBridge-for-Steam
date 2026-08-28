@@ -5,6 +5,7 @@ import type { NativeLibraryLayout } from './layout';
 import { buildNativeSidebarSection } from './layout';
 
 const progressiveRevealCleanup = new WeakMap<HTMLElement, () => void>();
+const deferredHydrationCleanup = new WeakMap<HTMLElement, () => void>();
 
 function createCommunityHeader(doc: Document): HTMLElement {
 	const header = doc.createElement('div');
@@ -17,6 +18,7 @@ function createCommunityHeader(doc: Document): HTMLElement {
 
 export function disposeCommunityProgressiveReveal(root: HTMLElement): void {
 	progressiveRevealCleanup.get(root)?.();
+	deferredHydrationCleanup.get(root)?.();
 }
 
 /** Progressive reveal that owns and disposes every listener/observer it installs. */
@@ -71,25 +73,62 @@ export function setupCommunityProgressiveReveal(doc: Document, root: HTMLElement
 	if (intersectionObserver) intersectionObserver.observe(sentinel);
 	else while (hiddenCards().length > 0) revealNext();
 
-	const MutationObserverCtor = (doc.defaultView as any)?.MutationObserver as typeof MutationObserver | undefined;
-	const lifecycleObserver = MutationObserverCtor && doc.documentElement
-		? new MutationObserverCtor(() => {
-			if (!root.isConnected) cleanup();
-		})
-		: null;
-	lifecycleObserver?.observe(doc.documentElement, { childList: true, subtree: true });
-
 	function cleanup(): void {
 		if (disposed) return;
 		disposed = true;
 		intersectionObserver?.disconnect();
-		lifecycleObserver?.disconnect();
 		for (const target of scrollTargets) target.removeEventListener('scroll', checkScrollPosition);
 		progressiveRevealCleanup.delete(root);
 	}
 
 	progressiveRevealCleanup.set(root, cleanup);
 	checkScrollPosition();
+	return cleanup;
+}
+
+/** Delay optional network community content until its already-rendered section
+ * approaches the viewport. Store screenshots remain visible immediately, then
+ * the richer community response replaces them in place. */
+export function scheduleCommunityHydration(
+	doc: Document,
+	data: SteamGameData,
+	load: () => Promise<CommunityContentItem[]>,
+	isCurrent: () => boolean,
+): () => void {
+	const root = doc.getElementById('gdl-community-content') as HTMLElement | null;
+	if (!root) return () => {};
+	deferredHydrationCleanup.get(root)?.();
+	let disposed = false;
+	let started = false;
+	let observer: IntersectionObserver | null = null;
+	const cleanup = (): void => {
+		if (disposed) return;
+		disposed = true;
+		observer?.disconnect();
+		deferredHydrationCleanup.delete(root);
+	};
+	const start = (): void => {
+		if (started || disposed) return;
+		started = true;
+		observer?.disconnect();
+		void load().then(items => {
+			if (disposed || !root.isConnected || !isCurrent() || items.length === 0) return;
+			const inner = root.querySelector<HTMLElement>('#gdl-community-inner');
+			if (!inner) return;
+			inner.innerHTML = renderCommunityContentHtml(data, items);
+			setupCommunityProgressiveReveal(doc, root);
+		}).finally(cleanup);
+	};
+	const Observer = (doc.defaultView as any)?.IntersectionObserver as typeof IntersectionObserver | undefined;
+	if (typeof Observer === 'function') {
+		observer = new Observer(entries => {
+			if (entries.some(entry => entry.isIntersecting)) start();
+		}, { root: null, rootMargin: '600px 0px' });
+		observer.observe(root);
+	} else {
+		start();
+	}
+	deferredHydrationCleanup.set(root, cleanup);
 	return cleanup;
 }
 

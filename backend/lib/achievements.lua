@@ -5,316 +5,58 @@ local http = deps.http
 local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
-local config = deps.config
+local settings = deps.achievement_settings
+local policy = deps.achievement_policy
+local sources = deps.achievement_sources
+local state_reader = deps.achievement_state
+local lru = deps.lru_cache
 local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
 local M = {}
-local get_config_path = config.get_config_path
 local html_unescape = util.html_unescape
 local local_achievement_meta_cache = {}
+local resolution_log_signatures = {}
+local MAX_METADATA_CACHE_ENTRIES = 24
+local MAX_RESOLUTION_SIGNATURES = 64
 
-local function expand_environment_variables(str)
-    if not str or str == "" then return "" end
-    return str:gsub("%%([^%%]+)%%", function(var)
-        local val = os.getenv(var)
-        return val or ("%" .. var .. "%")
-    end)
+local function set_metadata_cache(key, value)
+    lru.put(local_achievement_meta_cache, key, value, MAX_METADATA_CACHE_ENTRIES)
 end
 
-local function default_achievement_root()
-    local appdata = os.getenv("APPDATA")
-    if appdata and appdata ~= "" then
-        if fs.exists(fs.join(appdata, "GSE Saves")) then
-            return fs.join(appdata, "GSE Saves")
-        end
-        if fs.exists(fs.join(appdata, "Goldberg SteamEmu Saves")) then
-            return fs.join(appdata, "Goldberg SteamEmu Saves")
-        end
-        return fs.join(appdata, "GSE Saves")
-    end
-    local localappdata = os.getenv("LOCALAPPDATA")
-    if localappdata and localappdata ~= "" and fs.exists(fs.join(localappdata, "GSE Saves")) then
-        return fs.join(localappdata, "GSE Saves")
-    end
-    local userprofile = os.getenv("USERPROFILE")
-    if userprofile and userprofile ~= "" then
-        return fs.join(userprofile, "AppData", "Roaming", "GSE Saves")
-    end
-    return "C:\\Users\\" .. tostring(os.getenv("USERNAME") or "User") .. "\\AppData\\Roaming\\GSE Saves"
-end
-
-local function achievement_base_path_config_path()
-    local backend_dir = MILLENNIUM_PLUGIN_SECRET_BACKEND_ABSOLUTE or ""
-    local plugin_dir = fs.parent_path(backend_dir)
-    if not plugin_dir or plugin_dir == "" then
-        plugin_dir = fs.parent_path(get_config_path())
-    end
-    return fs.join(plugin_dir, "achievement_base_path.txt")
-end
-
-local function achievement_game_paths_config_path()
-    local backend_dir = MILLENNIUM_PLUGIN_SECRET_BACKEND_ABSOLUTE or ""
-    local plugin_dir = fs.parent_path(backend_dir)
-    if not plugin_dir or plugin_dir == "" then
-        plugin_dir = fs.parent_path(get_config_path())
-    end
-    return fs.join(plugin_dir, "achievement_paths.json")
-end
-
-local function read_text_file(path)
-    if not path or path == "" then return nil end
-    local f = io.open(path, "rb")
-    if not f then
-        local alt = path:gsub("\\", "/")
-        f = io.open(alt, "rb")
-    end
-    if not f then
-        local alt2 = path:gsub("/", "\\")
-        f = io.open(alt2, "rb")
-    end
-    if not f then return nil end
-    local s = f:read("*a")
-    f:close()
-    return s
-end
-
-local function file_exists(path)
-    -- Existence checks must never read the file body. Achievement databases
-    -- and schema files can be several megabytes, and this helper is called for
-    -- every candidate path during detection.  fs.exists performs a metadata
-    -- check and also works for directories used as achievement roots.
-    if not path or path == "" then return false end
-    local value = tostring(path)
-    if fs.exists(value) then return true end
-
-    -- Keep the legacy separator fallbacks for older Millennium fs providers,
-    -- but still perform metadata-only checks on each variant.
-    local forward = value:gsub("\\", "/")
-    if forward ~= value and fs.exists(forward) then return true end
-    local backward = value:gsub("/", "\\")
-    if backward ~= value and fs.exists(backward) then return true end
-    return false
-end
-
-local function local_achievement_root()
-    local cfg = achievement_base_path_config_path()
-    if cfg ~= "" and file_exists(cfg) then
-        local s = read_text_file(cfg)
-        if s then
-            s = tostring(s):gsub("^%s+", ""):gsub("%s+$", "")
-            if s ~= "" and s:lower() ~= "c:\\steam auto" and s:lower() ~= "c:/steam auto" then
-                return expand_environment_variables(s)
-            end
-        end
-    end
-    return default_achievement_root()
-end
-
-local function normalize_achievement_base_path(value)
-    local path = tostring(value or "")
-    path = path:gsub("^%s+", ""):gsub("%s+$", "")
-    local quoted = path:match('^"(.-)"$')
-    if quoted then path = quoted end
-    if path == "" or path:lower() == "c:\\steam auto" or path:lower() == "c:/steam auto" then
-        path = default_achievement_root()
-    else
-        path = expand_environment_variables(path)
-    end
-    if #path > 4096 or path:find("%z") or path:find("[\r\n]") then return nil end
-    return path
-end
-
-local function normalize_game_achievement_path(value)
-    local path = tostring(value or "")
-    path = path:gsub("^%s+", ""):gsub("%s+$", "")
-    local quoted = path:match('^"(.-)"$')
-    if quoted then path = quoted end
-    if #path > 4096 or path:find("%z") or path:find("[\r\n]") then return nil end
-    return path
-end
-
-local function read_game_achievement_paths()
-    local content = read_text_file(achievement_game_paths_config_path())
-    if not content or content == "" then return {} end
-    local ok, data = pcall(cjson.decode, content)
-    if not ok or type(data) ~= "table" then
-        logger:warn("Failed to parse per-game achievement paths")
-        return {}
-    end
-    local result = {}
-    for key, value in pairs(data) do
-        if type(key) == "string" and type(value) == "string" and value ~= "" then
-            result[key] = value
-        end
-    end
-    return result
-end
-
-local function write_game_achievement_paths(data)
-    local path = achievement_game_paths_config_path()
-    local ok, err = config.write_json_atomic(path, data)
-    if not ok then
-        logger:warn("Could not save per-game achievement paths: " .. tostring(err or "write_failed"))
-        return false
-    end
-    return true
-end
-
-local function parse_achievement_path_request(request_json)
-    if type(request_json) == "table" then return request_json end
-    if type(request_json) == "string" and request_json ~= "" then
-        local ok, request = pcall(cjson.decode, request_json)
-        if ok and type(request) == "table" then return request end
-    end
-    return {}
-end
-
-local function game_achievement_path_keys(request)
-    local keys, seen = {}, {}
-    local function add(prefix, value)
-        local id = tostring(value or "")
-        if id:match("^%d+$") then
-            local key = prefix .. id
-            if not seen[key] then
-                seen[key] = true
-                keys[#keys + 1] = key
-            end
-        end
-    end
-    add("shortcut:", request.shortcut_app_id or request.state_app_id or request.local_app_id)
-    add("appid:", request.steam_app_id or request.appid)
-    return keys
-end
-
-local function achievement_source_status(path)
-    if not path or path == "" then return false, false end
-    local lower = path:lower()
-    if lower:match("%.json$") then
-        local exists = file_exists(path)
-        return exists, exists
-    end
-    local exists = fs.exists(path)
-    local usable = file_exists(fs.join(path, "achievements.json"))
-        or file_exists(fs.join(path, "stats", "achievements.json"))
-        or file_exists(fs.join(path, "steam_settings", "achievements.json"))
-    return exists, usable
-end
-
-local function configured_game_achievement_path(state_appid, metadata_appid)
-    local paths = read_game_achievement_paths()
-    local request = {
-        shortcut_app_id = state_appid,
-        steam_app_id = metadata_appid,
-    }
-    for _, key in ipairs(game_achievement_path_keys(request)) do
-        local path = paths[key]
-        if type(path) == "string" and path ~= "" then return path, key end
-    end
-    return nil, nil
+local function reset_local_caches()
+    local_achievement_meta_cache = {}
+    state_reader.clear()
+    resolution_log_signatures = {}
+    if sources and sources.clear_cache then sources.clear_cache() end
 end
 
 function M.get_achievement_base_path()
-    local path = local_achievement_root()
-    return cjson.encode({
-        ok = true,
-        path = path,
-        exists = fs.exists(path),
-        configured = file_exists(achievement_base_path_config_path()),
-    })
+    return settings.get_base_path()
 end
 
 function M.set_achievement_base_path(path)
-    local normalized = normalize_achievement_base_path(path)
-    if not normalized then
-        return cjson.encode({ ok = false, error = "invalid_path" })
-    end
-
-    local cfg = achievement_base_path_config_path()
-    local f, err = io.open(cfg, "wb")
-    if not f then
-        logger:warn("Could not save achievement base path: " .. tostring(err))
-        return cjson.encode({ ok = false, error = "write_failed" })
-    end
-    f:write(normalized)
-    f:close()
-    local_achievement_meta_cache = {}
-    logger:info("Achievement base path updated: " .. normalized)
-    return cjson.encode({ ok = true, path = normalized, exists = fs.exists(normalized) })
+    reset_local_caches()
+    return settings.set_base_path(path)
 end
 
 function M.get_game_achievement_path(request_json)
-    local request = parse_achievement_path_request(request_json)
-    local keys = game_achievement_path_keys(request)
-    if #keys == 0 then
-        return cjson.encode({ ok = false, error = "missing_game_id" })
-    end
-    local paths = read_game_achievement_paths()
-    for _, key in ipairs(keys) do
-        local path = paths[key]
-        if type(path) == "string" and path ~= "" then
-            local exists, usable = achievement_source_status(path)
-            return cjson.encode({
-                ok = true,
-                configured = true,
-                key = key,
-                path = path,
-                exists = exists,
-                usable = usable,
-            })
-        end
-    end
-    return cjson.encode({ ok = true, configured = false, path = "", exists = false, usable = false })
+    return settings.get_game_path(request_json)
 end
 
 function M.set_game_achievement_path(request_json)
-    local request = parse_achievement_path_request(request_json)
-    local keys = game_achievement_path_keys(request)
-    if #keys == 0 then
-        return cjson.encode({ ok = false, error = "missing_game_id" })
-    end
-    local path = normalize_game_achievement_path(request.path)
-    if path == nil then
-        return cjson.encode({ ok = false, error = "invalid_path" })
-    end
-
-    local paths = read_game_achievement_paths()
-    local key = keys[1]
-    if path == "" then
-        -- A path may have been saved under the official AppID before Steam's
-        -- local shortcut ID was available. Clear every alias for this game so
-        -- "Use automatic" cannot resurrect that older override.
-        for _, candidate_key in ipairs(keys) do paths[candidate_key] = nil end
-    else
-        paths[key] = path
-    end
-    if not write_game_achievement_paths(paths) then
-        return cjson.encode({ ok = false, error = "write_failed" })
-    end
-
-    local_achievement_meta_cache = {}
-    local exists, usable = achievement_source_status(path)
-    logger:info((path == "" and "Cleared" or "Updated")
-        .. " per-game achievement path for " .. key
-        .. (path ~= "" and (": " .. path) or ""))
-    return cjson.encode({
-        ok = true,
-        configured = path ~= "",
-        key = key,
-        path = path,
-        exists = exists,
-        usable = usable,
-    })
+    reset_local_caches()
+    return settings.set_game_path(request_json)
 end
 
-local function decode_json_file(path)
-    local s = read_text_file(path)
-    if not s or s == "" then return nil end
-    local ok, data = pcall(cjson.decode, s)
-    if not ok or type(data) ~= "table" then
-        logger:warn("Local achievements JSON parse failed: " .. tostring(path))
-        return nil
-    end
-    return data
+function M.get_game_achievement_options(request_json)
+    return settings.get_game_options(request_json)
 end
+
+function M.set_game_achievement_options(request_json)
+    reset_local_caches()
+    return settings.set_game_options(request_json)
+end
+
+local decode_json_file = state_reader.decode
 
 local function clean_html_text(s)
     s = tostring(s or "")
@@ -549,6 +291,7 @@ local function match_public_metadata(appid, lang, root_dir)
     local now = os.time()
     local cached = local_achievement_meta_cache[key]
     if cached and (now - (cached.time or 0)) < 1800 then
+        lru.touch(cached)
         return cached.by_name or {}, cached.source or "cache"
     end
 
@@ -579,7 +322,7 @@ local function match_public_metadata(appid, lang, root_dir)
                 if row.icon ~= "" and (m.icon == "" or not m.icon:find("^https?://")) then m.icon = row.icon end
             end
         end
-        local_achievement_meta_cache[key] = { time = now, by_name = schema, source = "local_schema:" .. schema_path }
+        set_metadata_cache(key, { time = now, by_name = schema, source = "local_schema:" .. schema_path })
         return schema, "local_schema:" .. schema_path
     end
 
@@ -641,13 +384,46 @@ local function match_public_metadata(appid, lang, root_dir)
         end
     end
 
-    local_achievement_meta_cache[key] = { time = now, by_name = result, source = "steam_public" }
+    set_metadata_cache(key, { time = now, by_name = result, source = "steam_public" })
     return result, "steam_public"
+end
+
+function M.get_game_achievement_capabilities(request_json)
+    local request = settings.parse_request(request_json)
+    local appid = tostring(request.steam_app_id or request.appid or "")
+    if not appid:match("^%d+$") then
+        return cjson.encode({ ok = false, error = "missing_steam_app_id" })
+    end
+    local lang = tostring(request.language or "spanish"):gsub("[^%w_]", "")
+    if lang == "" then lang = "spanish" end
+    local metadata, metadata_source = match_public_metadata(appid, lang, fs.join(settings.local_root(), appid))
+    local total, online_count = 0, 0
+    for name, item in pairs(metadata) do
+        total = total + 1
+        if policy.is_online({
+            name = name,
+            title = item.title,
+            description = item.description,
+        }) then
+            online_count = online_count + 1
+        end
+    end
+    return cjson.encode({
+        ok = true,
+        appid = appid,
+        total = total,
+        online_count = online_count,
+        has_online = online_count > 0,
+        metadata_source = metadata_source,
+    })
 end
 
 function M.fetch_local_achievement_data(request_json, language, state_app_id)
     local steam_app_id = request_json
     local allow_simulated = false
+    local simulate_unlock_all = false
+    local unlock_online = false
+    local zero_progress = false
 
     -- The Millennium Lua host iterates JSON object values in key order before
     -- invoking a function.  A single JSON-string argument avoids positional
@@ -658,6 +434,9 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             steam_app_id = request.steam_app_id or request.appid or request[1]
             language = request.language or language
             allow_simulated = request.allow_simulated == true
+            simulate_unlock_all = request.simulate_unlock_all == true
+            unlock_online = request.unlock_online == true
+            zero_progress = request.zero_progress == true
             state_app_id = request.state_app_id
                 or request.shortcut_app_id
                 or request.local_app_id
@@ -666,6 +445,9 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
     elseif type(request_json) == "table" then
         language = request_json.language or language
         allow_simulated = request_json.allow_simulated == true
+        simulate_unlock_all = request_json.simulate_unlock_all == true
+        unlock_online = request_json.unlock_online == true
+        zero_progress = request_json.zero_progress == true
         -- A non-Steam shortcut has its own unsigned Steam shortcut ID.  Some
         -- emulators/Achievement Watcher setups write their live achievement
         -- state under that ID, while the linked Steam AppID is still needed
@@ -685,7 +467,21 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
     local lang = tostring(language or "english"):gsub("[^%w_]", "")
     if lang == "" then lang = "english" end
 
-    local root = local_achievement_root()
+    local effective = settings.resolve_options({
+        shortcut_app_id = state_appid,
+        steam_app_id = metadata_appid,
+    }, {
+        zero_progress = zero_progress,
+        simulate = allow_simulated,
+        unlock_all = simulate_unlock_all,
+        unlock_online = unlock_online,
+    })
+    allow_simulated = effective.simulate == true
+    simulate_unlock_all = effective.unlock_all == true
+    unlock_online = effective.unlock_online == true
+    zero_progress = effective.zero_progress == true
+
+    local root = settings.local_root()
     local metadata_dir = fs.join(root, metadata_appid)
 
     -- Prefer the official linked Steam AppID because it is stable across
@@ -705,15 +501,18 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
     end
 
     -- A source configured in this shortcut's Properties is intentionally
-    -- checked first. It may be a loose JSON file or a folder containing it.
-    local explicit_path, explicit_key = configured_game_achievement_path(state_appid, metadata_appid)
-    if explicit_path and explicit_path ~= "" then
-        if explicit_path:lower():match("%.json$") then
-            add_state_path(explicit_path, state_appid, fs.parent_path(explicit_path), "per_game:" .. tostring(explicit_key))
-        else
-            add_state_path(fs.join(explicit_path, "achievements.json"), state_appid, explicit_path, "per_game:" .. tostring(explicit_key))
-            add_state_path(fs.join(explicit_path, "stats", "achievements.json"), state_appid, explicit_path, "per_game:" .. tostring(explicit_key))
-            add_state_path(fs.join(explicit_path, "steam_settings", "achievements.json"), state_appid, explicit_path, "per_game:" .. tostring(explicit_key))
+    -- checked first when real progress is active. Simulation is a view policy:
+    -- it must not read or mutate a progress file while producing its own state.
+    if not zero_progress and not allow_simulated then
+        local explicit_path, explicit_key = settings.configured_path(state_appid, metadata_appid)
+        if explicit_path and explicit_path ~= "" then
+            if explicit_path:lower():match("%.json$") then
+                add_state_path(explicit_path, state_appid, fs.parent_path(explicit_path), "per_game:" .. tostring(explicit_key))
+            else
+                add_state_path(fs.join(explicit_path, "achievements.json"), state_appid, explicit_path, "per_game:" .. tostring(explicit_key))
+                add_state_path(fs.join(explicit_path, "stats", "achievements.json"), state_appid, explicit_path, "per_game:" .. tostring(explicit_key))
+                add_state_path(fs.join(explicit_path, "steam_settings", "achievements.json"), state_appid, explicit_path, "per_game:" .. tostring(explicit_key))
+            end
         end
     end
 
@@ -779,8 +578,25 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             add_state_path(fs.join(gse_local, "stats", "achievements.json"), appid, gse_local, "gse_saves_local")
         end
     end
-    add_state_paths_for(metadata_appid)
-    if state_appid ~= metadata_appid then add_state_paths_for(state_appid) end
+    -- Automatic AppID/emulator progress is likewise ignored temporarily while
+    -- simulation is enabled. The files remain untouched and become active again
+    -- as soon as the user disables simulation.
+    if not zero_progress and not allow_simulated then
+        -- Steam regenerates a non-Steam Shortcut AppID when its identity changes.
+        -- Scan numeric siblings under the configured root and compare their
+        -- complete achievement-name set with the official schema. Exact matches
+        -- are ordered by file modification time, so the active or most recently
+        -- used historical folder wins without moving or changing any file.
+        local discovery_metadata = select(1, match_public_metadata(metadata_appid, lang, metadata_dir))
+        local root_matches = sources.find_matching_root_candidates(
+            root, discovery_metadata, metadata_appid, state_appid
+        )
+        for _, candidate in ipairs(root_matches) do
+            add_state_path(candidate.path, candidate.appid, candidate.schema_dir, candidate.source)
+        end
+        add_state_paths_for(metadata_appid)
+        if state_appid ~= metadata_appid then add_state_paths_for(state_appid) end
+    end
 
     local state = nil
     local state_path = ""
@@ -799,24 +615,10 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         end
     end
 
-    if not state and not allow_simulated then
-        return cjson.encode({
-            found = false,
-            appid = metadata_appid,
-            state_appid = state_appid,
-            path = fs.join(root, state_appid, "achievements.json"),
-            root = root,
-            state_source = "unavailable",
-        })
-    end
-
-    if not state then
-        -- Explicit developer/test fallback for linked external games. Production
-        -- requests never fabricate unlock progress when achievements.json is absent.
-        -- achievements.json, keep the deterministic fixed achievement set used
-        -- by previous releases. This is visual/test data only; it never writes
-        -- to Steam or to the game's save files. Public Steam metadata provides
-        -- the real names, descriptions and icons.
+    if not state and allow_simulated then
+        -- Simulation changes only the earned state. The list, names,
+        -- descriptions and icon URLs still come from Steam's real metadata,
+        -- and this path never writes to Steam or to a game's save files.
         local metadata, metadata_source = match_public_metadata(metadata_appid, lang, metadata_dir)
         local meta_list = {}
         for name, m in pairs(metadata) do
@@ -862,11 +664,14 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
 
         local base_now = 1771616040 -- Stable timestamp so the visual test set never reshuffles.
         local achievements = {}
+        local simulated_unlocked = 0
         for idx, item in ipairs(meta_list) do
-            local is_earned = (idx <= unlocked_target)
+            local is_online = policy.is_online(item)
+            local is_earned = simulate_unlock_all or idx <= unlocked_target or (unlock_online and is_online)
             local earned_time = 0
             if is_earned then
-                earned_time = base_now - (86400 * (unlocked_target - idx + 1) * 3) - ((appid_num + idx * 7919) % 43200)
+                simulated_unlocked = simulated_unlocked + 1
+                earned_time = base_now - (86400 * idx * 3) - ((appid_num + idx * 7919) % 43200)
             end
             achievements[#achievements + 1] = {
                 name = item.name,
@@ -880,6 +685,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
                 earned_time = earned_time,
                 progress = 0,
                 max_progress = 0,
+                is_online = is_online,
             }
         end
 
@@ -888,12 +694,26 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             appid = metadata_appid,
             metadata_appid = metadata_appid,
             state_appid = state_appid,
-            unlocked = unlocked_target,
+            simulation_enabled = true,
+            simulate_unlock_all = simulate_unlock_all,
+            unlock_online = unlock_online,
+            zero_progress = false,
+            unlocked = simulated_unlocked,
             total = total,
             metadata_source = tostring(metadata_source or "public") .. ":simulated-test",
             state_source = "simulated_test",
             achievements = achievements,
         })
+    end
+
+    if not state then
+        -- Always return the real Steam schema when no progress file exists.
+        -- This makes a live policy transition explicit: disabling online-only
+        -- unlock changes 2/50 to 0/50 instead of returning `found = false` and
+        -- leaving the previous forced result mounted in Steam's Library.
+        state = {}
+        state_source = zero_progress and "zero_progress_override" or "metadata_only"
+        state_source_appid = state_appid
     end
 
     -- Never use the shortcut ID to look up Steam metadata: it is not a real
@@ -904,17 +724,22 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         if type(st) == "table" then
             names[#names + 1] = tostring(name)
             total = total + 1
-            if st.earned == true or tonumber(st.earned) == 1 then
-                unlocked = unlocked + 1
-            end
         end
     end
     table.sort(names)
 
     local achievements = {}
+    local included_names = {}
     for _, name in ipairs(names) do
         local st = state[name] or {}
         local m = metadata[name] or {}
+        local is_online = policy.is_online({ name = name, title = m.title, description = m.description })
+        local is_earned = st.earned == true or tonumber(st.earned) == 1 or (unlock_online and is_online)
+        local earned_time = tonumber(st.earned_time) or 0
+        if is_earned then
+            unlocked = unlocked + 1
+            if earned_time == 0 then earned_time = os.time() - 86400 end
+        end
         achievements[#achievements + 1] = {
             name = name,
             display_name = tostring(m.title or name),
@@ -923,15 +748,55 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             icon_gray = tostring(m.icongray or ""),
             hidden = m.hidden == true,
             global_percent = tonumber(m.global_percent) or 0,
-            earned = (st.earned == true or tonumber(st.earned) == 1),
-            earned_time = tonumber(st.earned_time) or 0,
+            earned = is_earned,
+            earned_time = earned_time,
             progress = tonumber(st.progress) or 0,
             max_progress = tonumber(st.max_progress) or 0,
+            is_online = is_online,
         }
+        included_names[name] = true
+    end
+
+    -- Older emulator progress files may omit achievements that have never
+    -- written local state. When online unlock is enabled, merge any missing
+    -- online entries from Steam's real schema so they are represented in the
+    -- Library and in the launch-notification replay.
+    if total > 0 and unlock_online and next(metadata) then
+        local missing_online_names = {}
+        for name, m in pairs(metadata) do
+            if not included_names[name]
+                and policy.is_online({ name = name, title = m.title, description = m.description }) then
+                missing_online_names[#missing_online_names + 1] = tostring(name)
+            end
+        end
+        table.sort(missing_online_names)
+        for _, name in ipairs(missing_online_names) do
+            local m = metadata[name] or {}
+            achievements[#achievements + 1] = {
+                name = name,
+                display_name = tostring(m.title or name),
+                description = tostring(m.description or ""),
+                icon = tostring(m.icon or ""),
+                icon_gray = tostring(m.icongray or m.icon or ""),
+                hidden = m.hidden == true,
+                global_percent = tonumber(m.global_percent) or 0,
+                earned = true,
+                earned_time = os.time() - 86400,
+                progress = 0,
+                max_progress = 0,
+                is_online = true,
+            }
+            included_names[name] = true
+            unlocked = unlocked + 1
+            total = total + 1
+        end
     end
 
     if total == 0 and next(metadata) then
         for name, m in pairs(metadata) do
+            local is_online = policy.is_online({ name = name, title = m.title, description = m.description })
+            local is_earned = unlock_online and is_online
+            if is_earned then unlocked = unlocked + 1 end
             achievements[#achievements + 1] = {
                 name = name,
                 display_name = tostring(m.title or name),
@@ -940,18 +805,31 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
                 icon_gray = tostring(m.icongray or ""),
                 hidden = m.hidden == true,
                 global_percent = tonumber(m.global_percent) or 0,
-                earned = false,
-                earned_time = 0,
+                earned = is_earned,
+                earned_time = is_earned and (os.time() - 86400) or 0,
                 progress = 0,
                 max_progress = 0,
+                is_online = is_online,
             }
             total = total + 1
         end
         table.sort(achievements, function(a, b) return tostring(a.name) < tostring(b.name) end)
     end
 
-    logger:info("Local achievement data resolved: " .. unlocked .. "/" .. total
-        .. " for linked appid " .. metadata_appid .. " from state appid " .. state_source_appid)
+    local resolution_key = metadata_appid .. "|" .. state_appid
+    local resolution_signature = table.concat({
+        tostring(unlocked), tostring(total), tostring(state_source_appid),
+        tostring(state_source), tostring(state_path),
+    }, "|")
+    local previous_resolution = resolution_log_signatures[resolution_key]
+    if not previous_resolution or previous_resolution.signature ~= resolution_signature then
+        logger:info("Local achievement data resolved: " .. unlocked .. "/" .. total
+            .. " for linked appid " .. metadata_appid .. " from state appid " .. state_source_appid
+            .. " via " .. tostring(state_source) .. " (" .. tostring(state_path) .. ")")
+    end
+    lru.put(resolution_log_signatures, resolution_key, {
+        signature = resolution_signature,
+    }, MAX_RESOLUTION_SIGNATURES)
 
     return cjson.encode({
         found = true,
@@ -962,6 +840,10 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         path = state_path,
         metadata_source = metadata_source,
         state_source = state_source,
+        simulation_enabled = false,
+        simulate_unlock_all = false,
+        unlock_online = unlock_online,
+        zero_progress = zero_progress,
         unlocked = unlocked,
         total = total,
         achievements = achievements,

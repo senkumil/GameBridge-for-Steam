@@ -2,6 +2,7 @@ import { backendLog } from '../../api/backend';
 import { normalizeTitle } from '../../core/text';
 import { loc, officialSteamText, steamIntlLocale } from '../../steam/localization';
 import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes } from '../../steam/shortcuts';
+import { fetchPlaytimeStatsBatch } from '../playtime/service';
 
 
 function normalizedDomText(value: unknown): string {
@@ -20,6 +21,7 @@ const bigPictureShortcutState = new Map<object, {
 	compatPacked: unknown;
 	playtimeForever: unknown;
 	playtimeLastTwoWeeks: unknown;
+	playtimeOwnDescriptors?: Partial<Record<'minutes_playtime_forever' | 'minutes_playtime_last_two_weeks', PropertyDescriptor | null>>;
 	shortcutMethod?: Function;
 	deckVerifiedMethod?: Function;
 }>();
@@ -49,18 +51,22 @@ function formatBigPicturePlaytime(minutes: number): string {
 	return `${label}: ${wholeMinutes} ${unit}`;
 }
 
-function applyShortcutPlaytimeToOverview(shortcutAppId: number, minutes: number): void {
+function applyShortcutPlaytimeToOverview(shortcutAppId: number, minutesForever: number, minutesLastTwoWeeks: number): boolean {
 	const app = getShortcutAppById(shortcutAppId);
-	if (!app) return;
+	if (!app) return false;
+	let changed = false;
+	const forever = Math.max(0, Math.floor(minutesForever));
+	const recent = Math.max(0, Math.floor(minutesLastTwoWeeks));
 	const currentForever = Number(app.minutes_playtime_forever || 0);
-	if (minutes !== currentForever) setBigPictureField(app, 'minutes_playtime_forever', minutes);
-	// The API call above is the lifetime value. Preserve Steam's own recent
-	// value when it already has one; otherwise the lifetime value is still
-	// enough for Big Picture's total-playtime label.
-	if (Number(app.minutes_playtime_last_two_weeks || 0) < 0) setBigPictureField(app, 'minutes_playtime_last_two_weeks', 0);
+	if (forever !== currentForever && setBigPicturePlaytimeField(app, 'minutes_playtime_forever', forever)) changed = true;
+	if (recent !== Number(app.minutes_playtime_last_two_weeks || 0)
+		&& setBigPicturePlaytimeField(app, 'minutes_playtime_last_two_weeks', recent)) changed = true;
+	return changed;
 }
 
-function findMappedTitleInScope(scope: Element, shortcuts: Array<{ id: number; title: string }>): { id: number; title: string } | null {
+type MappedShortcut = { id: number; title: string; steamAppId: string };
+
+function findMappedTitleInScope(scope: Element, shortcuts: MappedShortcut[]): MappedShortcut | null {
 	const candidates = Array.from(scope.querySelectorAll('*')) as HTMLElement[];
 	for (const element of candidates) {
 		const text = element.childElementCount === 0 ? (element.textContent || '').replace(/\s+/g, ' ').trim() : '';
@@ -76,13 +82,41 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 	const shortcuts = getMappedShortcuts();
 	if (shortcuts.length === 0) return;
 
-	// Update Steam's own overview objects as well as the visible fallback text.
-	// This makes the value survive React re-renders and lets native BP cards use
-	// the same playtime field as the desktop library.
+	// SteamClient.GetPlaytime commonly returns no data for non-Steam shortcuts.
+	// Merge it with GameBridge's canonical session store instead of treating that
+	// empty native response as authoritative. Both lifetime and two-week values
+	// feed the native recently-played card.
+	const resolved = new Map<number, { forever: number; recent: number }>();
+	let overviewChanged = false;
+	const fallbacks = await fetchPlaytimeStatsBatch(shortcuts.map(shortcut => ({
+		shortcutAppId: shortcut.id,
+		title: shortcut.title,
+		steamAppId: shortcut.steamAppId,
+	})));
 	await Promise.all(shortcuts.map(async (shortcut) => {
-		const minutes = await getShortcutPlaytimeMinutes(shortcut.id);
-		if (minutes) applyShortcutPlaytimeToOverview(shortcut.id, minutes);
+		const app = getShortcutAppById(shortcut.id);
+		const knownNativeMinutes = Number(app?.minutes_playtime_forever || 0);
+		const nativeMinutes = knownNativeMinutes > 0
+			? knownNativeMinutes
+			: await getShortcutPlaytimeMinutes(shortcut.id);
+		const fallback = fallbacks.get(shortcut.id) ?? null;
+		const forever = Math.max(
+			0,
+			Number(nativeMinutes || 0),
+			Number(fallback?.minutesForever || 0),
+			Number(app?.minutes_playtime_forever || 0),
+		);
+		const recent = Math.max(
+			0,
+			Number(fallback?.minutesLastTwoWeeks || 0),
+			Number(app?.minutes_playtime_last_two_weeks || 0),
+		);
+		resolved.set(shortcut.id, { forever, recent });
+		if (applyShortcutPlaytimeToOverview(shortcut.id, forever, recent)) overviewChanged = true;
 	}));
+	if (overviewChanged) {
+		try { (window as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
+	}
 
 	const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null);
 	const placeholders: HTMLElement[] = [];
@@ -95,15 +129,14 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 	for (const placeholder of placeholders) {
 		if (!placeholder.isConnected || placeholder.dataset.gdlBpPlaytime === '1') continue;
 		let scope: Element | null = placeholder.parentElement;
-		let match: { id: number; title: string } | null = null;
+		let match: MappedShortcut | null = null;
 		for (let depth = 0; scope && depth < 9 && scope !== doc.body; depth++, scope = scope.parentElement) {
 			match = findMappedTitleInScope(scope, shortcuts);
 			if (match) break;
 		}
 		if (!match) continue;
-		const minutes = await getShortcutPlaytimeMinutes(match.id);
-		if (!minutes) continue;
-		applyShortcutPlaytimeToOverview(match.id, minutes);
+		const minutes = resolved.get(match.id)?.forever || 0;
+		if (minutes <= 0) continue;
 		placeholder.textContent = formatBigPicturePlaytime(minutes);
 		placeholder.dataset.gdlBpPlaytime = '1';
 		backendLog(`Big Picture playtime shown for "${match.title}": ${minutes} minutes`);
@@ -196,6 +229,34 @@ function setBigPictureField(target: any, key: string, value: unknown): boolean {
 	}
 }
 
+type BigPicturePlaytimeKey = 'minutes_playtime_forever' | 'minutes_playtime_last_two_weeks';
+
+/** Some Steam clients expose playtime through a getter-only prototype field.
+ * Prefer ordinary assignment, then install a reversible instance value only
+ * for the active Big Picture session. The original descriptor is restored on
+ * exit so the desktop library never inherits this presentation shim. */
+function setBigPicturePlaytimeField(target: any, key: BigPicturePlaytimeKey, value: number): boolean {
+	if (setBigPictureField(target, key, value)) return true;
+	const state = bigPictureShortcutState.get(target);
+	if (!state) return false;
+	state.playtimeOwnDescriptors ||= {};
+	if (!Object.prototype.hasOwnProperty.call(state.playtimeOwnDescriptors, key)) {
+		state.playtimeOwnDescriptors[key] = Object.getOwnPropertyDescriptor(target, key) || null;
+	}
+	try {
+		const original = state.playtimeOwnDescriptors[key];
+		Object.defineProperty(target, key, {
+			configurable: true,
+			enumerable: original?.enumerable ?? true,
+			writable: true,
+			value,
+		});
+		return Number(target[key]) === value;
+	} catch {
+		return false;
+	}
+}
+
 function hideBigPictureShortcutTab(doc: Document): void {
 	const styleId = 'gdl-big-picture-hide-shortcut-tab';
 	if (!doc.getElementById(styleId)) {
@@ -204,6 +265,9 @@ function hideBigPictureShortcutTab(doc: Document): void {
 		style.textContent = '[data-gdl-hidden-shortcut-tab="1"]{display:none!important;}';
 		(doc.head || doc.documentElement).appendChild(style);
 	}
+	// Steam keeps the category strip mounted during ordinary focus/controller
+	// changes. Once its exact shortcut pill is marked there is nothing to scan.
+	if (doc.querySelector('[data-gdl-hidden-shortcut-tab="1"]')) return;
 	const labels = [
 		'fuera de steam', 'no de steam', 'non-steam', 'non steam', 'nicht-steam',
 		'hors steam', 'fora da steam', 'fuori da steam', 'poza steam', '非steam', '非 steam',
@@ -334,8 +398,19 @@ export function restoreBigPictureShortcutState(): void {
 		setBigPictureField(app, 'xbox_controller_support', state.xboxControllerSupport);
 		setBigPictureField(app, 'gamepad_preferred', state.gamepadPreferred);
 		setBigPictureField(app, 'steam_hw_compat_category_packed', state.compatPacked);
-		setBigPictureField(app, 'minutes_playtime_forever', state.playtimeForever);
-		setBigPictureField(app, 'minutes_playtime_last_two_weeks', state.playtimeLastTwoWeeks);
+		for (const key of ['minutes_playtime_forever', 'minutes_playtime_last_two_weeks'] as BigPicturePlaytimeKey[]) {
+			const descriptors = state.playtimeOwnDescriptors;
+			if (descriptors && Object.prototype.hasOwnProperty.call(descriptors, key)) {
+				const original = descriptors[key];
+				try {
+					if (original) Object.defineProperty(app, key, original);
+					else delete (app as any)[key];
+				} catch {}
+			} else {
+				setBigPictureField(app, key, key === 'minutes_playtime_forever'
+					? state.playtimeForever : state.playtimeLastTwoWeeks);
+			}
+		}
 		const clientData = [(app as any).local_per_client_data, (app as any).most_available_per_client_data, (app as any).selected_per_client_data].filter(Boolean);
 		clientData.forEach((data: any, index: number) => { setBigPictureField(data, 'installed', state.installed[index]); });
 		if (state.shortcutMethod) setBigPictureField(app, 'BIsShortcut', state.shortcutMethod);

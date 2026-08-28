@@ -1,6 +1,7 @@
 export interface GdlPreferences {
-	simulateAchievements: boolean;
 	autoDetectShortcuts: boolean;
+	simulateAchievements: boolean;
+	unlockOnlineAchievements: boolean;
 	trackNonSteamPlaytime: boolean;
 	autoCommunityArtwork: boolean;
 	steamGridDbApiKey: string;
@@ -10,8 +11,9 @@ const STORAGE_KEY = 'gdl_preferences_v1';
 const EVENT_NAME = 'gdl:preferences-changed';
 
 const DEFAULT_PREFERENCES: GdlPreferences = {
-	simulateAchievements: false,
 	autoDetectShortcuts: true,
+	simulateAchievements: false,
+	unlockOnlineAchievements: false,
 	trackNonSteamPlaytime: true,
 	autoCommunityArtwork: true,
 	steamGridDbApiKey: '',
@@ -20,10 +22,11 @@ const DEFAULT_PREFERENCES: GdlPreferences = {
 function sanitizePreferences(value: unknown): GdlPreferences {
 	const record = value && typeof value === 'object' ? value as Partial<GdlPreferences> : {};
 	return {
+		autoDetectShortcuts: record.autoDetectShortcuts !== false,
 		// This remains disabled by default, but no longer depends on a separate
 		// developer-mode switch that did not provide any independent behavior.
 		simulateAchievements: record.simulateAchievements === true,
-		autoDetectShortcuts: record.autoDetectShortcuts !== false,
+		unlockOnlineAchievements: record.unlockOnlineAchievements === true,
 		trackNonSteamPlaytime: record.trackNonSteamPlaytime !== false,
 		autoCommunityArtwork: record.autoCommunityArtwork !== false,
 		// Stored locally only. It is never logged or included in diagnostics.

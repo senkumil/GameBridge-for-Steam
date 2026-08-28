@@ -1,5 +1,41 @@
 # Changelog
 
+## v2.1.0 - Achievement reliability, performance and native isolation (2026-08-28)
+
+- Persists the last backend-confirmed playtime and full local-achievement snapshot for linked non-Steam shortcuts, paints both synchronously when Steam recreates its Library UI, and then revalidates them in the background; identical achievement results retain their existing DOM and icons to eliminate the startup flash/flicker.
+- Keeps an immediate, uncached 0/N achievement box visible when no local snapshot has been warmed yet, using Store highlight icons as locked previews and counting the unseen achievements in the +N tile until the real schema and progress replace it.
+- Replaces the activity feed's anonymous loading rectangles with a layout-stable Steam-like date, news-card and patch-card skeleton using a subtle shimmer animation and a reduced-motion fallback.
+- Extends localized game-metadata persistence to 30 days and immediately renders an already-visible linked shortcut on startup, while retaining the strict no-intervention boundary for actual native Steam game-detail routes.
+- Recovers a newly earned achievement when an emulator creates its first JSON with that achievement already unlocked before the overlay readiness delay completes, while deduplicating the recovery per running session and retaining timestamp-independent polling for normal transitions.
+- Displays non-Steam playtime in Big Picture's recently-played cards by merging Steam's often-empty shortcut response with GameBridge's canonical sessions, updating lifetime and two-week fields, and forcing the native card to rerender.
+- Displays the same canonical non-Steam playtime in Desktop Library Home's recently-played shelf and game-detail stat by hydrating Steam's native lifetime, two-week and last-played AppOverview fields without reducing any value Steam already knows; it invalidates stale stats after session writes, recovers history after local AppID regeneration, and avoids the global React rerender that could trigger Steam's `removeChild` rendering error.
+- Prevents controller-driven Steam play-bar rebuilds from replacing the linked-game information icon with an unrelated arrow by removing positional button capture and normalizing cloned native markup to the information SVG.
+- Recognizes achievement progress left under historical local Shortcut AppIDs by requiring an exact match with the linked game's official achievement-name schema and selecting the most recently modified matching JSON, without moving or rewriting user files; explicit per-game paths retain absolute priority.
+- Adds global and per-game controls for simulated achievements, full simulated completion and online-only unlocks while preserving Steam's real achievement names and icon URLs; per-game overrides are stored atomically under both shortcut and official AppID keys and refresh the Library immediately.
+- Treats retired or delisted Steam AppIDs with no News Hub payload as expected no-content, caching that state instead of repeatedly emitting partner-event parse warnings.
+- Restores official shortcut-name updates during linking and resolves Steam's regenerated local Shortcut AppID before committing artwork and mappings, while leaving the executable and launch configuration untouched.
+- Adds a per-game zero-progress override that ignores custom and global AppID achievement files while retaining Steam's real achievement list and icons at 0%.
+- Replays every already-earned achievement notification once when each linked game is first launched after installing this version; later sessions notify only genuine new unlocks, and Library browsing never consumes the replay.
+- Renders both earned achievements as described rows when a game has exactly two, avoiding the detached unlabeled thumbnail that appeared below the featured achievement.
+- Shows the per-game online-achievement unlock toggle only when the official Steam achievement schema contains at least one online, multiplayer or cooperative achievement.
+- Delays first-launch achievement replay until the game overlay exists, with a 30-second stable-running fallback for games without overlay, instead of treating Steam's early `RunningApps` launcher state as game-ready.
+- Uses a five-second achievement-toast duration and cadence, enlarges only GameBridge achievement cards by matching their real icon, and retains the per-game persistent every-launch replay control.
+- Replaces the version-dependent Steam toggle wrapper in global settings with controlled accessible switches using native DOM pointer/keyboard listeners and immediate visual feedback, bypassing Steam's delegated settings events before achievement defaults persist.
+- Makes the global online-achievement option a true master policy, preventing older per-game `false` records from silently overriding it; individual opt-in remains available when the master is off.
+- Removes global full simulated completion (it remains available per game) and lists the game name for every permanently suppressed automatic-link suggestion, including identifiable shortcuts no longer present in the Library.
+- Adds a scrollable safe area below the final global achievement controls so Steam's native bottom-edge resize hit-test cannot intercept their pointer input on short or scaled windows.
+- Synchronizes one-shot achievement replay consumption with open shortcut Properties so “replay on next launch” turns itself off immediately when its notifications are queued.
+- Keys launch-replay preferences to the actual non-Steam shortcut instead of the AppID folder that supplied progress, and tolerates the overlay appearing one polling tick before `RunningApps`, restoring next/every-launch notifications without firing at launcher startup.
+- Hides the per-game online-achievement override while the global master policy is active, and removes the redundant manual next-launch replay control while preserving automatic first-launch replay and the persistent every-launch option.
+- Serializes achievement notification preparation before applying the three-second cadence, waits for Steam's overlay to settle before launch replay, and merges enabled online achievements missing from legacy progress files into that replay.
+- Identifies every-launch achievement replay by each newly registered game-overlay session, so Alt+F4 followed by a rapid restart cannot remain blocked by a stale AppID-level completion flag.
+- Makes simulated progress temporarily ignore existing automatic and emulator JSON state sources, allowing per-game full completion to reach the real Steam schema total without deleting the user's progress file.
+- Cancels queued, asynchronously preparing and currently visible achievement replay notifications as soon as the game overlay closes, with RunningApps shutdown detection as a fallback.
+- Polls real achievement JSON from the running-game watcher every two seconds regardless of Library visibility, prioritizing genuine in-game unlocks ahead of any remaining launch-replay queue and trusting observed state transitions over unreliable emulator timestamps.
+- Fixes relinking an existing non-Steam shortcut after unlinking or rejecting it: an explicit Link/Save now clears the persisted dismissal state for that shortcut ID.
+- Re-arms failed background link jobs when the user explicitly saves the same link again instead of leaving a stale failed job that blocks detection.
+- Makes unlinking transactional across shortcut-ID, title and executable aliases, clears plugin-applied artwork, and detects linked-to-unlinked transitions without requiring the shortcut to be removed and re-added to Steam.
+
 ## v2.0.0 - Reliable Linking, Native Library Isolation & Interactive Cards
 
 - Makes first-time linking persistent without restarting Steam by completing identity, artwork and mapping work in a background-safe queue.
@@ -104,7 +140,7 @@
 - Repairs already-linked compatible shortcuts when their library page is opened.
 - Keeps unverified launchers opt-in and never changes native Steam games or generic third-party launchers.
 
-## v2.1.0 - Automatic Steam AppID detection
+### Historical milestone — Automatic Steam AppID detection
 
 - Detects newly added non-Steam executables and proposes likely Steam AppIDs for confirmation.
 - Uses direct local evidence first, then scores Store candidates from the shortcut title, executable and nearby folder names.

@@ -160,6 +160,7 @@ export interface LocalAchievementItem {
 	earned_time: number;
 	progress: number;
 	max_progress: number;
+	is_online?: boolean;
 }
 
 export interface LocalAchievementData {
@@ -170,6 +171,11 @@ export interface LocalAchievementData {
 	root?: string;
 	path?: string;
 	metadata_source?: string;
+	state_source?: string;
+	simulation_enabled?: boolean;
+	simulate_unlock_all?: boolean;
+	unlock_online?: boolean;
+	zero_progress?: boolean;
 	unlocked: number;
 	total: number;
 	achievements: LocalAchievementItem[];

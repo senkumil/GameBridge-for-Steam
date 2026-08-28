@@ -3,6 +3,20 @@ import { getAllMappings, saveMappingBackend, removeMappingBackend, updateMapping
 import { normalizeTitle } from './text';
 
 export const MAPPINGS_CACHE_STORAGE_KEY = 'gdl_mappings_snapshot_v1';
+const MAPPINGS_CHANGED_EVENT = 'gdl:mappings-changed';
+
+function notifyMappingsChanged(): void {
+	try { window.dispatchEvent(new CustomEvent<Mappings>(MAPPINGS_CHANGED_EVENT, { detail: { ...mappings } })); } catch {}
+}
+
+export function subscribeMappings(listener: (value: Mappings) => void): () => void {
+	const handler = (event: Event): void => {
+		const detail = (event as CustomEvent<Mappings>).detail;
+		listener(detail && typeof detail === 'object' ? detail : mappings);
+	};
+	window.addEventListener(MAPPINGS_CHANGED_EVENT, handler);
+	return () => window.removeEventListener(MAPPINGS_CHANGED_EVENT, handler);
+}
 
 export function readCachedMappings(): Mappings {
 	try {
@@ -30,6 +44,7 @@ export async function loadMappings(): Promise<void> {
 		if (!parsed) throw new Error('invalid_mappings_response');
 		mappings = parsed;
 		persistMappingsSnapshot(mappings);
+		notifyMappingsChanged();
 		backendLog('Loaded mapping snapshot (' + Object.keys(mappings).length + ' entries).');
 	} catch (e) {
 		backendLog('Failed to load mappings: ' + e);
@@ -81,6 +96,7 @@ export async function updateMappingsChecked(mutation: MappingMutation): Promise<
 				for (const key of remove) delete mappings[key];
 			}
 			persistMappingsSnapshot(mappings);
+			notifyMappingsChanged();
 			return true;
 		}
 	} catch (error) {
@@ -96,6 +112,7 @@ export async function updateMappingsChecked(mutation: MappingMutation): Promise<
 		if (!setMatches || !removalsMatch) return false;
 		mappings = current;
 		persistMappingsSnapshot(mappings);
+		notifyMappingsChanged();
 		return true;
 	} catch { return false; }
 }
@@ -109,6 +126,7 @@ export async function saveMappingChecked(key: string, value: string): Promise<bo
 		if (backendResultStatus(result) !== 'ok') return false;
 		mappings[key] = value;
 		persistMappingsSnapshot(mappings);
+		notifyMappingsChanged();
 		return true;
 	} catch { return false; }
 }
@@ -120,12 +138,18 @@ export async function removeMappingChecked(key: string): Promise<boolean> {
 		if (backendResultStatus(result) !== 'ok') return false;
 		delete mappings[key];
 		persistMappingsSnapshot(mappings);
+		notifyMappingsChanged();
 		return true;
 	} catch { return false; }
 }
 
 export function shortcutMappingKey(shortcutAppId: string | number): string {
 	return 'shortcut:' + String(shortcutAppId);
+}
+
+export function launchIdentityMappingKey(identity: string): string {
+	const normalized = String(identity || '').trim().toLowerCase();
+	return normalized ? 'launch_identity:' + normalized : '';
 }
 
 export function exeMappingKey(exePath: string): string {
@@ -146,25 +170,83 @@ export function exeStemMappingKey(exePath: string): string | null {
 	return 'exe_stem:' + stem;
 }
 
-export function findMappingByExe(exePath: string): string | null {
+export interface ShortcutMappingIdentity {
+	shortcutAppId: string | number;
+	title?: string | null;
+	exePath?: string | null;
+	steamAppId?: string | null;
+}
+
+/**
+ * Remove every mapping alias owned by one shortcut without deleting aliases
+ * that may still be shared by another shortcut linked to the same Steam app.
+ * This is the inverse of the aliases written by linkShortcutToSteam().
+ */
+export async function removeShortcutMappingsChecked(identity: ShortcutMappingIdentity): Promise<boolean> {
+	const exactKey = shortcutMappingKey(identity.shortcutAppId);
+	const target = String(identity.steamAppId || mappings[exactKey] || '').trim();
+	const candidates = new Set<string>([exactKey]);
+	const title = String(identity.title || '').trim();
+	if (title) {
+		candidates.add(title);
+		const normalized = normalizeTitle(title);
+		if (normalized) candidates.add(normalized);
+	}
+	const exePath = String(identity.exePath || '').trim();
+	if (exePath) {
+		candidates.add(exeMappingKey(exePath));
+		const stem = exeStemMappingKey(exePath);
+		if (stem) candidates.add(stem);
+	}
+
+	if (/^\d+$/.test(target)) {
+		const otherExactOwner = Object.entries(mappings).some(([key, value]) =>
+			key.startsWith('shortcut:') && key !== exactKey && String(value) === target);
+		if (!otherExactOwner) {
+			// With a single exact owner, every non-shortcut alias for this AppID was
+			// created for the same logical link. Removing them also cleans aliases
+			// left by an earlier language/name or executable migration.
+			for (const [key, value] of Object.entries(mappings)) {
+				if (!key.startsWith('shortcut:') && String(value) === target) candidates.add(key);
+			}
+		}
+	}
+
+	const remove = Array.from(candidates).filter(key => {
+		if (!Object.prototype.hasOwnProperty.call(mappings, key)) return false;
+		return !/^\d+$/.test(target) || String(mappings[key]) === target || key === exactKey;
+	});
+	return updateMappingsChecked({ remove });
+}
+
+/** Resolve only a full executable-path alias. This is safe enough for identity
+ * recovery when Steam regenerates a Shortcut AppID. Executable stems are not
+ * identity: unrelated games can legitimately ship the same filename. */
+export function findMappingByExactExe(exePath: string): string | null {
 	if (!exePath) return null;
 	const fullKey = exeMappingKey(exePath);
 	if (mappings[fullKey] && /^\d+$/.test(String(mappings[fullKey]))) {
 		return String(mappings[fullKey]);
-	}
-	const stemKey = exeStemMappingKey(exePath);
-	if (stemKey && mappings[stemKey] && /^\d+$/.test(String(mappings[stemKey]))) {
-		return String(mappings[stemKey]);
 	}
 	const lower = exePath.trim().toLowerCase();
 	const normalizedLower = lower.replace(/\\/g, '/');
 	for (const [k, v] of Object.entries(mappings)) {
 		if (k.startsWith('exe:') && /^\d+$/.test(String(v))) {
 			const target = k.replace('exe:', '').toLowerCase();
-			if (target === lower || target === normalizedLower) {
-				return String(v);
-			}
+			if (target === lower || target === normalizedLower) return String(v);
 		}
+	}
+	return null;
+}
+
+/** Legacy loose executable resolver used only where no concrete shortcut
+ * identity is available. Prefer findMappingByExactExe for all link decisions. */
+export function findMappingByExe(exePath: string): string | null {
+	const exact = findMappingByExactExe(exePath);
+	if (exact) return exact;
+	const stemKey = exeStemMappingKey(exePath);
+	if (stemKey && mappings[stemKey] && /^\d+$/.test(String(mappings[stemKey]))) {
+		return String(mappings[stemKey]);
 	}
 	return null;
 }
@@ -172,7 +254,7 @@ export function findMappingByExe(exePath: string): string | null {
 export function findMappingForTitle(title: string, shortcutAppId?: string | number | null): string | null {
 	if (shortcutAppId) {
 		const stable = mappings[shortcutMappingKey(shortcutAppId)];
-		if (stable && /^\d+$/.test(String(stable))) return String(stable);
+		return stable && /^\d+$/.test(String(stable)) ? String(stable) : null;
 	}
 	if (!title) return null;
 	const trimmedTitle = String(title).trim();

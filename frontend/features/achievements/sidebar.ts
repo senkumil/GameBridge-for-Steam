@@ -3,7 +3,7 @@ import { backendLog } from '../../api/backend';
 import { escapeHtml } from '../../core/text';
 import { gdlText } from '../../steam/localization';
 import { ACH_CLASSES } from '../../steam/css';
-import { cacheLocalAchievements } from './cache';
+import { cacheLocalAchievements, localAchievementDataSignature } from './cache';
 import { localAchievementPercent } from './format';
 import { ensureLocalPlaybarStat } from './playbar';
 import { openLocalAchievementsModal } from './modal';
@@ -25,23 +25,29 @@ function renderAchievementIconRowHtml(items: LocalAchievementItem[], columns: nu
 	return `<div class="gdl-la-icon-row" style="grid-template-columns: repeat(${columns}, 1fr);">${iconsHtml}${moreHtml}</div>`;
 }
 
+function renderFeaturedAchievementHtml(item: LocalAchievementItem): string {
+	return `<div class="gdl-la-feature">${localAchievementIcon(item)}<div class="gdl-la-feature-copy"><div class="gdl-la-feature-title">${escapeHtml(item.display_name || item.name)}</div><div class="gdl-la-feature-desc">${escapeHtml(item.description || '')}</div></div></div>`;
+}
+
 export function renderLocalAchievementSidebarHtml(data: LocalAchievementData, columns = 5): string {
 	if (data.total <= 0) return '';
+	const signature = localAchievementDataSignature(data);
 	const pct = localAchievementPercent(data);
 	const earned = data.achievements.filter(item => item.earned).sort((a, b) => (b.earned_time || 0) - (a.earned_time || 0));
 	const locked = data.achievements.filter(item => !item.earned);
-	const latest = earned[0];
-	const otherEarned = earned.slice(latest ? 1 : 0);
-	const latestHtml = latest
-		? `<div class="gdl-la-feature">${localAchievementIcon(latest)}<div class="gdl-la-feature-copy"><div class="gdl-la-feature-title">${escapeHtml(latest.display_name || latest.name)}</div><div class="gdl-la-feature-desc">${escapeHtml(latest.description || '')}</div></div></div>`
-		: '';
+	// A one-icon thumbnail strip looks detached from the featured achievement.
+	// When only two achievements are earned, render both with their names and
+	// descriptions; larger sets retain Steam's compact featured + icon layout.
+	const featuredEarned = earned.length <= 2 ? earned : earned.slice(0, 1);
+	const otherEarned = earned.length > 2 ? earned.slice(1) : [];
+	const latestHtml = featuredEarned.map(renderFeaturedAchievementHtml).join('');
 	const earnedRow = otherEarned.length
 		? `<div class="gdl-la-earned-row-wrap">${renderAchievementIconRowHtml(otherEarned, columns, false)}</div>`
 		: '';
 	const lockedBlock = locked.length
 		? `<div class="gdl-la-divider"></div><div class="gdl-la-locked-label">${escapeHtml(gdlText('locked_achievements', 'Locked achievements'))}</div><div class="gdl-la-locked-row-wrap">${renderAchievementIconRowHtml(locked, columns, true)}</div>`
 		: '';
-	return `<div class="${ACH_CLASSES().HighlightDiv} gdl-la-summary" data-gdl-local-ach="1"><div class="gdl-la-header"><div class="gdl-la-unlocked">${escapeHtml(gdlText('achievements_unlocked', '{unlocked} of {total} achievements unlocked', { unlocked: data.unlocked, total: data.total }))} <span class="pct">(${pct}%)</span></div><div class="gdl-la-progress-track"><div class="gdl-la-progress-fill" style="width:${pct}%"></div></div></div><div class="gdl-la-body">${latestHtml}${earnedRow}${lockedBlock}<div class="gdl-la-view">${escapeHtml(gdlText('view_all_achievements', 'View all achievements'))}</div></div></div>`;
+	return `<div class="${ACH_CLASSES().HighlightDiv} gdl-la-summary" data-gdl-local-ach="1" data-gdl-achievement-signature="${escapeHtml(signature)}"><div class="gdl-la-header"><div class="gdl-la-unlocked">${escapeHtml(gdlText('achievements_unlocked', '{unlocked} of {total} achievements unlocked', { unlocked: data.unlocked, total: data.total }))} <span class="pct">(${pct}%)</span></div><div class="gdl-la-progress-track"><div class="gdl-la-progress-fill" style="width:${pct}%"></div></div></div><div class="gdl-la-body">${latestHtml}${earnedRow}${lockedBlock}<div class="gdl-la-view">${escapeHtml(gdlText('view_all_achievements', 'View all achievements'))}</div></div></div>`;
 }
 
 function setupDynamicGrid(summary: HTMLElement, data: LocalAchievementData): () => void {
@@ -57,7 +63,7 @@ function setupDynamicGrid(summary: HTMLElement, data: LocalAchievementData): () 
 		currentColumns = columns;
 		const earned = data.achievements.filter(item => item.earned).sort((a, b) => (b.earned_time || 0) - (a.earned_time || 0));
 		const locked = data.achievements.filter(item => !item.earned);
-		const otherEarned = earned.slice(earned[0] ? 1 : 0);
+		const otherEarned = earned.length > 2 ? earned.slice(1) : [];
 		const earnedWrap = summary.querySelector<HTMLElement>('.gdl-la-earned-row-wrap');
 		if (earnedWrap && otherEarned.length) earnedWrap.innerHTML = renderAchievementIconRowHtml(otherEarned, columns, false);
 		const lockedWrap = summary.querySelector<HTMLElement>('.gdl-la-locked-row-wrap');
@@ -79,6 +85,13 @@ function setupDynamicGrid(summary: HTMLElement, data: LocalAchievementData): () 
 
 const sidebarGridCleanup = new WeakMap<HTMLElement, () => void>();
 
+/** Reveal a metadata-only fallback after the local progress request has
+ * conclusively completed. Until then, showing it as 0/N would be misleading. */
+export function revealPendingAchievementSidebar(doc: Document): void {
+	doc.getElementById('gdl-achievements-section')
+		?.removeAttribute('data-gdl-achievements-pending');
+}
+
 export function renderLocalAchievementSidebar(doc: Document, data: LocalAchievementData): void {
 	cacheLocalAchievements(data);
 	ensureLocalPlaybarStat(doc, data);
@@ -86,6 +99,14 @@ export function renderLocalAchievementSidebar(doc: Document, data: LocalAchievem
 	const host = doc.getElementById('gdl-achievements-content');
 	if (!host) return;
 	const previous = host.querySelector<HTMLElement>('.gdl-la-summary');
+	const signature = localAchievementDataSignature(data);
+	if (previous?.dataset.gdlAchievementSignature === signature) {
+		if (!sidebarGridCleanup.has(previous)) {
+			sidebarGridCleanup.set(previous, setupDynamicGrid(previous, data));
+		}
+		revealPendingAchievementSidebar(doc);
+		return;
+	}
 	if (previous) sidebarGridCleanup.get(previous)?.();
 	host.innerHTML = renderLocalAchievementSidebarHtml(data);
 	const summary = host.querySelector<HTMLElement>('.gdl-la-summary');
@@ -96,4 +117,5 @@ export function renderLocalAchievementSidebar(doc: Document, data: LocalAchievem
 		event.stopPropagation();
 		void openLocalAchievementsModal(doc, data).catch(error => backendLog('Achievements modal error: ' + error));
 	});
+	revealPendingAchievementSidebar(doc);
 }
