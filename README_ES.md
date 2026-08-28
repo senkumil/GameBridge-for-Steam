@@ -51,15 +51,16 @@ Los datos esenciales pueden aparecer inmediatamente desde la caché mientras not
 Estas capturas muestran la diferencia visual entre un acceso directo sin vincular y un juego vinculado, además de los logros/feed y la integración con Big Picture.
 
 <p align="center">
-  <img src="docs/screenshots/library-before.png" alt="Antes de vincular: acceso directo no-Steam con la Biblioteca vacía" width="49%">
-  <img src="docs/screenshots/library-after.png" alt="Después de vincular: ilustraciones oficiales, actividad y logros de Steam" width="49%">
+  <img src="docs/screenshots/library-tlou-before.png" alt="The Last of Us Part I antes de vincular: Biblioteca no-Steam vacía" width="49%">
+  <img src="docs/screenshots/library-tlou-after.png" alt="The Last of Us Part I después de vincular: ilustraciones, actividad y logros de Steam" width="49%">
 </p>
-<p align="center"><em>Antes de vincular · Después de vincular</em></p>
+<p align="center"><em>The Last of Us Part I · Antes de vincular · Después de vincular</em></p>
 
 <p align="center">
-  <img src="docs/screenshots/library-achievements-feed.png" alt="Biblioteca vinculada con logros, feed de noticias y cromos" width="75%">
+  <img src="docs/screenshots/library-gow-before.png" alt="God of War Ragnarök antes de vincular: Biblioteca no-Steam vacía" width="49%">
+  <img src="docs/screenshots/library-gow-after.png" alt="God of War Ragnarök después de vincular: ilustraciones, actividad y logros de Steam" width="49%">
 </p>
-<p align="center"><em>Logros, feed de actividad y contenido de la comunidad</em></p>
+<p align="center"><em>God of War Ragnarök · Antes de vincular · Después de vincular</em></p>
 
 <p align="center">
   <img src="docs/screenshots/big-picture-library.png" alt="Cuadrícula de juegos instalados en Big Picture" width="49%">

@@ -51,15 +51,16 @@ The page renders cached core information immediately and hydrates network-backed
 These captures show the visual difference between an unlinked shortcut and a linked game, plus the achievement/feed surfaces and Big Picture integration.
 
 <p align="center">
-  <img src="docs/screenshots/library-before.png" alt="Before linking: a non-Steam shortcut with the default empty Library page" width="49%">
-  <img src="docs/screenshots/library-after.png" alt="After linking: official Steam artwork, activity and achievement data" width="49%">
+  <img src="docs/screenshots/library-tlou-before.png" alt="The Last of Us Part I before linking: default empty non-Steam Library page" width="49%">
+  <img src="docs/screenshots/library-tlou-after.png" alt="The Last of Us Part I after linking: Steam artwork, activity and achievements" width="49%">
 </p>
-<p align="center"><em>Before linking · After linking</em></p>
+<p align="center"><em>The Last of Us Part I · Before linking · After linking</em></p>
 
 <p align="center">
-  <img src="docs/screenshots/library-achievements-feed.png" alt="Linked Library page with Steam achievements, news feed and trading cards" width="75%">
+  <img src="docs/screenshots/library-gow-before.png" alt="God of War Ragnarök before linking: default empty non-Steam Library page" width="49%">
+  <img src="docs/screenshots/library-gow-after.png" alt="God of War Ragnarök after linking: Steam artwork, activity and achievements" width="49%">
 </p>
-<p align="center"><em>Achievements, activity feed and community surfaces</em></p>
+<p align="center"><em>God of War Ragnarök · Before linking · After linking</em></p>
 
 <p align="center">
   <img src="docs/screenshots/big-picture-library.png" alt="Big Picture installed games grid with linked titles" width="49%">
