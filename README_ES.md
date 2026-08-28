@@ -288,4 +288,4 @@ Si GameBridge for Steam ha mejorado tu Biblioteca, puedes apoyar su desarrollo, 
 
 Licencia MIT — consulta [LICENSE](LICENSE) para más información.
 
-Desarrollado por **David Miranda ([Davidjarod11](https://github.com/Davidjarod11))**.
+
