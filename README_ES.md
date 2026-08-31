@@ -12,17 +12,17 @@ Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: reci
 
 ---
 
-## ✨ Funciones principales
+## ✨ Novedades de la v3.0.0 y Funciones principales
 
-- Detección automática con candidatos revisables, porcentajes de confianza y carátulas.
-- Aplicación automática del título, icono, portada, fondo hero, logo transparente, posición del logo y cápsula horizontal oficiales.
-- Página de Biblioteca de estilo nativo con actividad, noticias, logros, información, comunidad, amigos, tarjetas, DLC, Workshop, notas y enlaces.
-- Integración con Big Picture que presenta los accesos vinculados como juegos nativos y elimina la categoría redundante **Fuera de Steam**.
-- Progreso de logros locales con notificaciones de desbloqueo e integración opcional con SteamAutoCrack/Goldberg.
-- Tiempo de juego registrado por Steam cuando está disponible y seguimiento alternativo persistente cuando no lo está.
-- SteamGridDB como respaldo individual para recursos que Steam no haya publicado.
-- Interfaz localizada según el idioma activo del cliente Steam, con fallback seguro en inglés.
-- Aislamiento estricto: solo se modifican accesos directos vinculados; los juegos nativos permanecen fuera de la inyección.
+- **Compatibilidad con Juegos Eliminados y Deslistados de Steam:** Soporte completo para títulos descatalogados o sin página de tienda activa en Steam (como *Mortal Kombat Komplete Edition*, *Transformers: Devastation*, etc.), resolviendo metadatos e ilustraciones oficiales sin bloqueos.
+- **Gestión y Cambio de Artworks Directamente desde Propiedades:** Selector visual dentro de la pestaña *Personalización* en Propiedades para previsualizar, cambiar y aplicar fondos hero, logos, cápsulas e iconos en tiempo real.
+- **Modificación y Gestión de Logros en Juegos Originales de Steam (SAM Integrado):** Consulta, desbloquea, bloquea o edita el progreso de logros de tus juegos oficiales de Steam directamente desde la biblioteca.
+- **Simulación y Farmeo de Cromos de Steam (Trading Cards):** Colección interactiva de tarjetas en 3D, seguimiento de cromos restantes, progreso de insignia y acceso directo a la comunidad.
+- **Simulador de Logros Simplificado para Juegos No-Steam:** Configuración ultra accesible por juego (100% completado, progreso simulado o manual), compatible con emuladores y lanzadores externos.
+- **Detección Automática Inteligente:** Evalúa evidencias reales de ejecutables, rutas de instalación y niveles de confianza con previsualización de carátulas.
+- **Página de Biblioteca de Estilo Nativo:** Reconstruye feed de actividad, parches, logros, panel de información, contenido de la comunidad, amigos, DLC, Workshop y notas.
+- **Cero Ventanas al Iniciar y Rendimiento sin Parpadeos:** Las alertas solo se abren al añadir juegos manualmente; decodificación limpia de carátulas y aislamiento estricto de juegos nativos.
+- **Integración con Big Picture & Steam Deck UI:** Renderizado oficial de fondos hero, logos y tiempo de juego sincronizado de forma nativa.
 
 ---
 

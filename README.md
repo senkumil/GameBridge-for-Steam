@@ -12,17 +12,17 @@ Once linked, an external game no longer feels like an empty shortcut: it receive
 
 ---
 
-## ✨ Highlights
+## ✨ Highlights & What's New in v3.0.0
 
-- Automatic game detection with reviewable candidates, confidence scores, and cover previews.
-- Automatic official title, icon, portrait, hero background, transparent logo, logo position, and wide capsule.
-- Native-style Library page with activity, news, achievements, game information, community content, friends, cards, DLC, Workshop, notes, and primary links.
-- Big Picture presentation that treats linked shortcuts as native entries and removes the redundant **Non-Steam** category.
-- Local achievement progress with live unlock notifications and optional SteamAutoCrack/Goldberg integration.
-- Native Steam playtime when available, with an optional persistent fallback tracker.
-- SteamGridDB fallback for individual artwork assets that Steam does not provide.
-- UI localization based on the active Steam client language, with safe English fallbacks.
-- Strict isolation: only explicitly linked non-Steam shortcuts are modified; native Steam games are left alone.
+- **Delisted & Removed Steam Games Support:** Full support for delisted, retired, or unlisted Steam games (e.g. *Mortal Kombat Komplete Edition*, *Transformers: Devastation*) with resilient metadata and official artwork resolution.
+- **Direct Artwork Management in Game Properties:** Choose, preview, and apply custom hero backgrounds, logos, capsules, and icons directly from the *Customization* tab in Properties.
+- **Steam Achievement Manager (SAM) Integration:** Inspect, unlock, lock, or modify achievement progress for your official Steam games directly from your library interface.
+- **Steam Trading Card Farming & Simulation:** Interactive trading card showcase with 3D animated cards, foil holographic reflection, badge level progression, and remaining card tracking.
+- **Simplified Non-Steam Achievement Simulation:** Easily configure achievement simulation per-game (100% instant completion, progressive simulation, or manual tracking) with emulator and launcher compatibility.
+- **Smart Automatic Detection & Linking:** Evaluates verified executable evidence, parent paths, and confidence scores with cover previews.
+- **Native-Style Steam Library Page:** Rebuilds complete surfaces including activity feed, patch notes, achievements, game info drawer, community content, friends, DLC, Workshop, and notes.
+- **Zero-Flicker & Clean Boot:** No popups on Steam launch (only activates when opening "Add a Non-Steam Game"), 0ms cached rendering, and 100% native Steam game isolation.
+- **Big Picture & Steam Deck UI Integration:** Renders official hero backgrounds, logos, and synced playtime natively in Big Picture mode.
 
 ---
 
