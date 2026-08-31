@@ -133,32 +133,16 @@ const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-style">
 		border-radius: 2px;
 		overflow: hidden;
 	}
-	.gdl-properties-injected .gdl-native-disclosure > summary {
+	.gdl-properties-injected .gdl-auto-detect-header {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		min-height: 42px;
-		padding: 10px 13px;
-		list-style: none;
+		padding: 10px 13px 4px;
 		color: var(--gdl-text);
 		font-size: 12.5px;
-		cursor: pointer;
-		user-select: none;
+		font-weight: 500;
 	}
-	.gdl-properties-injected .gdl-native-disclosure > summary::-webkit-details-marker { display: none; }
-	.gdl-properties-injected .gdl-native-disclosure > summary:hover { background: rgba(255, 255, 255, .035); }
-	.gdl-properties-injected .gdl-native-disclosure-chevron {
-		flex: 0 0 auto;
-		color: var(--gdl-muted);
-		font-size: 16px;
-		line-height: 1;
-		transition: transform .12s ease;
-	}
-	.gdl-properties-injected .gdl-native-disclosure[open] .gdl-native-disclosure-chevron { transform: rotate(180deg); }
 	.gdl-properties-injected .gdl-native-disclosure-body {
-		padding: 12px 13px 13px;
-		border-top: 1px solid rgba(255, 255, 255, .055);
+		padding: 4px 13px 13px;
 	}
 	.gdl-properties-injected .gdl-auto-detect-title {
 		margin-bottom: 8px;
@@ -481,19 +465,18 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				</div>
 			</div>
 			<div class="gdl-status gdl-native-status" aria-live="polite"></div>
-			<details class="gdl-auto-detect gdl-native-disclosure" ${currentLinked ? '' : 'open'}>
-				<summary>
+			<div class="gdl-auto-detect gdl-native-disclosure">
+				<div class="gdl-auto-detect-header">
 					<span>${escapeHtml(gdlText('shortcut_suggestions_title', 'Steam AppID suggestions:'))}</span>
-					<span class="gdl-native-disclosure-chevron" aria-hidden="true">⌄</span>
-				</summary>
+				</div>
 				<div class="gdl-native-disclosure-body">
-					<div class="gdl-auto-detect-title">${escapeHtml(gdlText('detecting_game', 'Detecting the game automatically...'))}</div>
+					<div class="gdl-auto-detect-title" style="display:none;"></div>
 					<select class="gdl-auto-candidates gdl-native-select">
 						<option value="">${escapeHtml(gdlText('detecting_game', 'Detecting the game automatically...'))}</option>
 					</select>
 					<div class="gdl-auto-candidate-preview" style="display:none;"></div>
 				</div>
-			</details>
+			</div>
 			<label class="gdl-skip-launcher gdl-native-option">
 				<input class="gdl-skip-launcher-input" type="checkbox" />
 				<span><strong>${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('skip_launcher_help', 'Adds -nolauncher while preserving your current launch options. Enable it only if this game supports that argument.'))}</span>
@@ -513,7 +496,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	const unlinkBtn = section.querySelector('.gdl-unlink-btn') as HTMLButtonElement;
 	const statusEl = section.querySelector('.gdl-status') as HTMLElement;
 	const autoTitle = section.querySelector('.gdl-auto-detect-title') as HTMLElement;
-	const autoDisclosure = section.querySelector('.gdl-auto-detect') as HTMLDetailsElement;
 	const autoSelect = section.querySelector('.gdl-auto-candidates') as HTMLSelectElement;
 	const candidatePreview = section.querySelector('.gdl-auto-candidate-preview') as HTMLElement;
 	const skipLauncherLabel = section.querySelector('.gdl-skip-launcher') as HTMLElement;
@@ -652,15 +634,17 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		steamAppId: () => /^\d+$/.test(input.value.trim()) ? input.value.trim() : currentLinked,
 		gameTitle: () => gameTitle || '',
 	});
-	if (managedShortcutId && input && statusEl && autoSelect && autoTitle) {
-		statusEl.textContent = gdlText('detecting_game', 'Detecting the game automatically...');
+	if (managedShortcutId && input && autoSelect && autoTitle) {
+		autoTitle.style.display = 'none';
+		autoTitle.textContent = '';
 		if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
 		void (async () => {
 			detectionContext = await buildShortcutDetectionContext(doc, gameTitle, managedShortcutId!);
 			if (!detectionContext) {
 				if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
 				autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</option>`;
-				statusEl.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
+				autoTitle.style.display = 'block';
+				autoTitle.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
 				return;
 			}
 			const detection = await detectShortcutCandidates(detectionContext);
@@ -668,7 +652,8 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			if (!viable.length) {
 				if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
 				autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</option>`;
-				statusEl.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
+				autoTitle.style.display = 'block';
+				autoTitle.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
 				return;
 			}
 			const options: HTMLOptionElement[] = [];
@@ -689,22 +674,18 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				options.push(option);
 			}
 			autoSelect.replaceChildren(...options);
+			autoTitle.style.display = 'none';
+			autoTitle.textContent = '';
 			if (!currentLinked && viable.length > 0 && !rememberedAppId) {
 				input.value = viable[0].appid;
 				autoSelect.value = viable[0].appid;
-				autoTitle.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name: viable[0].name });
 			} else if (currentLinked || rememberedAppId) {
 				const preferredAppId = currentLinked || rememberedAppId;
 				input.value = preferredAppId;
 				autoSelect.value = preferredAppId;
-				const currentCandidate = viable.find(c => c.appid === preferredAppId);
-				autoTitle.textContent = currentCandidate
-					? gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name: currentCandidate.name })
-					: gdlText('shortcut_suggestions_title', 'Steam AppID suggestions:');
 			}
 			renderCandidatePreview(viable, autoSelect.value || viable[0].appid);
 			updateButtonStates();
-			statusEl.textContent = '';
 			const selectedAppId = autoSelect.value || viable[0]?.appid || '';
 			if (shouldAutoApplyNoLauncher(selectedAppId)) {
 				skipLauncherLabel.style.display = 'flex';
@@ -725,7 +706,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 					clearTargetStatus();
 					const selected = viable.find(candidate => candidate.appid === autoSelect.value);
 					if (selected) {
-						autoTitle.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name: selected.name });
 						renderCandidatePreview(viable, selected.appid);
 						if (shouldAutoApplyNoLauncher(selected.appid)) {
 							skipLauncherLabel.style.display = 'flex';
@@ -742,7 +722,8 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			backendLog('Properties automatic detection error: ' + e);
 			if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
 			autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</option>`;
-			statusEl.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
+			autoTitle.style.display = 'block';
+			autoTitle.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
 		});
 	}
 
@@ -771,7 +752,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 					// Keep the AppID in the field after unlinking so the shortcut can be
 					// linked again without requiring the user to type it a second time.
 					currentLinked = '';
-					autoDisclosure.open = true;
 					statusEl.textContent = gdlText('unlink_success', 'Link removed. You can link this same shortcut again without deleting it from Steam.');
 					statusEl.style.color = '#5ba32b';
 				} else {
@@ -840,7 +820,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				if (result.ok) {
 					if (result.shortcutAppId) managedShortcutId = result.shortcutAppId;
 					currentLinked = val;
-					autoDisclosure.open = false;
 					const resourcesComplete = Boolean(result.setup?.artworkComplete && result.setup?.iconApplied);
 					if (!resourcesComplete) {
 						enqueueLinkJob({
