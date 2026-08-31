@@ -5,7 +5,12 @@ local config = deps.config
 local fs = deps.fs
 local M = {}
 
-local SESSIONS_FILE = config.path("playtime_sessions.json")
+-- Keep the canonical history outside the plugin directory so plugin updates,
+-- clean reinstalls and Steam's plugin-folder cleanup cannot remove it.
+local SESSIONS_FILE = config.persistent_path("playtime_sessions.json")
+local LEGACY_SESSIONS_FILE = config.path("playtime_sessions.json")
+local LEGACY_SESSIONS_FILE_OLD = config.path("sessions.json")
+local SESSION_BACKUP_COUNT = 3
 local STORE = { version = 2, sessions = {}, aliases = {} }
 local STORE_LOADED = false
 local STORE_DIRTY = false
@@ -63,6 +68,54 @@ local function valid_shortcut_id(value)
     return id:match("^%d+$") and id or nil
 end
 
+local function finite_number(value)
+    local number = tonumber(value)
+    if not number or number ~= number or number == math.huge or number == -math.huge then return nil end
+    return number
+end
+
+-- Never let a malformed runtime record break every playtime request. Keep the
+-- persisted schema intentionally small and normalize numeric strings emitted
+-- by older versions before doing arithmetic with them.
+local function sanitize_session_list(list)
+    local cleaned = {}
+    if type(list) ~= "table" then return cleaned end
+    for _, session in ipairs(list) do
+        if type(session) == "table" then
+            local started = finite_number(session.started_at)
+            local ended = finite_number(session.ended_at)
+            if started and started >= 0 then
+                started = math.floor(started)
+                ended = math.floor(ended or started)
+                if ended >= started then
+                    local normalized = { started_at = started, ended_at = ended }
+                    if type(session.instance_id) == "string" and #session.instance_id <= 256 and session.instance_id ~= "" then
+                        normalized.instance_id = session.instance_id
+                    end
+                    cleaned[#cleaned + 1] = normalized
+                end
+            end
+        end
+    end
+    return cleaned
+end
+
+local function sanitize_store(decoded)
+    if type(decoded) ~= "table" or type(decoded.sessions) ~= "table" or type(decoded.aliases) ~= "table" then return nil end
+    local loaded = empty_store()
+    for key, list in pairs(decoded.sessions) do
+        local canonical = valid_shortcut_id(key)
+        if canonical then loaded.sessions[canonical] = sanitize_session_list(list) end
+    end
+    for alias, canonical in pairs(decoded.aliases) do
+        local id = valid_shortcut_id(canonical)
+        if type(alias) == "string" and id and loaded.sessions[id] then
+            loaded.aliases[alias] = id
+        end
+    end
+    return loaded
+end
+
 local function session_signature(list)
     local ok, encoded = pcall(cjson.encode, list)
     return ok and encoded or nil
@@ -78,16 +131,17 @@ local function migrate_legacy_store(legacy)
     for key, list in pairs(legacy) do
         local canonical = type(key) == "string" and key:match("^id:(%d+)$") or nil
         if canonical and type(list) == "table" then
-            migrated.sessions[canonical] = list
+            local safe_list = sanitize_session_list(list)
+            migrated.sessions[canonical] = safe_list
             canonical_count = canonical_count + 1
-            local signature = session_signature(list)
+            local signature = session_signature(safe_list)
             if signature then by_signature[signature] = canonical end
         end
     end
 
     for key, list in pairs(legacy) do
         if type(key) == "string" and type(list) == "table" and not key:match("^id:%d+$") then
-            local signature = session_signature(list)
+            local signature = session_signature(sanitize_session_list(list))
             local canonical = signature and by_signature[signature] or nil
             -- A legacy file with a single shortcut can safely recover aliases
             -- even if a previously duplicated list drifted before migration.
@@ -104,8 +158,18 @@ local function migrate_legacy_store(legacy)
     return migrated
 end
 
+local function decode_store_file(path)
+    local data = config.read_text(path)
+    if not data or data == "" then return nil, false end
+    local ok, decoded = pcall(cjson.decode, data)
+    if not ok or type(decoded) ~= "table" then return nil, true end
+    local loaded = sanitize_store(decoded)
+    if loaded then return loaded, true end
+    return migrate_legacy_store(decoded), true
+end
+
 local function save_sessions()
-    local ok, err = config.write_json_atomic(SESSIONS_FILE, STORE)
+    local ok, err = config.write_json_atomic_with_backups(SESSIONS_FILE, STORE, SESSION_BACKUP_COUNT)
     if not ok then logger:warn("Could not save playtime sessions: " .. tostring(err or "write_failed")) end
     if ok then
         STORE_DIRTY = false
@@ -125,46 +189,38 @@ local function load_sessions()
     end
     STORE_LOADED = true
     LAST_EXTERNAL_CHECK_AT = now
-    local data = config.read_text(SESSIONS_FILE)
-    if not data or data == "" then
-        -- Import the predecessor's optional file once, if it exists.
-        data = config.read_text(config.path("sessions.json"))
-    end
-    if not data or data == "" then
-        STORE = empty_store()
-        LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
-        return
-    end
-
-    local ok, decoded = pcall(cjson.decode, data)
-    if not ok or type(decoded) ~= "table" then
-        STORE = empty_store()
-        LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
-        logger:warn("Could not parse playtime sessions; starting with an empty store")
-        return
-    end
-
-    if type(decoded.sessions) == "table" and type(decoded.aliases) == "table" then
-        local loaded = empty_store()
-        for key, list in pairs(decoded.sessions) do
-            local canonical = valid_shortcut_id(key)
-            if canonical and type(list) == "table" then loaded.sessions[canonical] = list end
-        end
-        for alias, canonical in pairs(decoded.aliases) do
-            local id = valid_shortcut_id(canonical)
-            if type(alias) == "string" and id and loaded.sessions[id] then
-                loaded.aliases[alias] = id
+    local candidates = {
+        { path = SESSIONS_FILE, label = "persistent" },
+        { path = SESSIONS_FILE .. ".bak", label = "persistent backup" },
+        { path = SESSIONS_FILE .. ".bak.1", label = "persistent backup 1" },
+        { path = SESSIONS_FILE .. ".bak.2", label = "persistent backup 2" },
+        { path = LEGACY_SESSIONS_FILE, label = "plugin legacy" },
+        { path = LEGACY_SESSIONS_FILE_OLD, label = "plugin predecessor" },
+    }
+    local seen_paths = {}
+    for _, candidate in ipairs(candidates) do
+        if not seen_paths[candidate.path] then
+            seen_paths[candidate.path] = true
+            local loaded, existed = decode_store_file(candidate.path)
+            if existed and not loaded then
+                logger:warn("Could not parse playtime sessions candidate: " .. tostring(candidate.path))
+            elseif loaded then
+                STORE = loaded
+                LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
+                if candidate.path ~= SESSIONS_FILE then
+                    STORE_DIRTY = true
+                    if save_sessions() then
+                        logger:info("Recovered playtime sessions from " .. candidate.label)
+                    end
+                end
+                return
             end
         end
-        STORE = loaded
-        LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
-        return
     end
 
-    STORE = migrate_legacy_store(decoded)
-    if save_sessions() then
-        logger:info("Migrated playtime sessions to canonical storage")
-    end
+    STORE = empty_store()
+    LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
+    logger:info("No valid playtime session store found; starting with an empty store")
 end
 
 local function flush_if_due(force)

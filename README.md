@@ -179,6 +179,8 @@ Steam Beta builds that include native non-Steam playtime tracking are recommende
 
 NativeGameLink checks whether the current Steam client already exposes native playtime for each linked shortcut. When it does, the plugin uses Steam's value and does not create a duplicate counter. When it does not, NativeGameLink automatically activates its own local fallback tracker. The fallback is enabled by default and can be disabled in NativeGameLink settings.
 
+The canonical local-tracking history is stored outside the plugin directory at `%APPDATA%\\NativeGameLinkForSteam\\playtime_sessions.json`. When the plugin is updated or reinstalled, the old file is migrated automatically and three recovery copies are retained. You should still export or copy that directory periodically if you also want protection against deleting the entire Windows profile or losing the disk.
+
 The fallback can:
 
 - Detect when a linked external game starts and stops.

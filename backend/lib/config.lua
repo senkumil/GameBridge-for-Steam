@@ -35,6 +35,23 @@ function M.path(filename)
     return fs.join(M.plugin_dir(), filename)
 end
 
+-- Runtime data must not live inside the plugin directory: updates and clean
+-- reinstalls commonly replace that directory.  APPDATA is intentionally used
+-- on Windows because it survives Steam/plugin replacement and is user-owned.
+-- Keep the plugin directory as a fallback for unusual environments where no
+-- user data directory is exposed.
+local function persistent_data_directory()
+    local root = tostring(os.getenv("APPDATA") or "")
+    if root == "" then root = tostring(os.getenv("LOCALAPPDATA") or "") end
+    if root == "" then root = tostring(os.getenv("XDG_DATA_HOME") or "") end
+    if root == "" then return M.plugin_dir() end
+    return fs.join(root, "NativeGameLinkForSteam")
+end
+
+function M.persistent_path(filename)
+    return fs.join(persistent_data_directory(), filename)
+end
+
 function M.get_config_path()
     return M.path("mappings.json")
 end
@@ -90,6 +107,53 @@ function M.write_json_atomic(path, value)
     local ok, encoded = pcall(cjson.encode, value)
     if not ok then return false, tostring(encoded) end
     return M.write_text_atomic(path, encoded)
+end
+
+-- Persist a small rotating recovery chain while retaining atomic replacement
+-- of the primary file.  This is separate from write_json_atomic because most
+-- plugin settings intentionally keep only the existing short-lived backup.
+function M.write_json_atomic_with_backups(path, value, max_backups)
+    local ok_encode, encoded = pcall(cjson.encode, value)
+    if not ok_encode then return false, tostring(encoded) end
+
+    local dir = fs.parent_path(path)
+    if dir and dir ~= "" and not fs.exists(dir) then fs.create_directories(dir) end
+
+    local temp = path .. ".tmp"
+    local f, err = io.open(temp, "wb")
+    if not f then return false, tostring(err or "open_failed") end
+    local ok_write, write_err = pcall(function()
+        f:write(encoded)
+        f:flush()
+    end)
+    f:close()
+    if not ok_write then os.remove(temp); return false, tostring(write_err) end
+
+    local keep = math.max(1, math.floor(tonumber(max_backups or 3) or 3))
+    local had_previous = fs.exists(path)
+    if had_previous then
+        -- .bak is newest; .bak.1, .bak.2, ... are older snapshots.  Keep
+        -- exactly `keep` recovery copies in total, including .bak.
+        local oldest = path .. (keep == 1 and ".bak" or ".bak." .. tostring(keep - 1))
+        if fs.exists(oldest) then os.remove(oldest) end
+        for index = keep - 1, 1, -1 do
+            local source = path .. (index == 1 and ".bak" or ".bak." .. tostring(index - 1))
+            local target = path .. ".bak." .. tostring(index)
+            if fs.exists(target) then os.remove(target) end
+            if fs.exists(source) then os.rename(source, target) end
+        end
+        if not os.rename(path, path .. ".bak") then
+            os.remove(temp)
+            return false, "backup_failed"
+        end
+    end
+
+    if not os.rename(temp, path) then
+        if had_previous and fs.exists(path .. ".bak") then os.rename(path .. ".bak", path) end
+        os.remove(temp)
+        return false, "commit_failed"
+    end
+    return true, nil
 end
 
 return M

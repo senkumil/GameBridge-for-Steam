@@ -36,7 +36,51 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 			<button type="button" class="gdl-trading-card-preview-close">${escapeHtml(gdlText('close', 'Close'))}</button>
 		</div>`;
 
+	const panel = overlay.querySelector<HTMLElement>('.gdl-trading-card-preview-panel');
+	const image = overlay.querySelector<HTMLImageElement>('.gdl-trading-card-preview-image');
 	let closed = false;
+	let previewRevealed = false;
+	const fitPreviewToImage = (): void => {
+		if (!panel || !image || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+		const view = doc.defaultView;
+		const viewportWidth = Math.max(320, view?.innerWidth || doc.documentElement.clientWidth || 1280);
+		const viewportHeight = Math.max(240, view?.innerHeight || doc.documentElement.clientHeight || 720);
+		const maxPanelWidth = Math.max(240, viewportWidth - 30);
+		const maxImageWidth = Math.max(120, Math.min(1500, maxPanelWidth - 32));
+		const maxImageHeight = Math.max(120, viewportHeight - 114);
+		const scale = Math.min(maxImageWidth / image.naturalWidth, maxImageHeight / image.naturalHeight, 1);
+		const imageWidth = Math.max(1, Math.round(image.naturalWidth * scale));
+		const imageHeight = Math.max(1, Math.round(image.naturalHeight * scale));
+
+		panel.style.width = `${imageWidth + 32}px`;
+		panel.style.maxWidth = `${maxPanelWidth}px`;
+		image.style.width = `${imageWidth}px`;
+		image.style.height = `${imageHeight}px`;
+		image.style.maxHeight = 'none';
+		const closeButton = overlay.querySelector<HTMLElement>('.gdl-trading-card-preview-close');
+		if (closeButton) closeButton.style.width = `${Math.max(1, Math.min(780, Math.round(imageWidth * .5)))}px`;
+	};
+	const revealPreview = (): void => {
+		if (closed || previewRevealed) return;
+		fitPreviewToImage();
+		previewRevealed = true;
+		const view = doc.defaultView;
+		if (view) view.requestAnimationFrame(() => overlay.classList.add('is-visible'));
+		else overlay.classList.add('is-visible');
+	};
+	const onImageLoad = (): void => revealPreview();
+	const onImageError = (): void => revealPreview();
+	image?.addEventListener('load', onImageLoad);
+	image?.addEventListener('error', onImageError);
+	const onWindowResize = (): void => fitPreviewToImage();
+	doc.defaultView?.addEventListener('resize', onWindowResize);
+	const isInsideButton = (event: MouseEvent | PointerEvent, selector: string): boolean => {
+		const button = overlay.querySelector<HTMLElement>(selector);
+		if (!button) return false;
+		const rect = button.getBoundingClientRect();
+		return event.clientX >= rect.left && event.clientX <= rect.right
+			&& event.clientY >= rect.top && event.clientY <= rect.bottom;
+	};
 	const onKeyDown = (event: KeyboardEvent): void => {
 		if (event.key === 'Escape') dismiss();
 	};
@@ -45,6 +89,10 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 		closed = true;
 		doc.removeEventListener('keydown', onKeyDown, true);
 		overlay.removeEventListener('pointerup', onPreviewPointerUp, true);
+		overlay.removeEventListener('dblclick', onPreviewDoubleClick, true);
+		image?.removeEventListener('load', onImageLoad);
+		image?.removeEventListener('error', onImageError);
+		doc.defaultView?.removeEventListener('resize', onWindowResize);
 		overlay.remove();
 		tradingCardPreviewCleanup.delete(doc);
 	};
@@ -52,7 +100,10 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 		const target = event.target instanceof Element
 			? event.target.closest<HTMLButtonElement>('.gdl-trading-card-preview-close, .gdl-trading-card-preview-x')
 			: null;
-		if (!target || !overlay.contains(target)) return;
+		const hitCloseButton = target && overlay.contains(target)
+			|| isInsideButton(event, '.gdl-trading-card-preview-close')
+			|| isInsideButton(event, '.gdl-trading-card-preview-x');
+		if (!hitCloseButton) return;
 		// Steam's CEF occasionally delivers the pointer event to a nested
 		// surface instead of the button's React target. Capture the whole button
 		// region here so its text, padding and icon all close the preview.
@@ -60,16 +111,31 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 		event.stopPropagation();
 		dismiss();
 	};
+	const onPreviewDoubleClick = (event: MouseEvent): void => {
+		const target = event.target instanceof Element
+			? event.target.closest<HTMLButtonElement>('.gdl-trading-card-preview-close, .gdl-trading-card-preview-x')
+			: null;
+		const hitCloseButton = Boolean(target && overlay.contains(target))
+			|| isInsideButton(event, '.gdl-trading-card-preview-close')
+			|| isInsideButton(event, '.gdl-trading-card-preview-x');
+		if (!hitCloseButton) return;
+		// Do not let a double click escape to Steam's draggable window chrome.
+		event.preventDefault();
+		event.stopPropagation();
+	};
 	tradingCardPreviewCleanup.set(doc, dismiss);
 	overlay.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.addEventListener('click', dismiss));
 	overlay.addEventListener('pointerup', onPreviewPointerUp, true);
+	overlay.addEventListener('dblclick', onPreviewDoubleClick, true);
 	overlay.addEventListener('click', event => {
 		if (event.target === overlay) dismiss();
 	});
 	doc.addEventListener('keydown', onKeyDown, true);
 	doc.body.appendChild(overlay);
-	if (doc.defaultView) doc.defaultView.requestAnimationFrame(() => overlay.classList.add('is-visible'));
-	else setTimeout(() => overlay.classList.add('is-visible'), 0);
+	if (image?.complete) {
+		if (image.naturalWidth > 0 && image.naturalHeight > 0) onImageLoad();
+		else onImageError();
+	}
 	setTimeout(() => overlay.querySelector<HTMLButtonElement>('.gdl-trading-card-preview-close')?.focus(), 0);
 }
 

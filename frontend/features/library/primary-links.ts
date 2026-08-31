@@ -1,15 +1,17 @@
 import { gdlText } from '../../steam/localization';
+import { steamGameMainPageUrl } from '../../core/steam-links';
 import type { NativeLibraryLayout } from './layout';
 
 export interface PrimaryLinksOptions {
 	steamAppId: string;
+	isDelisted?: boolean;
 	hasWorkshop: boolean;
 	hasDlc?: boolean;
 }
 
-function linkedGameDestinations({ steamAppId, hasWorkshop, hasDlc }: PrimaryLinksOptions): Array<[string, string]> {
+function linkedGameDestinations({ steamAppId, isDelisted, hasWorkshop, hasDlc }: PrimaryLinksOptions): Array<[string, string]> {
 	const links: Array<[string, string]> = [
-		[gdlText('store_page', 'Store page'), `https://store.steampowered.com/app/${steamAppId}`],
+		[gdlText('store_page', 'Store page'), steamGameMainPageUrl(steamAppId, isDelisted)],
 	];
 	if (hasDlc) {
 		links.push([gdlText('dlc_links', 'DLC'), `https://store.steampowered.com/dlc/${steamAppId}/`]);

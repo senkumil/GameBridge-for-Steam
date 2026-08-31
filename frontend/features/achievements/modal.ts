@@ -141,7 +141,7 @@ export async function openLocalAchievementsModal(doc: Document, data: LocalAchie
 			: (progress > 0
 				? `<div style="margin-bottom:4px;font-size:12px;color:#8f98a0;">${item.progress}/${item.max_progress}</div><div style="width:140px;height:5px;background:rgba(255,255,255,0.12);border-radius:2px;overflow:hidden;"><div style="width:${progress}%;height:100%;background:#1a9fff;"></div></div>`
 				: '');
-		const shimmerHtml = hasShimmer ? '<div class="gdl-lam-row-rare-glow"></div><div class="gdl-lam-row-rare-ring"></div><div class="gdl-lam-row-rare-beam"></div>' : '';
+		const shimmerHtml = hasShimmer ? '<div class="gdl-lam-row-rare-ring"></div><div class="gdl-lam-row-rare-beam"></div>' : '';
 		return `<div class="gdl-lam-row" data-search="${escapeHtml((item.display_name + ' ' + item.description).toLocaleLowerCase())}">
 			<div class="${frameClass}">${shimmerHtml}${icon ? `<img class="gdl-lam-row-icon${locked ? ' locked' : ''}" src="${escapeHtml(locked ? (item.icon_gray || item.icon) : item.icon)}" loading="lazy">` : `<div class="gdl-lam-row-icon ${locked ? 'locked' : ''}" style="display:flex;align-items:center;justify-content:center;font-size:25px">★</div>`}</div>
 			<div class="gdl-lam-row-main"><div class="gdl-lam-row-title">${escapeHtml(item.display_name || item.name)}</div><div class="gdl-lam-row-desc">${escapeHtml(item.description || (item.hidden && locked ? gdlText('hidden_achievement', 'Hidden achievement') : ''))}</div><div class="gdl-lam-row-global">${(item.global_percent || 0).toFixed(1)}% ${escapeHtml(gdlText('players_have_achievement', 'of players have this achievement'))}</div></div>

@@ -186,6 +186,8 @@ Las versiones de Steam Beta que incluyen medición nativa para juegos externos s
 
 NativeGameLink comprueba si el cliente actual ya expone tiempo de juego nativo para cada acceso vinculado. Cuando existe, utiliza el valor de Steam y no crea un contador duplicado. Cuando no existe, NativeGameLink activa automáticamente su propio seguimiento local alternativo. Este fallback viene activado por defecto y puede deshabilitarse desde los ajustes del complemento.
 
+El historial canónico del seguimiento local se guarda fuera de la carpeta del complemento, en `%APPDATA%\\NativeGameLinkForSteam\\playtime_sessions.json`. Al actualizar o reinstalar el complemento, el archivo antiguo se migra automáticamente y se conservan tres copias de recuperación. Aun así, conviene exportar o copiar periódicamente ese directorio si también quieres protegerte contra el borrado completo del perfil de Windows o un fallo del disco.
+
 El seguimiento alternativo puede:
 
 - Detectar cuándo comienza y termina un juego vinculado.

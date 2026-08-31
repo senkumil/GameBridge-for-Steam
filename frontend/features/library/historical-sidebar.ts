@@ -6,6 +6,7 @@ import { buildNativeSidebarSection } from './layout';
 import { legacyGameRecord, type ExternalAchievementSet, type LegacyGameRecord } from './legacy-games';
 import type { SteamLibraryAssets } from './artwork';
 import { steamStringList } from '../../core/steam-game-data';
+import { steamGameMainPageUrl } from '../../core/steam-links';
 
 function infoRow(label: string, value: string): string {
 	return `<div class="gdl-historical-info-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
@@ -38,7 +39,7 @@ function historicalInfoBody(data: SteamGameData, steamAppId: string, record?: Le
 		record?.metacritic !== undefined && infoRow('Metacritic', String(record.metacritic)),
 		infoRow('Steam AppID', steamAppId),
 	].filter(Boolean).join('');
-	const storeUrl = `https://store.steampowered.com/app/${steamAppId}`;
+	const storeUrl = steamGameMainPageUrl(steamAppId, true);
 	return `<div class="gdl-native-sidebar-panel gdl-historical-info-card">
 		<div class="gdl-historical-info-rows">${rows}</div>
 		<a class="gdl-historical-footer-link" href="${storeUrl}" data-gdl-open-url="${storeUrl}">${escapeHtml(gdlText('store_page', 'Store page'))}</a>

@@ -9,6 +9,7 @@ import type {
 import { backendLog } from '../../api/backend';
 import { getCachedGameData, getGameData } from '../../core/game-data';
 import { steamStringList } from '../../core/steam-game-data';
+import { steamGameMainPageUrl } from '../../core/steam-links';
 import { escapeHtml, normalizeTitle } from '../../core/text';
 import { gdlText, loc, steamIntlLocale, steamLanguageSync } from '../../steam/localization';
 import { getMappedShortcuts, getSteamAppStore, toSignedShortcutAppId } from '../../steam/shortcuts';
@@ -616,7 +617,7 @@ function renderInfo(data: BigPictureDetailData, shortcut: MappedShortcut): strin
 	features.push({ icon: 'family', label: loc('AppDetails_Feature_FamilySharing', gdlText('family_sharing', 'Family Sharing')) });
 	features.push({ icon: 'controller', label: loc('AppDetails_Feature_FullController', gdlText('full_controller', 'Full controller support')) });
 	const links = [
-		[loc('AppDetails_Links_Store', gdlText('store_page', 'Store page')), `https://store.steampowered.com/app/${shortcut.steamAppId}`],
+		[loc('AppDetails_Links_Store', gdlText('store_page', 'Store page')), steamGameMainPageUrl(shortcut.steamAppId, game.is_delisted === true)],
 		[loc('AppDetails_Links_DLC', gdlText('dlc_links', 'DLC')), `https://store.steampowered.com/dlc/${shortcut.steamAppId}`],
 		[loc('AppDetails_Links_Community', gdlText('community_hub', 'Community hub')), `https://steamcommunity.com/app/${shortcut.steamAppId}`],
 		[loc('AppDetails_Links_PointsShop', gdlText('points_shop', 'Points Shop')), `https://store.steampowered.com/points/shop/app/${shortcut.steamAppId}`],

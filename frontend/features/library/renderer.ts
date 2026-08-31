@@ -135,6 +135,7 @@ export function renderLinkedGamePage(
 	mainContentStack.appendChild(activity);
 	const primaryLinks = createPrimaryLinksBar(doc, layout, {
 		steamAppId,
+		isDelisted: data.is_delisted === true,
 		hasWorkshop: capabilities.hasWorkshop,
 		hasDlc: capabilities.dlcIds.length > 0,
 	});

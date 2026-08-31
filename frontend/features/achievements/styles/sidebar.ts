@@ -29,15 +29,7 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 		#gdl-achievements-section.gdl-achievement-focus { position:relative;z-index:2;animation:gdl-achievement-focus-pulse 1.35s ease-out; }
 
 		/* Native Steam-like rare achievement animation: close solar corona, no rotation. */
-		@keyframes gdl-rare-achievement-pulse {
-			0% { opacity: .20; transform: scale(.80); filter: blur(2px); }
-			15% { opacity: .94; transform: scale(1.15); filter: blur(6.8px); }
-			31% { opacity: .40; transform: scale(.90); filter: blur(3.2px); }
-			49% { opacity: 1; transform: scale(1.27); filter: blur(9.4px); }
-			66% { opacity: .48; transform: scale(.94); filter: blur(3.8px); }
-			83% { opacity: 1; transform: scale(1.17); filter: blur(7.2px); }
-			100% { opacity: .20; transform: scale(.80); filter: blur(2px); }
-		}		@keyframes gdl-rare-rays-a {
+		@keyframes gdl-rare-rays-a {
 			0%, 100% { opacity: .18; filter: blur(2.4px); }
 			23% { opacity: .62; filter: blur(1.7px); }
 			48% { opacity: .28; filter: blur(2.6px); }
@@ -48,6 +40,12 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			29% { opacity: .16; filter: blur(2.8px); }
 			58% { opacity: .57; filter: blur(1.6px); }
 			83% { opacity: .24; filter: blur(2.5px); }
+		}
+		@media (prefers-reduced-motion: reduce) {
+			.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-rare-ring,
+			.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-shimmer-spin {
+				animation: none !important;
+			}
 		}
 
 		/* Native Steam translucent panel matching official client */
@@ -264,32 +262,48 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			border-color: rgba(0, 0, 0, .46);
 			box-shadow: none;
 		}
-		.gdl-la-icon-frame .gdl-la-rare-glow,
 		.gdl-la-icon-frame .gdl-la-rare-ring,
 		.gdl-la-icon-frame .gdl-la-shimmer-spin {
 			display: none;
 			pointer-events: none;
 		}
-		.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-rare-glow {
+		/* Steam's toast has a bright corona around the icon. These layers were
+		   already emitted by the page, but hidden; keep them behind the image and
+		   animate only the two featured rare achievements. */
+		.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-rare-ring {
 			display: block;
 			position: absolute;
-			inset: -5px;
-			z-index: 0;
-			border-radius: 6px;
-			background: radial-gradient(ellipse at center,
-				rgba(255, 235, 116, .70) 0%,
-				rgba(255, 183, 46, .58) 38%,
-				rgba(255, 145, 20, .34) 58%,
-				transparent 76%);
-			filter: blur(4.8px);
-			opacity: 1;
-			transform-origin: 50% 50%;
-			will-change: transform, opacity, filter;
-			animation: gdl-rare-achievement-pulse 15s cubic-bezier(.42,0,.32,1) infinite;
+			inset: -2px;
+			z-index: 1;
+			border: 1px solid rgba(255, 220, 92, .78);
+			border-radius: 5px;
+			box-shadow: 0 0 2px rgba(255, 238, 148, .95), 0 0 6px rgba(255, 169, 32, .62);
+			animation: gdl-rare-rays-b 15s cubic-bezier(.42,0,.32,1) infinite;
 		}
-		.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-rare-ring,
 		.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-shimmer-spin {
-			display: none !important;
+			display: block;
+			position: absolute;
+			inset: -7px;
+			z-index: 0;
+			border-radius: 50%;
+			background: repeating-conic-gradient(from 2deg,
+				rgba(255, 224, 105, .68) 0deg 2deg,
+				transparent 2deg 14deg);
+			filter: blur(1px);
+			opacity: .38;
+			will-change: opacity, filter;
+			animation: gdl-rare-rays-a 15s cubic-bezier(.42,0,.32,1) infinite;
+		}
+		.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-shimmer-spin::after {
+			content: '';
+			position: absolute;
+			inset: 3px;
+			border-radius: 50%;
+			background: repeating-conic-gradient(from 10deg,
+				rgba(255, 170, 30, .46) 0deg 1deg,
+				transparent 1deg 11deg);
+			filter: blur(1px);
+			opacity: .64;
 		}
 		.gdl-la-icon-frame .gdl-la-icon {
 			position: relative;

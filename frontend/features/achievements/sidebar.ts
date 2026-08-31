@@ -39,7 +39,7 @@ function localAchievementIcon(item: LocalAchievementItem, locked = false, highli
 	const isRare = !locked && highlightedNames.has(String(item.name));
 	const frameClass = `gdl-la-icon-frame${isRare ? ' gdl-shimmer-active' : ''}`;
 	const shimmerHtml = isRare
-		? '<div class="gdl-la-rare-glow"></div><div class="gdl-la-rare-ring"></div><div class="gdl-la-shimmer-spin"></div>'
+		? '<div class="gdl-la-rare-ring"></div><div class="gdl-la-shimmer-spin"></div>'
 		: '';
 
 	if (!url) {
