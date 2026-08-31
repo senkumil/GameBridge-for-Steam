@@ -19,9 +19,6 @@ Once linked, an external game no longer feels like an empty shortcut: it receive
 - **Steam Achievement Manager (SAM) Integration:** Inspect, unlock, lock, or modify achievement progress for your official Steam games directly from your library interface.
 - **Steam Trading Card Farming & Simulation:** Interactive trading card showcase with 3D animated cards, foil holographic reflection, badge level progression, and remaining card tracking.
 - **Simplified Non-Steam Achievement Simulation:** Easily configure achievement simulation per-game (100% instant completion, progressive simulation, or manual tracking) with emulator and launcher compatibility.
-- **Smart Automatic Detection & Linking:** Evaluates verified executable evidence, parent paths, and confidence scores with cover previews.
-- **Native-Style Steam Library Page:** Rebuilds complete surfaces including activity feed, patch notes, achievements, game info drawer, community content, friends, DLC, Workshop, and notes.
-- **Zero-Flicker & Clean Boot:** No popups on Steam launch (only activates when opening "Add a Non-Steam Game"), 0ms cached rendering, and 100% native Steam game isolation.
 - **Big Picture & Steam Deck UI Integration:** Renders official hero backgrounds, logos, and synced playtime natively in Big Picture mode.
 
 ---
