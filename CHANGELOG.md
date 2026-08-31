@@ -1,31 +1,32 @@
 ## v3.0.0 - Major Release: Delisted Games Support, Direct Artwork Management, SAM & Trading Card Farming (2026-08-31)
 
-- **Soporte Completo para Juegos Eliminados y Deslistados de Steam**:
-  - Vinculación instantánea y resiliente para juegos descatalogados o sin página de tienda activa en Steam (como *Mortal Kombat Komplete Edition*, *Transformers: Devastation*, etc.).
-  - Resuelve metadatos, logros e ilustraciones oficiales sin quedarse atascado en colas en segundo plano por recursos opcionales faltantes.
+- **Comprehensive Support for Delisted & Removed Steam Games**:
+  - Resilient metadata and official asset linking for retired or unlisted titles without an active Steam store page (e.g. *Mortal Kombat Komplete Edition*, *Transformers: Devastation*, etc.).
+  - Resolves official titles, achievements, and artwork without stalling background queues for missing optional store endpoints.
 
-- **Gestión y Cambio de Artworks Directamente desde Propiedades del Juego**:
-  - Selector de ilustraciones integrado y seguro dentro de la pestaña *Personalización* en Propiedades del juego.
-  - Permite previsualizar, seleccionar y aplicar fondos hero, logos verticales/horizontales, cápsulas e iconos en tiempo real.
-  - Aislamiento estricto: el selector se oculta automáticamente en pestañas ajenas (*Acceso directo*, *General*) y el restablecimiento respeta las carátulas nativas de Steam sin alterarlas.
+- **Direct Artwork Management in Game Properties**:
+  - Integrated, isolated artwork customizer inside the *Customization* tab in Properties.
+  - Allows live preview, selection, and download of hero backgrounds, vertical/horizontal logos, portrait capsules, and icons in real time.
+  - Strict isolation: the selector is safely hidden outside the customization tab, and resetting assets preserves native Steam artwork without touching official games.
 
-- **Modificación y Gestión de Logros en Juegos Originales de Steam (SAM Integrado)**:
-  - Integración nativa para consultar, desbloquear, bloquear o restablecer logros en juegos oficiales de Steam directamente desde la biblioteca.
-  - Sincronización inmediata con la interfaz de usuario sin requerir herramientas externas.
+- **Integrated Steam Achievement Manager (SAM)**:
+  - Native integration to inspect, unlock, lock, or modify achievement progress for official Steam games directly from your library interface.
+  - Immediate synchronization with the Steam client UI without needing external standalone tools.
 
-- **Farmeo y Simulación de Cromos / Tarjetas Coleccionables (Steam Trading Cards)**:
-  - Sección interactiva de cromos con tarjetas 3D animadas, efecto holográfico para cromos reflectantes (Foil) e inspección centrada en pantalla.
-  - Sistema de seguimiento de cromos restantes, cálculo de nivel de insignia e integración de acceso directo a la comunidad de Steam.
+- **Steam Trading Card Farming & Interactive Showcase**:
+  - Interactive trading card collection with centered 3D tilt, cursor illumination, and metadata-gated foil holographic reflection.
+  - Badge progression tracking, remaining card drop calculation, and direct integration with the Steam Community Market.
 
-- **Simulador de Logros Simplificado para Juegos No-Steam**:
-  - Configuración ultra accesible por juego: desbloqueo completo (100%), progreso simulado progresivo o modo manual.
-  - Compatibilidad directa con archivos JSON generados por emuladores y lanzadores externos.
-  - Reconocimiento de esquemas oficiales con iconos en alta resolución y notificaciones de logros en juego (toasts) fluidas.
+- **Simplified Non-Steam Achievement Simulation**:
+  - Ultra-accessible configuration per shortcut: instant 100% completion, progressive simulated unlocking, or manual tracking.
+  - Direct compatibility with emulator-generated and external launcher achievement files.
+  - Schema recognition with high-resolution icons and smooth in-game achievement unlock notifications.
 
-- **Aislamiento Nativo Total y Rendimiento Instantáneo**:
-  - Cero ventanas emergentes intrusivas al iniciar Steam; la detección se activa únicamente al abrir el diálogo oficial *"Añadir un producto que no es de Steam"*.
-  - Eliminación de micro-parpadeos al cargar carátulas en el panel de Información gracias a decodificación asíncrona.
-  - Vinculación fluida de accesos directos repetidos/duplicados y navegación instantánea mediante snapshots de memoria locales.
+- **Strict Native Isolation, Zero-Flicker & Performance**:
+  - No intrusive automatic popups on Steam startup; linking detection triggers only when manually opening the official *"Add a Non-Steam Game"* dialog.
+  - Smooth asynchronous portrait decoding in the Game Information drawer to eliminate visual flicker.
+  - Resilient linking for repeated/duplicate shortcuts and instant 0ms browsing from local memory snapshots.
+  - And many more under-the-hood improvements to enhance your experience.
 
 
 ## v2.1.0 - Achievement reliability, performance and native isolation (2026-08-28)
