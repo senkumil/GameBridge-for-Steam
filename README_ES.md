@@ -14,7 +14,7 @@ Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: reci
 
 ## ✨ Novedades de la v3.0.0 y Funciones principales
 
-- **Compatibilidad con Juegos Eliminados y Deslistados de Steam:** Soporte completo para títulos descatalogados o sin página de tienda activa en Steam (como *Mortal Kombat Komplete Edition*, *Transformers: Devastation*, etc.), resolviendo metadatos e ilustraciones oficiales sin bloqueos.
+- **Compatibilidad con Juegos Eliminados y Deslistados de Steam:** Soporte completo para títulos descatalogados o sin página de tienda activa en Steam (como *Mortal Kombat Komplete Edition*, *Pro Evolution Soccer 2013*, etc.), resolviendo metadatos e ilustraciones oficiales sin bloqueos.
 - **Gestión y Cambio de Artworks Directamente desde Propiedades:** Selector visual dentro de la pestaña *Personalización* en Propiedades para previsualizar, cambiar y aplicar fondos hero, logos, cápsulas e iconos en tiempo real.
 - **Modificación y Gestión de Logros en Juegos Originales de Steam (SAM Integrado):** Consulta, desbloquea, bloquea o edita el progreso de logros de tus juegos oficiales de Steam directamente desde la biblioteca.
 - **Simulación y Farmeo de Cromos de Steam (Trading Cards):** Colección interactiva de tarjetas en 3D, seguimiento de cromos restantes, progreso de insignia y acceso directo a la comunidad.
