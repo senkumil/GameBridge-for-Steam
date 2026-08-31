@@ -17,17 +17,407 @@ import {
 	removeCssModuleClass,
 } from '../../steam/native-dom';
 
-const expandedNativeGameInfoKeys = new Set<string>();
+const GDL_INFO_PANEL_EXPANDED_KEY = 'gdl_info_panel_expanded';
+
+export function getPersistentInfoExpanded(): boolean {
+	try {
+		return localStorage.getItem(GDL_INFO_PANEL_EXPANDED_KEY) === '1';
+	} catch {
+		return false;
+	}
+}
+
+export function setPersistentInfoExpanded(expanded: boolean): void {
+	try {
+		localStorage.setItem(GDL_INFO_PANEL_EXPANDED_KEY, expanded ? '1' : '0');
+	} catch {}
+}
+
 const nativeInfoResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function informationSvg(): string {
-	return `<svg class="SVGIcon_Button SVGIcon_Information" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 10.4v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.2" r="1.15" fill="currentColor"/></svg>`;
+	// Exact geometry used by Steam's current SVGIcon_Information component.
+	return `<svg class="SVGIcon_Button SVGIcon_Information" viewBox="0 0 256 256" aria-hidden="true"><polyline class="I" points="86.883,110.957 152.894,110.957 152.894,181.406 177.117,181.406 177.117,202.485 86.883,202.485 86.883,181.775 109.441,181.775 109.441,130.372 86.883,130.372 "></polyline><circle class="I" cx="128.47" cy="67.607" r="25.517"></circle><circle fill="none" stroke="#000000" stroke-width="14" stroke-miterlimit="10" cx="128" cy="128" r="116.833"></circle></svg>`;
+}
+
+function informationSvgForButton(button: HTMLElement): string {
+	return button.dataset.gdlNativeInformationSvg || informationSvg();
+}
+
+function scrollToTopSvg(): string {
+	return `<svg class="SVGIcon_Button gdl-scroll-top-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M6.7 10.2 12 4.9l5.3 5.3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+const infoScrollCleanups = new WeakMap<Document, () => void>();
+const infoKnownScrollTargets = new WeakMap<Document, Set<HTMLElement>>();
+const SCROLL_TOP_BUTTON_THRESHOLD = 360;
+
+function infoButtonLabel(expanded: boolean): string {
+	return expanded
+		? loc('GameAction_ViewDetails_Collapse', gdlText('hide_game_details', 'Hide game details'))
+		: loc('GameAction_ViewDetails', gdlText('show_game_details', 'Show game details'));
+}
+
+function scrollTopButtonLabel(): string {
+	return loc('AppDetails_ScrollToTop', 'Back to top');
+}
+
+function setInfoButtonScrollMode(button: HTMLElement, active: boolean, nativeWrapperClass = ''): void {
+	button.dataset.gdlScrollTopActive = active ? '1' : '0';
+	const svg = button.querySelector('svg');
+	const html = active ? scrollToTopSvg() : informationSvgForButton(button);
+	if (svg) svg.outerHTML = html;
+	else button.innerHTML = `<div class="${nativeWrapperClass}">${html}</div>`;
+	const label = active ? scrollTopButtonLabel() : infoButtonLabel(getPersistentInfoExpanded());
+	button.setAttribute('aria-label', label);
+	button.title = label;
+}
+
+function mainScrollAnchors(doc: Document): HTMLElement[] {
+	const anchors = [
+		doc.getElementById('gdl-library-injected'),
+		doc.getElementById('gdl-link-bar'),
+		doc.getElementById('gdl-playbar-achievements'),
+		doc.querySelector<HTMLElement>('[data-gdl-game-info-button="1"]'),
+	].filter((element): element is HTMLElement => element instanceof HTMLElement && element.isConnected);
+	return anchors;
+}
+
+/**
+ * Steam can move the library details view between different internal scroll
+ * containers when the splitter, route, or sticky playbar layout changes. Do not
+ * cache one container: derive every relevant scrollable ancestor from live GDL
+ * anchors so the Info/Back-to-top state always follows the actual details pane.
+ */
+function collectMainScrollTargets(doc: Document, knownTargets?: Iterable<HTMLElement>): HTMLElement[] {
+	const view = doc.defaultView;
+	const targets = new Set<HTMLElement>();
+	const anchors = mainScrollAnchors(doc);
+	const detailsLeft = rightDetailsLeftFromAnchors(doc, anchors);
+
+	const consider = (current: HTMLElement): void => {
+		if (!current.isConnected) return;
+		const style = view?.getComputedStyle(current);
+		const overflowY = style?.overflowY || '';
+		const hasScrollableRange = current.scrollHeight > current.clientHeight + 8;
+		const permitsScroll = overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay';
+		if (!hasScrollableRange || (!permitsScroll && current.scrollTop <= 0)) return;
+		const rect = current.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) return;
+		const containsRightAnchor = anchors.some(anchor => current === anchor || current.contains(anchor));
+		const belongsToRightPane = rect.right > detailsLeft + 80 && rect.width >= 360 && rect.height >= 180;
+		if (containsRightAnchor || belongsToRightPane) targets.add(current);
+	};
+
+	for (const anchor of anchors) {
+		let current: HTMLElement | null = anchor;
+		while (current && current !== doc.body && current !== doc.documentElement) {
+			consider(current);
+			current = current.parentElement;
+		}
+	}
+
+	if (knownTargets) {
+		for (const target of knownTargets) consider(target);
+	}
+
+	// Shortcut/non-Steam pages can rebuild the details scroll container when the
+	// playbar becomes sticky. That new scroller is not always an ancestor of a
+	// NativeGameLink node, so include visible scrollable containers in the right pane.
+	for (const node of Array.from(doc.querySelectorAll<HTMLElement>('div,main,section'))) {
+		consider(node);
+	}
+
+	const scrolling = doc.scrollingElement;
+	if (scrolling instanceof HTMLElement && scrolling.scrollHeight > scrolling.clientHeight + 8) targets.add(scrolling);
+	return Array.from(targets);
+}
+
+function nativeInPagePlaybar(doc: Document): HTMLElement | null {
+	const playbar = PLAYBAR_CLASS_MODULE();
+	if (!playbar.native || !playbar.classes.Container || !playbar.classes.InPage) return null;
+	const candidates = elementsWithCssModuleClass(doc, playbar.classes.Container)
+		.filter(element => element.isConnected && hasCssModuleClass(element, playbar.classes.InPage));
+	if (candidates.length === 0) return null;
+	// Prefer the original in-page playbar even after Steam creates a sticky copy.
+	return candidates.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
+}
+function isStickyPlaybarVisible(doc: Document): boolean {
+	const playbar = PLAYBAR_CLASS_MODULE();
+	const classes = playbar.classes;
+	if (!playbar.native || !classes.Container || !classes.InPage) return false;
+
+	const inPage = nativeInPagePlaybar(doc);
+	if (inPage) {
+		const rect = inPage.getBoundingClientRect();
+		// If the original in-page playbar is still visibly sitting below the hero,
+		// we are still at/near the top and must keep the info icon.
+		if (rect.top >= 96 && rect.bottom > 140) return false;
+	}
+
+	const viewportHeight = Math.max(0, doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0);
+	for (const container of elementsWithCssModuleClass(doc, classes.Container)) {
+		if (!container.isConnected || hasCssModuleClass(container, classes.InPage) || !isRenderedElement(doc, container)) continue;
+		const rect = container.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= viewportHeight) continue;
+		// Count as sticky only when the duplicate playbar is actually docked near
+		// the top chrome and the original in-page bar has already moved away.
+		if (rect.top <= 88 && rect.bottom >= 36) return true;
+	}
+	return false;
+}
+
+
+function isMainContentVisuallyScrolled(doc: Document): boolean {
+	const inPage = nativeInPagePlaybar(doc);
+	if (inPage) {
+		const rect = inPage.getBoundingClientRect();
+		// Once the original playbar has moved above the top chrome, Steam swaps to
+		// the sticky playbar. This is a more reliable signal than scrollTop on some
+		// non-Steam detail layouts.
+		if (rect.bottom < 28 || rect.top < -88) return true;
+	}
+	const linkBar = doc.getElementById('gdl-link-bar');
+	if (linkBar?.isConnected) {
+		const rect = linkBar.getBoundingClientRect();
+		if (rect.bottom < 30) return true;
+	}
+	return false;
+}
+
+function currentMainScrollTop(doc: Document, knownTargets?: Iterable<HTMLElement>): number {
+	const learnedTargets = knownTargets || infoKnownScrollTargets.get(doc);
+	const targets = collectMainScrollTargets(doc, learnedTargets);
+	let top = 0;
+	for (const target of targets) top = Math.max(top, Math.max(0, target.scrollTop || 0));
+	if (top <= 0) top = Math.max(0, doc.defaultView?.scrollY || 0);
+	return top;
+}
+
+/**
+ * Keep the native Information button while the primary Steam links bar is still
+ * visibly present underneath the sticky playbar. This matches the visual state
+ * shown by Steam better than a raw scrollTop threshold and stays stable across
+ * splitter widths / window sizes.
+ */
+function primaryLinksAreStillVisible(doc: Document): boolean {
+	const linkBar = doc.getElementById('gdl-link-bar');
+	if (!linkBar?.isConnected || !isRenderedElement(doc, linkBar)) return false;
+	const rect = linkBar.getBoundingClientRect();
+	const viewportHeight = Math.max(0, doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0);
+	if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= viewportHeight) return false;
+	// The sticky playbar occupies roughly the upper ~90px of the details pane.
+	// As long as the links bar is still clearly visible below it, keep Information.
+	return rect.bottom > 118;
+}
+
+function shouldShowScrollTopButton(doc: Document, knownTargets?: Iterable<HTMLElement>): boolean {
+	if (primaryLinksAreStillVisible(doc)) return false;
+	const top = currentMainScrollTop(doc, knownTargets);
+	return top > SCROLL_TOP_BUTTON_THRESHOLD || isStickyPlaybarVisible(doc) || isMainContentVisuallyScrolled(doc);
+}
+
+function scrollMainContentToTop(doc: Document, knownTargets?: Iterable<HTMLElement>): void {
+	const learnedTargets = knownTargets || infoKnownScrollTargets.get(doc);
+	const view = doc.defaultView;
+	if (!view) {
+		for (const target of collectMainScrollTargets(doc, learnedTargets)) target.scrollTop = 0;
+		return;
+	}
+
+	const duration = 460;
+	const startedAt = view.performance.now();
+	const starts = new Map<HTMLElement, { top: number; progress: number }>();
+	let windowStart = Math.max(0, view.scrollY || 0);
+
+	const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3);
+	const frame = (now: number): void => {
+		const progress = Math.max(0, Math.min(1, (now - startedAt) / duration));
+		const liveTargets = collectMainScrollTargets(doc, learnedTargets);
+
+		for (const target of liveTargets) {
+			let start = starts.get(target);
+			if (!start) {
+				start = { top: Math.max(0, target.scrollTop || 0), progress };
+				starts.set(target, start);
+			}
+			const span = Math.max(0.001, 1 - start.progress);
+			const localProgress = Math.max(0, Math.min(1, (progress - start.progress) / span));
+			const nextTop = Math.round(start.top * (1 - easeOutCubic(localProgress)));
+			if (Math.abs((target.scrollTop || 0) - nextTop) > 0) target.scrollTop = nextTop;
+		}
+
+		if (windowStart > 0) {
+			const nextWindowTop = Math.round(windowStart * (1 - easeOutCubic(progress)));
+			view.scrollTo(0, nextWindowTop);
+		}
+
+		if (progress < 1) {
+			view.requestAnimationFrame(frame);
+			return;
+		}
+
+		// Steam may create the final non-sticky scroller on the last frame. Clear
+		// every live right-pane target once, without another visual animation.
+		for (const target of collectMainScrollTargets(doc, learnedTargets)) target.scrollTop = 0;
+		const scrolling = doc.scrollingElement;
+		if (scrolling instanceof HTMLElement) scrolling.scrollTop = 0;
+		view.scrollTo(0, 0);
+	};
+
+	view.requestAnimationFrame(frame);
+}
+
+
+function rightDetailsLeftFromAnchors(doc: Document, anchors: HTMLElement[]): number {
+	let left = Number.POSITIVE_INFINITY;
+	for (const anchor of anchors) {
+		const rect = anchor.getBoundingClientRect();
+		if (rect.width > 0 && rect.height > 0 && rect.left > 0) left = Math.min(left, rect.left);
+	}
+	return Number.isFinite(left) ? left : Math.max(280, Math.round((doc.defaultView?.innerWidth || 1280) * 0.24));
+}
+
+function rightDetailsLeft(doc: Document): number {
+	return rightDetailsLeftFromAnchors(doc, mainScrollAnchors(doc));
+}
+
+function findRelevantScrollTargetFromPath(doc: Document, path: EventTarget[]): HTMLElement | null {
+	const view = doc.defaultView;
+	const anchors = mainScrollAnchors(doc);
+	for (const item of path) {
+		if (!(item instanceof HTMLElement) || !item.isConnected) continue;
+		const style = view?.getComputedStyle(item);
+		const overflowY = style?.overflowY || '';
+		const scrollable = item.scrollHeight > item.clientHeight + 8;
+		const permitsScroll = overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay';
+		if (!scrollable || (!permitsScroll && item.scrollTop <= 0)) continue;
+		if (anchors.some(anchor => item === anchor || item.contains(anchor))) return item;
+	}
+	return null;
+}
+
+function installInfoButtonScrollBehavior(
+	doc: Document,
+	nativeWrapperClass = '',
+	ensureButtons?: () => void,
+): void {
+	// Steam rebuilds the sticky playbar while scrolling. Keep both the scroll
+	// detector and our injected Info/Back-to-top control synchronized with the
+	// live AppButtonsContainer instead of assuming the original node survives.
+	infoScrollCleanups.get(doc)?.();
+	const view = doc.defaultView;
+	const knownScrollTargets = new Set<HTMLElement>();
+	infoKnownScrollTargets.set(doc, knownScrollTargets);
+	let frame = 0;
+	let settleTimer = 0;
+	let ensureTimer = 0;
+
+	const ensureButtonNodes = (): void => {
+		// A sticky-playbar rebuild can leave the old button connected in an
+		// offscreen container while creating a new visible AppButtonsContainer.
+		// Always resync the current containers; syncButtons() is idempotent.
+		ensureButtons?.();
+	};
+
+	const applyMode = (active: boolean): void => {
+		ensureButtonNodes();
+		for (const button of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-game-info-button="1"]'))) {
+			if ((button.dataset.gdlScrollTopActive === '1') !== active) {
+				setInfoButtonScrollMode(button, active, nativeWrapperClass);
+			}
+		}
+	};
+
+	const update = (): void => {
+		frame = 0;
+		for (const target of Array.from(knownScrollTargets)) {
+			if (!target.isConnected) knownScrollTargets.delete(target);
+		}
+		const active = shouldShowScrollTopButton(doc, knownScrollTargets);
+		applyMode(active);
+	};
+	const queueUpdate = (): void => {
+		if (frame || !view) {
+			if (!view) update();
+			return;
+		}
+		frame = view.requestAnimationFrame(update);
+	};
+	const queueSettledUpdate = (): void => {
+		queueUpdate();
+		if (!view) return;
+		if (settleTimer) view.clearTimeout(settleTimer);
+		settleTimer = view.setTimeout(() => {
+			settleTimer = 0;
+			queueUpdate();
+		}, 140);
+	};
+	const scheduleEnsureButtons = (): void => {
+		if (!view || ensureTimer) return;
+		ensureTimer = view.setTimeout(() => {
+			ensureTimer = 0;
+			ensureButtonNodes();
+			queueUpdate();
+		}, 0);
+	};
+
+	const onScroll = (rawEvent: Event): void => {
+		const target = rawEvent.target;
+		if (target instanceof HTMLElement) {
+			const anchors = mainScrollAnchors(doc);
+			const rect = target.getBoundingClientRect();
+			const rightPaneScroller = target.scrollHeight > target.clientHeight + 8 && rect.right > rightDetailsLeft(doc) + 40;
+			if (anchors.some(anchor => target === anchor || target.contains(anchor)) || rightPaneScroller) knownScrollTargets.add(target);
+		}
+		queueSettledUpdate();
+	};
+
+	const onWheel = (rawEvent: Event): void => {
+		const event = rawEvent as WheelEvent;
+		// Ignore the left library list. The sticky playbar belongs to the right
+		// details pane, so a wheel gesture left of its content boundary must not
+		// affect the Info/Back-to-top state.
+		if (Number.isFinite(event.clientX) && event.clientX > 0 && event.clientX < rightDetailsLeft(doc) - 4) return;
+		const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+		const target = findRelevantScrollTargetFromPath(doc, path);
+		if (target) knownScrollTargets.add(target);
+		queueSettledUpdate();
+	};
+
+	doc.addEventListener('scroll', onScroll, true);
+	doc.addEventListener('wheel', onWheel, { capture: true, passive: true });
+	view?.addEventListener('resize', queueSettledUpdate, { passive: true });
+
+	const MutationObserverCtor = view?.MutationObserver;
+	const mutationObserver = typeof MutationObserverCtor === 'function'
+		? new MutationObserverCtor(() => {
+			scheduleEnsureButtons();
+			queueUpdate();
+		})
+		: null;
+	if (mutationObserver && doc.body) mutationObserver.observe(doc.body, { childList: true, subtree: true });
+
+	ensureButtonNodes();
+	queueUpdate();
+	const cleanup = (): void => {
+		doc.removeEventListener('scroll', onScroll, true);
+		doc.removeEventListener('wheel', onWheel, true);
+		view?.removeEventListener('resize', queueSettledUpdate);
+		mutationObserver?.disconnect();
+		if (frame && view) view.cancelAnimationFrame(frame);
+		if (settleTimer && view) view.clearTimeout(settleTimer);
+		if (ensureTimer && view) view.clearTimeout(ensureTimer);
+		infoKnownScrollTargets.delete(doc);
+		infoScrollCleanups.delete(doc);
+	};
+	infoScrollCleanups.set(doc, cleanup);
 }
 
 function normalizeInformationButtonIcon(button: HTMLElement, nativeWrapperClass = ''): void {
 	const existing = button.querySelector('svg');
 	if (existing) {
-		existing.outerHTML = informationSvg();
+		existing.outerHTML = informationSvgForButton(button);
 		return;
 	}
 	// A validated native blueprint normally contains an SVG. Keep a defensive
@@ -94,6 +484,47 @@ function nativeInfoPanelHtml(model: NativeGameInfo, nativeLayout: boolean): stri
 		${nativeLayout ? `<div class="${outerClasses.GameInfoShadow || ''}"></div>` : ''}`;
 }
 
+function updateNativeInfoPanelInPlace(doc: Document, panel: HTMLElement, model: NativeGameInfo, signature: string): void {
+	const nativeLayout = panel.dataset.gdlNativeLayout === '1';
+	const staging = doc.createElement('div');
+	staging.innerHTML = nativeInfoPanelHtml(model, nativeLayout);
+	for (const selector of ['.gdl-info-description-text', '.gdl-info-associations', '.gdl-info-features']) {
+		const current = panel.querySelector<HTMLElement>(selector);
+		const next = staging.querySelector<HTMLElement>(selector);
+		if (current && next && current.innerHTML !== next.innerHTML) current.innerHTML = next.innerHTML;
+	}
+	panel.dataset.signature = signature;
+	panel.dataset.gdlLegacy = model.isLegacy ? '1' : '0';
+
+	const portrait = panel.querySelector<HTMLElement>('.gdl-info-portrait');
+	const currentImage = portrait?.querySelector<HTMLImageElement>('img') || null;
+	const nextImage = staging.querySelector<HTMLImageElement>('.gdl-info-portrait img');
+	const desiredUrl = nextImage?.getAttribute('src') || '';
+	if (!portrait || currentImage?.getAttribute('src') === desiredUrl) return;
+	panel.dataset.gdlPendingPortrait = desiredUrl;
+	if (!nextImage) {
+		currentImage?.remove();
+		return;
+	}
+	const commit = (): void => {
+		if (!panel.isConnected || panel.dataset.gameKey !== model.key
+			|| panel.dataset.gdlPendingPortrait !== desiredUrl) return;
+		const livePortrait = panel.querySelector<HTMLElement>('.gdl-info-portrait');
+		if (!livePortrait) return;
+		livePortrait.replaceChildren(nextImage);
+		resizeFallbackInfoPanel(panel);
+	};
+	if (nextImage.complete && nextImage.naturalWidth > 0) {
+		commit();
+		return;
+	}
+	if (typeof nextImage.decode === 'function') {
+		void nextImage.decode().then(commit).catch(() => {});
+	} else {
+		nextImage.addEventListener('load', commit, { once: true });
+	}
+}
+
 function nativeInfoPanelHeight(panel: HTMLElement): number {
 	const content = panel.firstElementChild as HTMLElement | null;
 	if (!content) return 1;
@@ -105,13 +536,9 @@ function resizeFallbackInfoPanel(panel: HTMLElement): void {
 	panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
 }
 
-function setNativeInfoExpanded(doc: Document, key: string, expanded: boolean): void {
-	if (expanded) expandedNativeGameInfoKeys.add(key);
-	else expandedNativeGameInfoKeys.delete(key);
-	while (expandedNativeGameInfoKeys.size > 128) {
-		const oldest = expandedNativeGameInfoKeys.values().next().value as string | undefined;
-		if (!oldest) break;
-		expandedNativeGameInfoKeys.delete(oldest);
+function setNativeInfoExpanded(doc: Document, key: string, expanded: boolean, persist = false): void {
+	if (persist) {
+		setPersistentInfoExpanded(expanded);
 	}
 	const panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
 	const outerModule = GAME_INFO_OUTER_CLASS_MODULE();
@@ -135,18 +562,17 @@ function setNativeInfoExpanded(doc: Document, key: string, expanded: boolean): v
 			else removeCssModuleClass(button, playbarModule.classes.MenuActive);
 		}
 		button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-		const label = expanded
-			? loc('GameAction_ViewDetails_Collapse', gdlText('hide_game_details', 'Hide game details'))
-			: loc('GameAction_ViewDetails', gdlText('show_game_details', 'Show game details'));
+		const label = button.dataset.gdlScrollTopActive === '1'
+			? scrollTopButtonLabel()
+			: infoButtonLabel(expanded);
 		button.setAttribute('aria-label', label);
 		button.title = label;
 	}
 }
 
-export function removeNativeInfoPanel(doc: Document, preserveExpansion = false): void {
+export function removeNativeInfoPanel(doc: Document, _preserveExpansion = false): void {
 	const panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
 	if (!panel) return;
-	if (!preserveExpansion) expandedNativeGameInfoKeys.delete(panel.dataset.gameKey || '');
 	nativeInfoResizeObservers.get(panel)?.disconnect();
 	panel.remove();
 }
@@ -154,12 +580,11 @@ export function removeNativeInfoPanel(doc: Document, preserveExpansion = false):
 export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTMLElement | null {
 	let panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
 	const signature = nativeInfoSignature(model);
-	if (panel && (panel.dataset.gameKey !== model.key || panel.dataset.signature !== signature)) {
-		// A metadata refresh within the same route may rebuild the panel. Preserve
-		// the user's current choice only for that rebuild; ordinary route cleanup
-		// deletes it so returning to any game always starts collapsed.
-		removeNativeInfoPanel(doc, panel.dataset.gameKey === model.key);
+	if (panel && panel.dataset.gameKey !== model.key) {
+		removeNativeInfoPanel(doc, true);
 		panel = null;
+	} else if (panel && panel.dataset.signature !== signature) {
+		updateNativeInfoPanelInPlace(doc, panel, model, signature);
 	}
 	if (!panel) {
 		const infoModule = GAME_INFO_CLASS_MODULE();
@@ -168,6 +593,7 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 		panel = doc.createElement('div');
 		panel.id = 'gdl-game-info-panel';
 		panel.dataset.gdlNativeLayout = nativeLayout ? '1' : '0';
+		panel.dataset.gdlLegacy = model.isLegacy ? '1' : '0';
 		panel.className = nativeLayout
 			? `${outerModule.classes.AppGameInfoContainer || ''} ${outerModule.classes.Glassy || ''}`.trim()
 			: 'gdl-game-info-fallback';
@@ -194,55 +620,88 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 	}
 	const linkBar = doc.getElementById('gdl-link-bar');
 	if (linkBar?.parentElement && panel.nextElementSibling !== linkBar) linkBar.parentElement.insertBefore(panel, linkBar);
-	setNativeInfoExpanded(doc, model.key, expandedNativeGameInfoKeys.has(model.key));
+	setNativeInfoExpanded(doc, model.key, getPersistentInfoExpanded(), false);
 	return panel;
 }
 
 export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): void {
 	const playbarModule = PLAYBAR_CLASS_MODULE();
 	const classes = playbarModule.classes;
-	const containers = elementsWithCssModuleClass(doc, classes.AppButtonsContainer).filter(container => container.isConnected);
-	let inPage = containers.filter(container => hasCssModuleClass(closestWithCssModuleClass(container, classes.Container), classes.InPage));
-	if (inPage.length === 0) {
-		const visible = containers.find(container => isRenderedElement(doc, container));
-		inPage = visible ? [visible] : containers.slice(0, 1);
-	}
-	for (const container of inPage) {
-		let button = container.querySelector<HTMLElement>('[data-gdl-game-info-button="1"]');
-		if (!button) {
-			button = buildNativeInfoButtonBlueprint(doc) || doc.createElement('button');
-			const usesNativeBlueprint = button.dataset.gdlNativeBlueprint === '1';
-			button.dataset.gdlGameInfoButton = '1';
+	const syncButtons = (): void => {
+		const containers = elementsWithCssModuleClass(doc, classes.AppButtonsContainer).filter(container => container.isConnected);
+		const viewportHeight = Math.max(0, doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0);
+		const isViewportRendered = (container: HTMLElement): boolean => {
+			if (!isRenderedElement(doc, container)) return false;
+			const rect = container.getBoundingClientRect();
+			return rect.bottom > 0 && rect.top < viewportHeight && rect.right > 0;
+		};
+		const visibleContainers = containers.filter(isViewportRendered);
+		const inPageCandidates = containers.filter(container => hasCssModuleClass(closestWithCssModuleClass(container, classes.Container), classes.InPage));
+		const visibleInPage = inPageCandidates.filter(isViewportRendered);
+		// Steam often leaves the old InPage playbar mounted but hidden while it
+		// creates a visible sticky playbar during scroll. Never prefer a hidden
+		// InPage container over the currently rendered button cluster.
+		const targets = visibleInPage.length > 0
+			? visibleInPage
+			: (visibleContainers.length > 0 ? visibleContainers : inPageCandidates.length > 0 ? inPageCandidates : containers.slice(0, 1));
+		for (const container of targets) {
+			let button = container.querySelector<HTMLElement>('[data-gdl-game-info-button="1"]');
+			if (!button) {
+				button = buildNativeInfoButtonBlueprint(doc) || doc.createElement('button');
+				const usesNativeBlueprint = button.dataset.gdlNativeBlueprint === '1';
+				const capturedNativeIcon = usesNativeBlueprint
+					? button.querySelector<SVGElement>('.SVGIcon_Information, svg[class*="Information"]')
+					: null;
+				if (capturedNativeIcon) button.dataset.gdlNativeInformationSvg = capturedNativeIcon.outerHTML;
+				button.dataset.gdlGameInfoButton = '1';
+				button.dataset.gameKey = model.key;
+				button.hidden = false;
+				button.removeAttribute('disabled');
+				button.removeAttribute('aria-hidden');
+				button.style.removeProperty('display');
+				button.style.removeProperty('visibility');
+				button.style.removeProperty('opacity');
+				if (!button.className) button.className = playbarModule.native ? `${classes.MenuButton || ''}` : 'gdl-info-button-fallback';
+				// Preserve Steam's native button structure/classes for hover lighting,
+				// but never trust a captured SVG: sticky-playbar rebuilds may clone an
+				// unrelated icon into this slot.
+				if (!capturedNativeIcon) {
+					if (!usesNativeBlueprint) button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
+					normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
+				}
+				button.setAttribute('type', 'button');
+				button.setAttribute('aria-label', gdlText('show_game_details', 'Show game details'));
+				button.addEventListener('click', event => {
+					event.preventDefault();
+					event.stopPropagation();
+					if (button!.dataset.gdlScrollTopActive === '1') {
+						scrollMainContentToTop(doc);
+						return;
+					}
+					const key = button!.dataset.gameKey || '';
+					const nextState = !getPersistentInfoExpanded();
+					setNativeInfoExpanded(doc, key, nextState, true);
+				});
+				let favorite = elementsWithCssModuleClass(container, classes.FavoriteButton)[0] || null;
+				while (favorite && favorite.parentElement !== container) favorite = favorite.parentElement;
+				container.insertBefore(button, favorite);
+			} else if (button.dataset.gdlScrollTopActive !== '1' && !button.querySelector('.SVGIcon_Information')) {
+				normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
+			}
 			button.dataset.gameKey = model.key;
-			if (!button.className) button.className = playbarModule.native ? `${classes.MenuButton || ''}` : 'gdl-info-button-fallback';
-			// Preserve Steam's native button structure/classes for hover lighting,
-			// but never trust a captured SVG: controller-driven play-bar rebuilds can
-			// otherwise leak an unrelated arrow icon into this information action.
-			if (!usesNativeBlueprint) button.innerHTML = `<div class="${playbarModule.native ? (classes.DotDotDot || '') : ''}">${informationSvg()}</div>`;
-			normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
-			button.setAttribute('type', 'button');
-			button.setAttribute('aria-label', gdlText('show_game_details', 'Show game details'));
-			button.addEventListener('click', event => {
-				event.preventDefault();
-				event.stopPropagation();
-				const key = button!.dataset.gameKey || '';
-				setNativeInfoExpanded(doc, key, !expandedNativeGameInfoKeys.has(key));
-			});
-			let favorite = elementsWithCssModuleClass(container, classes.FavoriteButton)[0] || null;
-			while (favorite && favorite.parentElement !== container) favorite = favorite.parentElement;
-			container.insertBefore(button, favorite);
-		} else if (!button.querySelector('.SVGIcon_Information')) {
-			normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
 		}
-		button.dataset.gameKey = model.key;
-	}
-	setNativeInfoExpanded(doc, model.key, expandedNativeGameInfoKeys.has(model.key));
+	};
+
+	syncButtons();
+	installInfoButtonScrollBehavior(doc, playbarModule.native ? (classes.DotDotDot || '') : '', syncButtons);
+	setNativeInfoExpanded(doc, model.key, getPersistentInfoExpanded(), false);
 }
 
 export function removeNativeInfoButton(doc: Document): void {
+	infoScrollCleanups.get(doc)?.();
 	doc.querySelectorAll('[data-gdl-game-info-button="1"]').forEach(element => element.remove());
 }
 
 export function clearNativeInfoSessionState(): void {
-	expandedNativeGameInfoKeys.clear();
+	// Persistent user choice is preserved across session reloads and game transitions.
 }

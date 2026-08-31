@@ -16,11 +16,19 @@ export {
 	showAchievementToast,
 	isEveryLaunchAchievementReplayEnabled,
 	setEveryLaunchAchievementReplayEnabled,
+	setNextLaunchAchievementReplayEnabled,
+	resetLocalAchievementToastBaseline,
 	subscribeAchievementReplayPreferences,
 } from './notifications';
 export { startFirstLaunchAchievementWatcher, stopFirstLaunchAchievementWatcher } from './launch-watcher';
-export { renderLocalAchievementSidebarHtml, renderLocalAchievementSidebar, revealPendingAchievementSidebar } from './sidebar';
+export { renderLocalAchievementSidebarHtml, renderLocalAchievementSidebar, revealPendingAchievementSidebar, ensureLocalAchievementSidebarResponsiveGrid, achievementSidebarColumnsForWidth } from './sidebar';
 export { findVisibleTextElement, ensureLocalPlaybarStat } from './playbar';
 export { openLocalAchievementsModal } from './modal';
-export { getCachedLocalAchievements, hasCachedLocalAchievements, cacheLocalAchievements, clearLocalAchievementCache } from './cache';
+export {
+	getCachedLocalAchievements,
+	getCachedLocalAchievementsForGame,
+	hasCachedLocalAchievements,
+	cacheLocalAchievements,
+	clearLocalAchievementCache,
+} from './cache';
 export { installLocalAchievementUI, disposeLocalAchievementUI, refreshLocalAchievementUI, disposeAchievementRuntime } from './lifecycle';

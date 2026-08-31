@@ -7,7 +7,7 @@ local fs = deps.fs
 local util = deps.util
 local config = deps.config
 local lru = deps.lru_cache
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
+local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
 local M = {}
 local html_unescape = util.html_unescape
 -- A delisted/retired AppID still has a Steam library entry, but its News Hub
@@ -25,7 +25,7 @@ function M.fetch_news(steam_app_id, language)
         steam_app_id, lang = lang, steam_app_id
     end
     lang = lang:gsub("[^%w_]", "")
-    local url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v0002/?appid="
+    local url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid="
         .. steam_app_id
         .. "&count=50&maxlength=600&feeds=steam_community_announcements&format=json"
     if lang ~= "" then url = url .. "&l=" .. lang end
@@ -50,11 +50,31 @@ function M.fetch_news(steam_app_id, language)
     end
 
     local news = body and body.appnews and body.appnews.newsitems
-    if not news then
-        return cjson.encode({ items = {} })
+    if type(news) ~= "table" then
+        return cjson.encode({ items = {}, available = false, source = "steam_news_web_api" })
     end
 
-    return cjson.encode({ items = news })
+    -- Older/retired apps often classify their only historical entries as
+    -- steam_release (or another legacy feed). The filtered request therefore
+    -- returns an empty array even though ISteamNews still has real records.
+    -- Retry once without feeds before declaring the legacy news feed empty.
+    if #news == 0 then
+        local fallback_url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid="
+            .. steam_app_id .. "&count=50&maxlength=600&format=json"
+        if lang ~= "" then fallback_url = fallback_url .. "&l=" .. lang end
+        local fallback_ok_http, fallback_res = pcall(http.get, fallback_url, {
+            headers = { ["Accept"] = "application/json" },
+            timeout = 15
+        })
+        if fallback_ok_http and fallback_res and fallback_res.status == 200 then
+            local fallback_ok, fallback_body = pcall(cjson.decode, fallback_res.body)
+            local fallback_news = fallback_ok and fallback_body and fallback_body.appnews
+                and fallback_body.appnews.newsitems
+            if type(fallback_news) == "table" and #fallback_news > 0 then news = fallback_news end
+        end
+    end
+
+    return cjson.encode({ items = news, available = #news > 0, source = "steam_news_web_api" })
 end
 
 -- ── Partner events (the native news source: cover images, event types,
@@ -74,7 +94,7 @@ local function scrape_partner_events(appid, lang, max)
 
     if partner_events_unavailable[appid] then
         lru.touch(partner_events_unavailable[appid])
-        return {}, true
+        return {}, true, false
     end
 
     local function mark_unavailable()
@@ -93,28 +113,25 @@ local function scrape_partner_events(appid, lang, max)
         -- Do not turn it into a warning that looks like a plugin failure.
         if res and (res.status == 404 or res.status == 410) then
             mark_unavailable()
-            return {}, true
+            return {}, true, false
         end
-        return {}, false
+        return {}, false, true
     end
 
     local marker = 'data-initialEvents="'
-    local a = res.body:find(marker, 1, true)
+    local a = res.body:find(marker, 1, true) or res.body:find('data-initialevents="', 1, true)
     if not a then
-        mark_unavailable()
-        return {}, true
+        return {}, false, true
     end
     local vstart = a + #marker
     local vend = res.body:find('"', vstart, true)
     if not vend then
-        mark_unavailable()
-        return {}, true
+        return {}, false, true
     end
 
     local ok2, body = pcall(cjson.decode, html_unescape(res.body:sub(vstart, vend - 1)))
     if not ok2 or type(body) ~= "table" or type(body.events) ~= "table" then
-        mark_unavailable()
-        return {}, true
+        return {}, false, true
     end
 
     local items = {}
@@ -161,7 +178,7 @@ local function scrape_partner_events(appid, lang, max)
         end
     end
 
-    return items, false
+    return items, false, false
 end
 
 function M.fetch_partner_events(steam_app_id, language)
@@ -174,8 +191,14 @@ function M.fetch_partner_events(steam_app_id, language)
     end
     lang = lang:gsub("[^%w_]", "")
     if lang == "" then lang = "english" end
-    local items, unavailable = scrape_partner_events(appid, lang, 50)
-    return cjson.encode({ items = items, unavailable = unavailable == true })
+    local items, unavailable, transient_error = scrape_partner_events(appid, lang, 50)
+    return cjson.encode({
+        items = items,
+        available = #items > 0,
+        unavailable = unavailable == true,
+		transient_error = transient_error == true,
+        source = "steam_store_partner_events",
+    })
 end
 
 return M

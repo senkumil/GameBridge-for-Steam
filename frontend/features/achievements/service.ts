@@ -18,6 +18,8 @@ export interface LocalAchievementUpdate {
 }
 
 interface AchievementRequestCacheEntry {
+	steamAppId: string;
+	stateAppId: string;
 	updatedAt: number;
 	value: LocalAchievementData | null;
 	inFlight: Promise<LocalAchievementData | null> | null;
@@ -59,6 +61,20 @@ export function clearLocalAchievementRequestCache(): void {
 	requestCache.clear();
 }
 
+/** Invalidate only requests whose linked identity changed. Entry ownership is
+ * checked again on completion, so deleted in-flight requests cannot publish. */
+export function invalidateLocalAchievementRequests(
+	steamAppIds: Iterable<string | number>,
+	stateAppIds: Iterable<string | number> = [],
+): void {
+	const steamIds = new Set(Array.from(steamAppIds, value => String(value)).filter(Boolean));
+	const stateIds = new Set(Array.from(stateAppIds, value => String(value)).filter(Boolean));
+	if (steamIds.size === 0 && stateIds.size === 0) return;
+	for (const [key, entry] of requestCache) {
+		if (steamIds.has(entry.steamAppId) || stateIds.has(entry.stateAppId)) requestCache.delete(key);
+	}
+}
+
 export function localAchievementRequestJson(
 	steamAppId: string | number,
 	options: LocalAchievementRequestOptions = {},
@@ -66,7 +82,7 @@ export function localAchievementRequestJson(
 	const preferences = getPreferences();
 	return JSON.stringify({
 		steam_app_id: String(steamAppId),
-		language: steamLanguageSync() || 'spanish',
+		language: steamLanguageSync() || 'english',
 		state_app_id: options.stateAppId == null ? '' : String(options.stateAppId),
 		// Never enable the test fallback implicitly. It is enabled only when the
 		// user has enabled both developer mode and simulated progress; callers may
@@ -85,15 +101,16 @@ export async function fetchLocalAchievementData(
 	const requestJson = localAchievementRequestJson(steamAppId, options);
 	const now = Date.now();
 	const maxAgeMs = Math.max(0, options.maxAgeMs ?? DEFAULT_MAX_AGE_MS);
+	const normalizedSteamAppId = String(steamAppId);
+	const stateAppId = options.stateAppId == null ? '' : String(options.stateAppId);
 	let entry = requestCache.get(requestJson);
 	if (entry?.inFlight) return entry.inFlight;
 	if (entry && now - entry.updatedAt <= maxAgeMs) return entry.value;
 	if (!entry) {
-		entry = { updatedAt: 0, value: null, inFlight: null };
+		entry = { steamAppId: normalizedSteamAppId, stateAppId, updatedAt: 0, value: null, inFlight: null };
 		requestCache.set(requestJson, entry);
 	}
 	const generation = requestGeneration;
-	const stateAppId = options.stateAppId == null ? '' : String(options.stateAppId);
 	entry.inFlight = (async (): Promise<LocalAchievementData | null> => {
 		let value: LocalAchievementData | null = null;
 		try {
@@ -101,16 +118,15 @@ export async function fetchLocalAchievementData(
 			const parsed = JSON.parse(raw) as LocalAchievementData;
 			value = parsed && typeof parsed === 'object' ? parsed : null;
 		} catch {}
-		// A cache clear means a path or achievement policy changed while this IPC
-		// was running. Return to the original caller so it can settle, but never
-		// repopulate the cache or repaint Steam with that obsolete response.
-		if (generation === requestGeneration && requestCache.get(requestJson) === entry) {
-			entry!.value = value;
-			entry!.updatedAt = Date.now();
-			entry!.inFlight = null;
-			publishAchievementUpdate({ steamAppId: String(steamAppId), stateAppId, data: value });
-			trimRequestCache();
-		}
+		// A cache clear means a path, AppID or achievement policy changed while
+		// this IPC was running. Its original caller must not repaint with that
+		// obsolete response either.
+		if (generation !== requestGeneration || requestCache.get(requestJson) !== entry) return null;
+		entry!.value = value;
+		entry!.updatedAt = Date.now();
+		entry!.inFlight = null;
+		publishAchievementUpdate({ steamAppId: normalizedSteamAppId, stateAppId, data: value });
+		trimRequestCache();
 		return value;
 	})();
 	return entry.inFlight;

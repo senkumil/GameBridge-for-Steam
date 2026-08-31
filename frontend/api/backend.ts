@@ -23,10 +23,15 @@ export const fetchLibraryAssetsBackend = callable<[{ request_json: string }], st
 
 export const fetchCommunityArtworkBackend = callable<[{ request_json: string }], string>('fetch_community_artwork');
 
+export const fetchCommunityArtworkCandidatesBackend = callable<[{ request_json: string }], string>('fetch_community_artwork_candidates');
+
+export const validateSteamGridDbApiKeyBackend = callable<[{ request_json: string }], string>('validate_steamgriddb_api_key');
+
 export const saveShortcutIconBackend = callable<[{ request_json: string }], string>('save_shortcut_icon');
 
 export const clearArtworkBackend  = callable<[{ shortcut_app_id: string }], string>('clear_artwork');
 export const clearArtworkExceptIconBackend = callable<[{ shortcut_app_id: string }], string>('clear_artwork_except_icon');
+export const clearAllLinkedArtworksBackend = callable<[], string>('clear_all_linked_artworks');
 
 export const detectGameCandidatesBackend = callable<[{ request_json: string }], string>('detect_game_candidates');
 
@@ -45,6 +50,8 @@ export const getGameAchievementOptionsBackend = callable<[{ request_json: string
 export const setGameAchievementOptionsBackend = callable<[{ request_json: string }], string>('set_game_achievement_options');
 
 export const getGameAchievementCapabilitiesBackend = callable<[{ request_json: string }], string>('get_game_achievement_capabilities');
+
+export const exportAchievementsJsonBackend = callable<[{ request_json: string }], string>('export_achievements_json');
 
 const recentBackendLogs = new Map<string, number>();
 const BACKEND_LOG_DEDUP_MS = 5000;
@@ -142,3 +149,19 @@ export const getPlaytimeDataBackend = callable<[{ request_json: string }], strin
 export const getAllPlaytimeDataBackend = callable<[{ request_json: string }], string>('get_all_playtime_data');
 
 export const setPlaytimeDataBackend = callable<[{ request_json: string }], string>('set_playtime_data');
+
+export const fetchSteamAccountAchievementsBackend = callable<[{ steam_app_id: string }], string>('fetch_steam_account_achievements');
+
+export const syncSteamAccountAchievementsBackend = callable<[{ request_json: string }], string>('sync_steam_account_achievements');
+
+export const startSteamCardFarmingBackend = callable<[{ request_json: string }], string>('start_steam_card_farming');
+
+export const stopSteamCardFarmingBackend = callable<[], string>('stop_steam_card_farming');
+
+export const getSteamCardFarmingStatusBackend = callable<[], string>('get_steam_card_farming_status');
+
+export const neutralizeSteamAppIdFileBackend = callable<[{ request_json: string }], string>('neutralize_steam_appid_file');
+
+export const restoreSteamAppIdFileBackend = callable<[{ request_json: string }], string>('restore_steam_appid_file');
+
+export const suppressAdminPromptBackend = callable<[{ exe_path: string }], boolean>('suppress_admin_prompt');

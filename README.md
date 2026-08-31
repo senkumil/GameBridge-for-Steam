@@ -1,14 +1,14 @@
-# GameBridge for Steam
+# NativeGameLink for Steam
 
 **English** · [Español](README_ES.md)
 
 **Bring the complete Steam Library experience to your non-Steam games.**
 
-GameBridge for Steam is a [Millennium](https://steambrew.app/) plugin that links a non-Steam shortcut to its real Steam AppID and rebuilds its Library page with official metadata, artwork, activity, achievements, community content, playtime, and native-style controls.
+NativeGameLink for Steam is a [Millennium](https://steambrew.app/) plugin that links a non-Steam shortcut to its real Steam AppID and rebuilds its Library page with official metadata, artwork, activity, achievements, community content, playtime, and native-style controls.
 
 Once linked, an external game no longer feels like an empty shortcut: it receives the identity and presentation of its Steam release while continuing to launch the executable you originally added.
 
-> GameBridge changes the local presentation of linked shortcuts. It does not grant Steam ownership, licenses, inventory items, Steam Cloud storage, or official profile achievements.
+> NativeGameLink changes the local presentation of linked shortcuts. It does not grant Steam ownership, licenses, inventory items, Steam Cloud storage, or official profile achievements.
 
 ---
 
@@ -28,7 +28,7 @@ Once linked, an external game no longer feels like an empty shortcut: it receive
 
 ## 🎮 A Native-Style Steam Library Experience
 
-GameBridge reconstructs the useful surfaces normally missing from a non-Steam shortcut:
+NativeGameLink reconstructs the useful surfaces normally missing from a non-Steam shortcut:
 
 - **Steam-style play bar** with Play, Cloud status presentation, last session, total playtime, achievement progress, game information, controller, and favorite controls.
 - **Official navigation links** for the Store page, DLC, Community Hub, Points Shop, Discussions, Guides, Workshop, and Support when available.
@@ -72,7 +72,7 @@ These captures show the visual difference between an unlinked shortcut and a lin
 
 ## 🔍 Smart Automatic Detection and Linking
 
-When a newly added non-Steam shortcut is opened, GameBridge can suggest the most likely Steam release automatically.
+When a newly added non-Steam shortcut is opened, NativeGameLink can suggest the most likely Steam release automatically.
 
 The detector evaluates multiple signals instead of trusting the shortcut name alone:
 
@@ -86,7 +86,7 @@ The detector evaluates multiple signals instead of trusting the shortcut name al
 
 The confirmation window displays candidate names, Steam AppIDs, confidence values, and covers before anything is changed. You can select another candidate, reject the suggestion, or enter an AppID manually from the shortcut's **Properties** window.
 
-After confirmation, GameBridge:
+After confirmation, NativeGameLink:
 
 1. Saves a stable mapping for the shortcut.
 2. Renames it to the official Steam title.
@@ -99,7 +99,7 @@ After confirmation, GameBridge:
 
 ## 🖼️ Automatic Artwork and Correct Native Placement
 
-GameBridge prioritizes resources published by Steam and applies them using Steam's expected Library slots and proportions:
+NativeGameLink prioritizes resources published by Steam and applies them using Steam's expected Library slots and proportions:
 
 - **Portrait grid** (`600 × 900`) for collections and shelves.
 - **Hero background** (`1920 × 620`) for the Library details header.
@@ -111,15 +111,15 @@ The artwork process reports whether every resource was applied successfully and 
 
 ### SteamGridDB fallback
 
-If Steam does not publish a particular portrait, hero, logo, or capsule, GameBridge can request only that missing resource from [SteamGridDB](https://www.steamgriddb.com/). Selection prefers the correct Steam AppID, asset type, dimensions, transparency, language, and appropriate visual style while rejecting unsafe provider domains.
+If Steam does not publish a particular portrait, hero, logo, or capsule, NativeGameLink can request only that missing resource from [SteamGridDB](https://www.steamgriddb.com/). Selection prefers the correct Steam AppID, asset type, dimensions, transparency, language, and appropriate visual style while rejecting unsafe provider domains.
 
-Enter your own SteamGridDB API key in GameBridge settings and enable the automatic fallback. The key is stored only in the local Steam/Millennium browser context; it is not bundled with the plugin or sent to GameBridge servers. Other injected code sharing that browser context may be able to access local storage, so never publish a shared key.
+Enter your own SteamGridDB API key in NativeGameLink settings and enable the automatic fallback. The key is stored only in the local Steam/Millennium browser context; it is not bundled with the plugin or sent to NativeGameLink servers. Other injected code sharing that browser context may be able to access local storage, so never publish a shared key.
 
 ---
 
 ## 🖥️ Big Picture Integration
 
-For linked shortcuts, GameBridge adapts the local Big Picture data model so the games are presented like regular Steam Library entries:
+For linked shortcuts, NativeGameLink adapts the local Big Picture data model so the games are presented like regular Steam Library entries:
 
 - Linked games are no longer separated into a **Non-Steam**, **Outside Steam**, or equivalent localized category.
 - The redundant non-Steam category is hidden when it becomes empty.
@@ -132,7 +132,7 @@ This is a local UI integration. It does not convert the shortcut into an owned S
 
 ## 🏆 Local Achievements and Unlock Notifications
 
-GameBridge combines Steam's achievement metadata and icons with a local `achievements.json` progress file. When the file changes while you play, the plugin can update the Library page and display Steam-style unlock notifications with sound.
+NativeGameLink combines Steam's achievement metadata and icons with a local `achievements.json` progress file. When the file changes while you play, the plugin can update the Library page and display Steam-style unlock notifications with sound.
 
 Available achievement features include:
 
@@ -146,7 +146,7 @@ Available achievement features include:
 
 ### Configure an achievement file
 
-GameBridge reads achievement files without modifying them. The default GSE Saves layout is:
+NativeGameLink reads achievement files without modifying them. The default GSE Saves layout is:
 
 ```text
 %APPDATA%\GSE Saves\<AppID>\achievements.json
@@ -154,33 +154,33 @@ GameBridge reads achievement files without modifying them. The default GSE Saves
 
 You can configure the source in either of these ways:
 
-1. **Global folder:** Open GameBridge settings and select a base folder containing one subfolder per Steam AppID.
+1. **Global folder:** Open NativeGameLink settings and select a base folder containing one subfolder per Steam AppID.
 2. **Per-game override:** Right-click the shortcut → **Properties** → **Linked Game** and select an exact `achievements.json` file or a folder containing it.
 3. **Automatic AppID lookup:** Leave the per-game path on automatic to search GSE Saves, supported Goldberg locations, and configured global folders for the linked AppID.
 
 ### Using SteamAutoCrack / Goldberg
 
-Games that do not natively create a compatible local progress file need an external emulator or achievement generator. GameBridge includes guidance for [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases), which can configure Goldberg Emulator and generate the AppID folders and `achievements.json` file as achievements are earned.
+Games that do not natively create a compatible local progress file need an external emulator or achievement generator. NativeGameLink includes guidance for [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases), which can configure Goldberg Emulator and generate the AppID folders and `achievements.json` file as achievements are earned.
 
 Typical setup:
 
 1. Configure the game with SteamAutoCrack/Goldberg according to that project's documentation.
 2. Make sure it generates `achievements.json` under a folder associated with the correct Steam AppID.
-3. Point GameBridge's global achievement folder or per-game override to that location.
+3. Point NativeGameLink's global achievement folder or per-game override to that location.
 4. Launch the game through the linked Steam shortcut.
-5. Use **Test achievement notification** in GameBridge settings to verify the toast and sound independently.
+5. Use **Test achievement notification** in NativeGameLink settings to verify the toast and sound independently.
 
-SteamAutoCrack and Goldberg Emulator are external projects and are not bundled with or maintained by GameBridge. Use them only with software you are legally permitted to configure. Local unlocks are for the GameBridge interface and do not unlock official Steam profile achievements.
+SteamAutoCrack and Goldberg Emulator are external projects and are not bundled with or maintained by NativeGameLink. Use them only with software you are legally permitted to configure. Local unlocks are for the NativeGameLink interface and do not unlock official Steam profile achievements.
 
 ---
 
 ## ⏱️ Playtime and Session Tracking
 
-### Steam Beta or the GameBridge fallback?
+### Steam Beta or the NativeGameLink fallback?
 
 Steam Beta builds that include native non-Steam playtime tracking are recommended if you want Steam itself to measure and display the shortcut's local playtime. You can opt in from **Steam → Settings → Interface → Client Beta Participation → Steam Beta Update**.
 
-GameBridge checks whether the current Steam client already exposes native playtime for each linked shortcut. When it does, the plugin uses Steam's value and does not create a duplicate counter. When it does not, GameBridge automatically activates its own local fallback tracker. The fallback is enabled by default and can be disabled in GameBridge settings.
+NativeGameLink checks whether the current Steam client already exposes native playtime for each linked shortcut. When it does, the plugin uses Steam's value and does not create a duplicate counter. When it does not, NativeGameLink automatically activates its own local fallback tracker. The fallback is enabled by default and can be disabled in NativeGameLink settings.
 
 The fallback can:
 
@@ -194,18 +194,18 @@ The fallback can:
 
 > [!IMPORTANT]
 > **Point directly to the original game executable:**
-> For playtime tracking and session detection to function accurately (both via Steam's native tracker and through the GameBridge fallback), the Steam shortcut must target the **original, main game executable**—the `.exe` binary that stays open and actively running throughout your entire play session.
+> For playtime tracking and session detection to function accurately (both via Steam's native tracker and through the NativeGameLink fallback), the Steam shortcut must target the **original, main game executable**—the `.exe` binary that stays open and actively running throughout your entire play session.
 > 
 > **Why doesn't it work with launchers or intermediary executables?**
 > If you add an external launcher, bootstrap tool, script, or intermediary wrapper `.exe` that merely boots up the actual game and then immediately exits, Steam and the process monitor will assume the session finished in a few seconds, prematurely stopping the timer and leaving playtime unrecorded.
 > 
-> If a game uses a separate launcher, locate the actual long-running game executable inside the installation directory (for example, Unreal Engine titles typically place it under `Binaries/Win64/...-Shipping.exe`) and set it as the shortcut target in Steam. During the linking workflow, GameBridge will also attempt to identify and suggest this real executable automatically.
+> If a game uses a separate launcher, locate the actual long-running game executable inside the installation directory (for example, Unreal Engine titles typically place it under `Binaries/Win64/...-Shipping.exe`) and set it as the shortcut target in Steam. During the linking workflow, NativeGameLink will also attempt to identify and suggest this real executable automatically.
 
 ---
 
 ## 🎴 Trading Cards, Badges, DLC, and Workshop
 
-When the Steam release exposes the corresponding data, GameBridge adds optional native-style sidebar sections:
+When the Steam release exposes the corresponding data, NativeGameLink adds optional native-style sidebar sections:
 
 - Official trading-card artwork sourced from Steam Community and the Community Market.
 - Badge artwork, experience presentation, collected/remaining counts, and a responsive card grid.
@@ -213,30 +213,30 @@ When the Steam release exposes the corresponding data, GameBridge adds optional 
 - Validated DLC covers and Store links.
 - Workshop preview and navigation when the title supports Steam Workshop.
 
-These sections recreate the Library presentation only. GameBridge does not award cards, badges, XP, DLC ownership, or Steam inventory items.
+These sections recreate the Library presentation only. NativeGameLink does not award cards, badges, XP, DLC ownership, or Steam inventory items.
 
 ---
 
 ## 🌐 Multilingual Interface
 
-GameBridge automatically detects the active Steam client language and localizes the injected interface to match it. Library headings, navigation links, achievements, activity labels, community sections, game information, tooltips, and native controls reuse Steam's official localization tokens whenever they are available.
+NativeGameLink automatically detects the active Steam client language and localizes the injected interface to match it. Library headings, navigation links, achievements, activity labels, community sections, game information, tooltips, and native controls reuse Steam's official localization tokens whenever they are available.
 
-Plugin-specific windows, detection messages, settings, and linking results use GameBridge's localization catalog. Spanish is included directly, while English provides the safe fallback for text that Steam does not translate. Changing the Steam client language refreshes the localized data and interface without requiring a separate plugin edition.
+Plugin-specific windows, detection messages, settings, and linking results use NativeGameLink's localization catalog. Spanish is included directly, while English provides the safe fallback for text that Steam does not translate. Changing the Steam client language refreshes the localized data and interface without requiring a separate plugin edition.
 
 ---
 
 ## 📥 Installation
 
 1. Install [Millennium](https://steambrew.app/) for Steam.
-2. Download the latest GameBridge for Steam release.
+2. Download the latest NativeGameLink for Steam release.
 3. Place the plugin folder in:
 
    ```text
-   <Steam>\millennium\plugins\GameBridge for Steam
+   <Steam>\millennium\plugins\NativeGameLinkForSteam
    ```
 
 4. Restart Steam.
-5. Enable **GameBridge for Steam** in Millennium's Plugins page.
+5. Enable **NativeGameLink for Steam** in Millennium's Plugins page.
 
 ---
 
@@ -280,12 +280,10 @@ Backend changes under `backend/` take effect after restarting Steam.
 
 ## ☕ Support the Project
 
-If GameBridge for Steam has improved your library, you can support its continued development, testing, localization, and maintenance on [Ko-fi](https://ko-fi.com/senkumil). Every contribution is appreciated and helps keep the project moving forward.
+If NativeGameLink for Steam has improved your library, you can support its continued development, testing, localization, and maintenance on [Ko-fi](https://ko-fi.com/senkumil). Every contribution is appreciated and helps keep the project moving forward.
 
 ---
 
 ## 📄 License
 
 MIT License — see [LICENSE](LICENSE) for details.
-
-

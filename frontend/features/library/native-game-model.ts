@@ -2,6 +2,8 @@ import type { NativeGameFeature, NativeGameFeatureKind, NativeGameInfo, SteamGam
 import type { SteamLibraryAssets } from './artwork';
 import { gdlText, loc, steamIntlLocale } from '../../steam/localization';
 import { stripTags } from './news';
+import { isLegacyGame, legacyGameRecord } from './legacy-games';
+import { steamStringList } from '../../core/steam-game-data';
 
 function nativeFeature(key: string, kind: NativeGameFeatureKind, label: string, categoryId?: number): NativeGameFeature {
 	return { key, kind, label, categoryId };
@@ -25,10 +27,12 @@ function mapNativeFeature(categoryId?: number): NativeGameFeature | null {
 	}
 }
 
-function uniqueNativeFeatures(values: NativeGameFeature[]): NativeGameFeature[] {
+function uniqueNativeFeatures(values: NativeGameFeature[], legacy = false): NativeGameFeature[] {
 	const seen = new Set<string>();
 	return values.filter(feature => {
-		const key = feature.key || feature.kind;
+		// Only legacy records merge several metadata sources for one capability.
+		// Preserve the established key-based behavior for every other linked game.
+		const key = legacy ? (feature.kind || feature.key) : (feature.key || feature.kind);
 		if (!key || seen.has(key)) return false;
 		seen.add(key);
 		return Boolean(feature.label);
@@ -50,10 +54,20 @@ function formatNativeRelease(value: string): string {
 }
 
 export function steamNativeGameInfo(data: SteamGameData, steamAppId: string, modern?: SteamLibraryAssets | null): NativeGameInfo {
-	const features = (data.categories || [])
-		.map(category => mapNativeFeature(category.id))
+	const legacy = legacyGameRecord(steamAppId, data);
+	const isLegacy = isLegacyGame(steamAppId, data);
+	const categoryIds = [
+		...(Array.isArray(data.categories) ? data.categories : []).map(category => Number(category.id)),
+		...(isLegacy ? steamStringList(modern?.category_ids).map(Number) : []),
+	];
+	const features = categoryIds
+		.map(categoryId => mapNativeFeature(categoryId))
 		.filter((feature): feature is NativeGameFeature => Boolean(feature));
-	const hasCloud = (data.categories || []).some(category => Number(category.id) === 23);
+	for (const feature of legacy?.features || []) {
+		const mapped = mapNativeFeature(feature.categoryId);
+		if (mapped) features.push({ ...mapped, key: feature.key, kind: feature.kind });
+	}
+	const hasCloud = categoryIds.some(categoryId => categoryId === 23);
 	if ((data.achievements?.total || 0) > 0 && !features.some(feature => feature.kind === 'achievements')) {
 		features.push(nativeFeature('derived:achievements', 'achievements', loc('AppDetails_Feature_SteamAchievements', gdlText('achievements_label', 'Achievements'))));
 	}
@@ -65,16 +79,30 @@ export function steamNativeGameInfo(data: SteamGameData, steamAppId: string, mod
 	} else if (data.controller_support === 'partial' && !features.some(feature => feature.kind === 'controller-partial')) {
 		features.push(nativeFeature('derived:controller-partial', 'controller-partial', loc('AppDetails_Feature_PartialController', gdlText('partial_controller', 'Partial controller support'))));
 	}
+	const developer = steamStringList(data.developers).join(', ') || legacy?.developer
+		|| (data.is_delisted === true ? steamStringList(modern?.developers).join(', ') : '') || '';
+	const publisher = steamStringList(data.publishers).join(', ') || legacy?.publisher
+		|| (data.is_delisted === true ? steamStringList(modern?.publishers).join(', ') : '') || '';
+	const genre = legacy?.genre() || (Array.isArray(data.genres) ? data.genres : []).map(item => item.description).filter(Boolean).join(', ');
+	const sourceDescription = data.short_description || data.about_the_game || data.detailed_description || '';
+	const description = legacy?.description?.()
+		|| stripTags(sourceDescription).replace(/\s+/g, ' ').trim()
+		|| (developer && genre ? gdlText('legacy_description_developer_genre', '{name} is a {genre} title developed by {developer}.', { name: data.name, genre, developer }) : '')
+		|| (developer ? gdlText('legacy_description_developer', '{name} was developed by {developer}.', { name: data.name, developer }) : '');
 	return {
 		key: steamAppId,
+		isLegacy,
 		title: data.name || '',
-		portrait: modern?.portrait || data.capsule_imagev5 || data.capsule_image || data.header_image || '',
-		description: stripTags(data.short_description || data.about_the_game || data.detailed_description || '').replace(/\s+/g, ' '),
-		developer: (data.developers || []).join(', '),
-		publisher: (data.publishers || []).join(', '),
-		franchise: modern?.franchise || (data.franchises || []).join(', ') || '',
-		release: formatNativeRelease(data.release_date?.date || ''),
-		features: uniqueNativeFeatures(features),
+		// Store capsules and headers are horizontal; using either as box art
+		// stretches them in the information panel. Only accept a real 2:3 asset.
+		portrait: modern?.portrait || '',
+		description,
+		developer,
+		publisher,
+		franchise: steamStringList(modern?.franchise).join(', ') || steamStringList(data.franchises).join(', ') || legacy?.franchise || '',
+		release: formatNativeRelease(data.release_date?.date || legacy?.steamRelease
+			|| (data.is_delisted === true ? modern?.release_date : '') || ''),
+		features: uniqueNativeFeatures(features, isLegacy),
 		hasCloud,
 	};
 }

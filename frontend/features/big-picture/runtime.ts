@@ -3,10 +3,21 @@ import { normalizeTitle } from '../../core/text';
 import { loc, officialSteamText, steamIntlLocale } from '../../steam/localization';
 import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes } from '../../steam/shortcuts';
 import { fetchPlaytimeStatsBatch } from '../playtime/service';
+import { disposeBigPictureAchievementCards, refreshBigPictureAchievementCards } from './achievement-cards';
+import { disposeBigPictureShortcutDetails, refreshBigPictureShortcutDetails } from './details';
 
 
 function normalizedDomText(value: unknown): string {
 	return String(value ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+function isBigPictureGameDetailSurface(doc: Document): boolean {
+	if (doc.getElementById('gdl-bp-detail-root') || doc.getElementById('gdl-bp-detail-shell')) return true;
+	for (const element of Array.from(doc.querySelectorAll<HTMLElement>('[class*="AppDetails"], [class*="GameDetails"]'))) {
+		const rect = element.getBoundingClientRect();
+		if (element.isConnected && rect.width >= 320 && rect.height >= 120) return true;
+	}
+	return false;
 }
 
 let gdlBigPictureActive = false;
@@ -67,6 +78,12 @@ function applyShortcutPlaytimeToOverview(shortcutAppId: number, minutesForever: 
 type MappedShortcut = { id: number; title: string; steamAppId: string };
 
 function findMappedTitleInScope(scope: Element, shortcuts: MappedShortcut[]): MappedShortcut | null {
+	// If the card scope belongs to an official native Steam game (< 2147483648), do not patch
+	for (const element of Array.from(scope.querySelectorAll('[data-appid],[data-app-id],[data-app-id-value],a[href*="/app/"]'))) {
+		const raw = element.getAttribute('data-appid') || element.getAttribute('data-app-id') || element.getAttribute('data-app-id-value') || element.getAttribute('href')?.match(/\/app\/(\d+)/)?.[1];
+		const num = Number(raw);
+		if (Number.isFinite(num) && num > 0 && num < 2147483648) return null;
+	}
 	const candidates = Array.from(scope.querySelectorAll('*')) as HTMLElement[];
 	for (const element of candidates) {
 		const text = element.childElementCount === 0 ? (element.textContent || '').replace(/\s+/g, ' ').trim() : '';
@@ -83,7 +100,7 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 	if (shortcuts.length === 0) return;
 
 	// SteamClient.GetPlaytime commonly returns no data for non-Steam shortcuts.
-	// Merge it with GameBridge's canonical session store instead of treating that
+	// Merge it with NativeGameLink's canonical session store instead of treating that
 	// empty native response as authoritative. Both lifetime and two-week values
 	// feed the native recently-played card.
 	const resolved = new Map<number, { forever: number; recent: number }>();
@@ -114,7 +131,7 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 		resolved.set(shortcut.id, { forever, recent });
 		if (applyShortcutPlaytimeToOverview(shortcut.id, forever, recent)) overviewChanged = true;
 	}));
-	if (overviewChanged) {
+	if (overviewChanged && !isBigPictureGameDetailSurface(doc)) {
 		try { (window as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
 	}
 
@@ -386,7 +403,7 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 	// after the overview mutation because Steam may have rebuilt the tab strip.
 	hideBigPictureShortcutTab(_doc);
 
-	if (changed) {
+	if (changed && !isBigPictureGameDetailSurface(_doc)) {
 		try { (window as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
 	}
 }
@@ -430,6 +447,8 @@ export function activateBigPicture(doc: Document): void {
 }
 
 export function deactivateBigPicture(): void {
+	disposeBigPictureShortcutDetails(gdlBigPictureDoc);
+	disposeBigPictureAchievementCards(gdlBigPictureDoc);
 	gdlBigPictureActive = false;
 	gdlBigPictureDoc = null;
 	restoreBigPictureShortcutState();
@@ -446,6 +465,15 @@ export function isBigPictureActive(): boolean {
 export async function refreshBigPicture(doc: Document | null = gdlBigPictureDoc): Promise<void> {
 	if (!doc) return;
 	activateBigPicture(doc);
+	// Establish/retire the route-owned native tabpanel content before unrelated
+	// batch work. Playtime covers the whole shelf and must never hold the selected
+	// game's first render (or leave the previous game's content visible) hostage.
+	const detailRefresh = refreshBigPictureShortcutDetails(doc);
 	mergeShortcutsIntoBigPictureLibrary(doc);
-	await patchBigPictureHomePlaytime(doc);
+	if (!isBigPictureGameDetailSurface(doc)) {
+		refreshBigPictureAchievementCards(doc);
+		void patchBigPictureHomePlaytime(doc)
+			.catch(error => backendLog('Big Picture playtime refresh failed: ' + error));
+	}
+	await detailRefresh;
 }

@@ -2,16 +2,23 @@ import { injectAchievementStyle } from './inject';
 
 export function ensureAchievementModalStyles(doc: Document): void {
 	injectAchievementStyle(doc, 'gdl-achievement-modal-style', `
-		/* Modal styles matching native Steam dialog */
+		/* Right-side achievements sheet matching native Steam behavior more closely */
 		#gdl-local-achievement-modal {
 			position: fixed;
-			inset: 0;
+			inset: auto;
+			left: 0;
+			top: 0;
+			width: 0;
+			height: 0;
 			z-index: 2147483600;
-			background: rgba(0, 0, 0, 0.72);
-			backdrop-filter: blur(4px);
+			background: rgba(7, 11, 18, 0.34);
+			backdrop-filter: blur(8px);
 			display: flex;
-			align-items: center;
+			align-items: flex-start;
 			justify-content: center;
+			padding: 46px 34px 0;
+			box-sizing: border-box;
+			overflow: visible;
 			font-family: "Motiva Sans", Arial, Helvetica, sans-serif;
 			color: #d6d7d8;
 			animation: gdl-lam-fadein 0.15s ease-out;
@@ -21,27 +28,84 @@ export function ensureAchievementModalStyles(doc: Document): void {
 			to { opacity: 1; }
 		}
 		@keyframes gdl-lam-popin {
-			from { transform: scale(0.96); opacity: 0; }
-			to { transform: scale(1); opacity: 1; }
+			from { transform: translateX(18px); opacity: 0; }
+			to { transform: translateX(0); opacity: 1; }
+		}
+		@keyframes gdl-lam-rare-pulse {
+			0% { opacity: .20; transform: scale(.80); filter: blur(2px); }
+			15% { opacity: .94; transform: scale(1.15); filter: blur(6.8px); }
+			31% { opacity: .40; transform: scale(.90); filter: blur(3.2px); }
+			49% { opacity: 1; transform: scale(1.27); filter: blur(9.4px); }
+			66% { opacity: .48; transform: scale(.94); filter: blur(3.8px); }
+			83% { opacity: 1; transform: scale(1.17); filter: blur(7.2px); }
+			100% { opacity: .20; transform: scale(.80); filter: blur(2px); }
+		}		@keyframes gdl-lam-rare-rays-a {
+			0%, 100% { opacity: .18; filter: blur(2.8px); }
+			23% { opacity: .62; filter: blur(2px); }
+			48% { opacity: .28; filter: blur(3px); }
+			74% { opacity: .52; filter: blur(2.2px); }
+		}
+		@keyframes gdl-lam-rare-rays-b {
+			0%, 100% { opacity: .48; filter: blur(2.2px); }
+			29% { opacity: .16; filter: blur(3.2px); }
+			58% { opacity: .57; filter: blur(1.9px); }
+			83% { opacity: .24; filter: blur(2.9px); }
+		}
+		@keyframes gdl-lam-rays-a {
+			0%, 100% { opacity: .12; transform: scale(.96); filter: blur(3.1px); }
+			28% { opacity: .44; transform: scale(1.015); filter: blur(2.3px); }
+			57% { opacity: .22; transform: scale(.985); filter: blur(3px); }
+			78% { opacity: .38; transform: scale(1.025); filter: blur(2.5px); }
+		}
+		@keyframes gdl-lam-rays-b {
+			0%, 100% { opacity: .30; transform: scale(1.015); filter: blur(2.5px); }
+			24% { opacity: .13; transform: scale(.975); filter: blur(3.3px); }
+			52% { opacity: .40; transform: scale(1.025); filter: blur(2.2px); }
+			82% { opacity: .16; transform: scale(.985); filter: blur(3.1px); }
 		}
 		.gdl-lam-window {
-			width: min(840px, 92vw);
-			height: min(680px, 88vh);
-			background: #171d24;
-			border: 1px solid rgba(255, 255, 255, 0.08);
-			box-shadow: 0 20px 65px rgba(0, 0, 0, 0.85);
-			border-radius: 4px;
+			width: min(840px, calc(100% - 96px));
+			height: 100%;
+			background: rgba(18, 24, 32, 0.72);
+			border: 1px solid rgba(255, 255, 255, 0.06);
+			box-shadow: 0 18px 48px rgba(0, 0, 0, 0.58);
+			border-radius: 2px;
 			position: relative;
 			display: flex;
 			flex-direction: column;
-			overflow: hidden;
+			overflow: visible;
 			animation: gdl-lam-popin 0.15s ease-out;
 		}
 		.gdl-lam-head {
 			padding: 24px 28px 16px;
-			background: linear-gradient(180deg, #2a2221 0%, #1c222b 100%);
+			background: linear-gradient(180deg, rgba(55, 36, 24, 0.20) 0%, rgba(19, 24, 31, 0.18) 100%);
+			backdrop-filter: blur(18px);
 			position: relative;
 			border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+			overflow: hidden;
+		}
+		.gdl-lam-head::before {
+			content: '';
+			position: absolute;
+			inset: 0;
+			background-image: var(--gdl-lam-hero-image);
+			background-position: center center;
+			background-size: cover;
+			filter: blur(18px) saturate(1.08);
+			transform: scale(1.08);
+			opacity: 0.92;
+			pointer-events: none;
+		}
+		.gdl-lam-head::after {
+			content: '';
+			position: absolute;
+			inset: 0;
+			background: linear-gradient(180deg, rgba(25, 15, 10, 0.18) 0%, rgba(17, 22, 29, 0.36) 100%);
+			pointer-events: none;
+		}
+		.gdl-lam-head > * {
+			position: relative;
+			z-index: 1;
 		}
 		.gdl-lam-title {
 			display: flex;
@@ -62,28 +126,57 @@ export function ensureAchievementModalStyles(doc: Document): void {
 		}
 		.gdl-lam-close {
 			position: absolute;
-			right: 18px;
-			top: 18px;
-			width: 36px;
-			height: 36px;
+			right: -4px;
+			top: -8px;
+			z-index: 30;
+			width: 60px;
+			height: 60px;
 			border-radius: 50%;
-			border: 1px solid rgba(255, 255, 255, 0.12);
-			background: #232932;
+			padding: 0;
+			border: 1px solid rgba(176, 190, 207, 0.28);
+			background: rgba(55, 63, 75, 0.88);
 			color: #c5c9ce;
-			font-size: 22px;
+			font-size: 50px;
+			font-weight: 300;
+			line-height: 1;
 			display: flex;
 			align-items: center;
 			justify-content: center;
 			cursor: pointer;
-			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+			box-shadow: 0 10px 22px rgba(0, 0, 0, 0.42);
 			transition: background 0.15s ease, color 0.15s ease;
 		}
 		.gdl-lam-close:hover {
-			background: #3a424e;
+			background: rgba(74, 84, 98, 0.96);
 			color: #ffffff;
 		}
 		.gdl-lam-progressbox {
 			margin-top: 16px;
+			position: relative;
+		}
+		.gdl-lam-progressbox.is-complete {
+			display: flex;
+			align-items: flex-start;
+			gap: 14px;
+		}
+		.gdl-lam-progress-copy {
+			flex: 1;
+			min-width: 0;
+		}
+		.gdl-lam-completion-badge {
+			width: 36px;
+			height: 41px;
+			flex: 0 0 36px;
+			display: flex;
+			align-items: flex-start;
+			justify-content: center;
+			margin-top: 1px;
+		}
+		.gdl-lam-completion-art {
+			width: 36px;
+			height: 41px;
+			display: block;
+			object-fit: contain;
 		}
 		.gdl-lam-progressline {
 			display: flex;
@@ -132,23 +225,23 @@ export function ensureAchievementModalStyles(doc: Document): void {
 			color: #ffffff;
 		}
 		.gdl-lam-tab.active {
-			background: #6a3622;
+			background: rgba(106, 54, 34, 0.78);
 			color: #ffffff;
-			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
 		}
 		.gdl-lam-toolbar {
 			display: flex;
 			justify-content: flex-end;
-			padding: 12px 28px 4px;
-			background: #171d24;
+			padding: 12px 28px 6px;
+			background: rgba(18, 24, 32, 0.72);
 		}
 		.gdl-lam-search {
-			width: 200px;
-			background: #13171d;
+			width: 242px;
+			background: rgba(19, 23, 29, 0.88);
 			border: 1px solid #232a35;
 			border-radius: 3px;
 			color: #8f98a0;
-			padding: 7px 12px;
+			padding: 10px 12px;
 			font-size: 13px;
 			font-style: italic;
 			outline: none;
@@ -161,13 +254,13 @@ export function ensureAchievementModalStyles(doc: Document): void {
 		.gdl-lam-list {
 			flex: 1;
 			overflow-y: auto;
-			padding: 8px 28px 24px;
-			background: #171d24;
+			padding: 8px 28px 8px;
+			background: rgba(18, 24, 32, 0.72);
 		}
 		.gdl-lam-row {
 			min-height: 80px;
-			background: #1f252e;
-			margin-bottom: 6px;
+			background: rgba(31, 37, 46, 0.9);
+			margin-bottom: 8px;
 			display: flex;
 			align-items: center;
 			padding: 12px 16px;
@@ -177,22 +270,78 @@ export function ensureAchievementModalStyles(doc: Document): void {
 			transition: background 0.12s ease;
 		}
 		.gdl-lam-row:hover {
-			background: #262d38;
+			background: rgba(38, 45, 56, 0.96);
 		}
-		.gdl-lam-row-icon {
+		/* Modal icon frame with subtle native-like rare glow */
+		.gdl-lam-row-icon-frame {
+			position: relative;
 			width: 64px;
 			height: 64px;
 			flex: 0 0 64px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			border-radius: 3px;
+			overflow: visible;
+			background: linear-gradient(180deg, #101722 0%, #121820 100%);
+			box-sizing: border-box;
+			isolation: isolate;
+			border: 1px solid rgba(0, 0, 0, 0.42);
+		}
+		.gdl-lam-row-icon-frame.is-highlighted {
+			border-color: rgba(0, 0, 0, 0.42);
+			box-shadow: none;
+		}
+		.gdl-lam-row-rare-glow,
+		.gdl-lam-row-rare-ring,
+		.gdl-lam-row-rare-beam {
+			display: none;
+			pointer-events: none;
+		}
+		.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-rare-glow {
+			display: block;
+			position: absolute;
+			inset: -7px;
+			z-index: 0;
+			border-radius: 8px;
+			background: radial-gradient(ellipse at center,
+				rgba(255, 235, 116, .70) 0%,
+				rgba(255, 183, 46, .58) 38%,
+				rgba(255, 145, 20, .34) 58%,
+				transparent 76%);
+			filter: blur(5.8px);
+			opacity: 1;
+			transform-origin: 50% 50%;
+			will-change: transform, opacity, filter;
+			animation: gdl-lam-rare-pulse 15s cubic-bezier(.42,0,.32,1) infinite;
+		}
+		.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-rare-ring,
+		.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-rare-beam {
+			display: none !important;
+		}
+		.gdl-lam-row-icon-frame .gdl-lam-row-icon {
+			position: relative;
+			z-index: 3;
+			width: 100%;
+			height: 100%;
 			object-fit: cover;
-			background: #121820;
 			border-radius: 2px;
-			box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+			border: none !important;
+			box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+		}
+		.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-icon {
+			filter: drop-shadow(0 0 2px rgba(255, 224, 86, .92))
+				drop-shadow(0 0 8px rgba(255, 174, 36, .72));
+		}
+		.gdl-lam-row-icon-frame:not(.is-highlighted) .gdl-lam-row-icon {
+			border: 1px solid rgba(255, 255, 255, 0.06);
 		}
 		.gdl-lam-row-icon.locked {
 			filter: grayscale(1) brightness(0.48);
 			opacity: 0.85;
 		}
 		.gdl-lam-row-main {
+
 			min-width: 0;
 			flex: 1;
 		}
@@ -218,28 +367,11 @@ export function ensureAchievementModalStyles(doc: Document): void {
 			color: #8f98a0;
 			font-size: 12px;
 			line-height: 17px;
-			display: flex;
-			flex-direction: column;
-			align-items: flex-end;
-			justify-content: center;
-		}
-		.gdl-lam-partial {
-			margin-top: 7px;
-		}
-		.gdl-lam-partial-track {
-			height: 4px;
-			background: #0d1217;
-			border-radius: 2px;
-			overflow: hidden;
-		}
-		.gdl-lam-partial-fill {
-			height: 100%;
-			background: #1a9fff;
 		}
 		.gdl-lam-empty {
+			padding: 40px 20px;
 			text-align: center;
-			color: #7f8790;
-			padding: 60px 10px;
+			color: #8f98a0;
 			font-size: 15px;
 		}
 	`);

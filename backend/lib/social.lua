@@ -7,7 +7,7 @@ local fs = deps.fs
 local util = deps.util
 local config = deps.config
 local lru = deps.lru_cache
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
+local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
 local M = {}
 
 local published_preview_cache = {}

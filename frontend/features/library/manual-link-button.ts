@@ -5,6 +5,7 @@ import { findMappingForShortcut, isShortcutDismissed, normalizedShortcutAppId, r
 export interface NonSteamNoticeInfo { element: Element; title: string }
 
 const manualLinkNoticeObservers = new WeakMap<Document, MutationObserver>();
+const manualLinkNoticeClickHandlers = new WeakMap<Document, EventListener>();
 
 function ensureManualLinkNoticeButtonStyles(doc: Document): void {
 	if (doc.getElementById('gdl-manual-link-notice-styles')) return;
@@ -24,6 +25,30 @@ function disconnectManualLinkNoticeObserver(doc: Document): void {
 	manualLinkNoticeObservers.delete(doc);
 }
 
+function ensureManualLinkNoticeClickHandler(doc: Document): void {
+	if (manualLinkNoticeClickHandlers.has(doc)) return;
+	const handler: EventListener = event => {
+		const target = event.target as Element | null;
+		const button = target?.closest?.('#gdl-manual-link-notice-button') as HTMLButtonElement | null;
+		if (!button || !doc.documentElement.contains(button)) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const id = Number(button.dataset.shortcutAppId || '0');
+		const title = button.dataset.gameTitle || '';
+		const retry = (delay: number, attempts = 0): void => {
+			window.setTimeout(() => {
+				if (!button.isConnected) return;
+				if (!requestManualShortcutLink(id, title, doc) && attempts < 7) {
+					retry(delay < 700 ? delay * 2 : 1500, attempts + 1);
+				}
+			}, delay);
+		};
+		if (!requestManualShortcutLink(id, title, doc)) retry(100);
+	};
+	doc.addEventListener('click', handler, true);
+	manualLinkNoticeClickHandlers.set(doc, handler);
+}
+
 export function removeManualLinkNoticeButton(doc: Document): void {
 	doc.getElementById('gdl-manual-link-notice-button-row')?.remove();
 	disconnectManualLinkNoticeObserver(doc);
@@ -39,17 +64,12 @@ function mountManualLinkNoticeButton(doc: Document, noticeElement: Element, shor
 		const button = doc.createElement('button');
 		button.id = 'gdl-manual-link-notice-button';
 		button.type = 'button';
-		button.addEventListener('click', event => {
-			event.preventDefault();
-			event.stopPropagation();
-			const id = Number(button.dataset.shortcutAppId || '0');
-			if (id > 0) requestManualShortcutLink(id);
-		});
 		row.appendChild(button);
 	}
 	const button = row.querySelector('button') as HTMLButtonElement | null;
 	if (!button) return false;
 	button.dataset.shortcutAppId = shortcutAppId;
+	button.dataset.gameTitle = gameTitle;
 	button.setAttribute('aria-label', `${gdlText('link_button', 'Link')} ${gameTitle}`);
 	button.textContent = gdlText('link_button', 'Link');
 	if (row.parentElement !== host) host.appendChild(row);
@@ -64,6 +84,7 @@ export function ensureManualLinkNoticeButton(
 	findNotice: () => NonSteamNoticeInfo | null,
 ): void {
 	ensureManualLinkNoticeButtonStyles(doc);
+	ensureManualLinkNoticeClickHandler(doc);
 	if (!mountManualLinkNoticeButton(doc, noticeElement, shortcutAppId, gameTitle)) return;
 	const host = (noticeElement.closest('div') || noticeElement.parentElement) as HTMLElement | null;
 	if (!host) return;
@@ -77,7 +98,7 @@ export function ensureManualLinkNoticeButton(
 		const shortcutByName = findShortcutAppIdByName(title);
 		const routedShortcutAppId = findActiveShortcutAppId(doc, '');
 		const titleMatchedShortcutAppId = findActiveShortcutAppId(doc, title);
-		const activeShortcutAppId = titleMatchedShortcutAppId || routedShortcutAppId || (shortcutByName ? String(shortcutByName) : null);
+		const activeShortcutAppId = routedShortcutAppId || titleMatchedShortcutAppId || (shortcutByName ? String(shortcutByName) : null);
 		const normalizedActiveShortcutId = normalizedShortcutAppId(activeShortcutAppId);
 		const dismissed = Boolean(normalizedActiveShortcutId && isShortcutDismissed(normalizedActiveShortcutId));
 		const activeMapping = dismissed ? null : findMappingForShortcut(activeShortcutAppId, title);

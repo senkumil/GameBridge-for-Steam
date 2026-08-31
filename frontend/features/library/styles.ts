@@ -5,6 +5,7 @@ import { ensureActivityStyles } from './styles/activity';
 import { ensureCommunityStyles } from './styles/community';
 import { ensureTradingCardStyles } from './styles/trading-cards';
 import { ensureStatusComposerStyles } from './styles/status';
+import { ensureHistoricalSidebarStyles } from './styles/historical-sidebar';
 
 /**
  * Central library-style entry point. Individual visual surfaces own their own
@@ -19,4 +20,5 @@ export function ensureNativeGameInfoStyles(doc: Document): void {
 	ensureCommunityStyles(doc);
 	ensureTradingCardStyles(doc);
 	ensureStatusComposerStyles(doc);
+	ensureHistoricalSidebarStyles(doc);
 }

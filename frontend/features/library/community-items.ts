@@ -1,11 +1,27 @@
 import { findModuleExport } from '@steambrew/client';
 import type { SteamCommunityCardAsset, SteamCommunityItemsCatalog } from '../../domain/types';
 import { backendLog, fetchCommunityItemsCatalogBackend, parseCommunityItemsCatalogResponse } from '../../api/backend';
-import { CACHE_TTL, cacheGet, cacheSet } from '../../core/cache';
+import { CACHE_RETENTION, CACHE_TTL, cacheDeleteMatching, cacheRead, cacheSet } from '../../core/cache';
 import { RetryingRequestCache } from '../../core/request-cache';
 import { getSteamLanguage } from '../../steam/localization';
 
-const communityItemsCatalogRequests = new RetryingRequestCache<SteamCommunityItemsCatalog>({ ttlMs: 10 * 60 * 1000, retries: 1, baseDelayMs: 150 });
+const communityItemsCatalogRequests = new RetryingRequestCache<SteamCommunityItemsCatalog>({
+	ttlMs: 10 * 60 * 1000,
+	retries: 1,
+	baseDelayMs: 150,
+	isCacheable: (value): value is SteamCommunityItemsCatalog => Boolean(value && !value.error && value.transient_error !== true),
+});
+
+export function getCachedOfficialCommunityItems(steamAppId: string, language: string):
+	{ data: SteamCommunityItemsCatalog; fresh: boolean } | null {
+	const entry = cacheRead<SteamCommunityItemsCatalog>(`community_items_v7_${language}_${steamAppId}`,
+		CACHE_TTL.communityItems, CACHE_RETENTION.communityItems);
+	const legacy = entry ? null : cacheRead<SteamCommunityItemsCatalog>(`community_items_v6_${language}_${steamAppId}`,
+		CACHE_TTL.communityItems, CACHE_RETENTION.communityItems);
+	const data = cleanCommunityItemsCatalog(entry?.data || legacy?.data || null);
+	return data ? { data, fresh: Boolean(entry?.fresh) } : null;
+}
+
 export function normalizeCommunityAssetUrl(raw: unknown): string {
 	let value = typeof raw === 'string' ? raw.trim() : '';
 	if (!value) return '';
@@ -70,6 +86,7 @@ function cleanCommunityItemsCatalog(raw: SteamCommunityItemsCatalog | null): Ste
 		foil_badge: foilBadge,
 		source: raw.source,
 		error: raw.error,
+		transient_error: raw.transient_error === true,
 	};
 }
 
@@ -143,15 +160,21 @@ async function readNativeSteamCommunityItems(doc: Document, steamAppId: string):
 	return null;
 }
 
-export async function getOfficialCommunityItems(doc: Document, steamAppId: string): Promise<SteamCommunityItemsCatalog | null> {
-	const language = await getSteamLanguage().catch(() => 'english');
+export async function getOfficialCommunityItems(doc: Document, steamAppId: string,
+	requestedLanguage?: string): Promise<SteamCommunityItemsCatalog | null> {
+	const language = String(requestedLanguage || await getSteamLanguage().catch(() => 'english') || 'english').toLowerCase();
 	const key = `${steamAppId}:${language}`;
+	const snapshot = getCachedOfficialCommunityItems(steamAppId, language);
 	try {
-		return await communityItemsCatalogRequests.get(key, async () => {
-		const cached = cleanCommunityItemsCatalog(cacheGet<SteamCommunityItemsCatalog>(`community_items_v6_${language}_${steamAppId}`, CACHE_TTL.communityItems));
+		const loaded = await communityItemsCatalogRequests.get(key, async () => {
+		const cached = snapshot?.fresh ? snapshot.data : null;
+		const stale = snapshot?.data || null;
+		let backendResponded = Boolean(cached);
 		const backendRequest = cached ? Promise.resolve(cached) : fetchCommunityItemsCatalogBackend({ steam_app_id: steamAppId, language })
-			.then(parseCommunityItemsCatalogResponse)
-			.then(cleanCommunityItemsCatalog)
+			.then(value => {
+				backendResponded = true;
+				return cleanCommunityItemsCatalog(parseCommunityItemsCatalogResponse(value));
+			})
 			.catch((e: unknown): SteamCommunityItemsCatalog | null => {
 				backendLog('Community item catalogue failed for ' + steamAppId + ': ' + e);
 				return null;
@@ -160,26 +183,45 @@ export async function getOfficialCommunityItems(doc: Document, steamAppId: strin
 			readNativeSteamCommunityItems(doc, steamAppId),
 			backendRequest,
 		]);
+		if (!backendResponded && !nativeCatalog) return null;
+		const backendTransient = Boolean(indexedCatalog?.error || indexedCatalog?.transient_error);
 		const merged = cleanCommunityItemsCatalog({
 			appid: Number(steamAppId),
-			cards: nativeCatalog?.cards?.length ? nativeCatalog.cards : indexedCatalog?.cards || [],
-			badges: indexedCatalog?.badges?.length ? indexedCatalog.badges : nativeCatalog?.badges || [],
-			foil_badge: indexedCatalog?.foil_badge || nativeCatalog?.foil_badge || null,
-			source: nativeCatalog?.cards?.length ? 'steam-client+steam-community-assets' : indexedCatalog?.source,
+			cards: nativeCatalog?.cards?.length ? nativeCatalog.cards
+				: indexedCatalog?.cards?.length ? indexedCatalog.cards : stale?.cards || [],
+			badges: indexedCatalog?.badges?.length ? indexedCatalog.badges
+				: nativeCatalog?.badges?.length ? nativeCatalog.badges : stale?.badges || [],
+			foil_badge: indexedCatalog?.foil_badge || nativeCatalog?.foil_badge || stale?.foil_badge || null,
+			source: nativeCatalog?.cards?.length ? 'steam-client+steam-community-assets'
+				: indexedCatalog?.source || stale?.source,
+			transient_error: backendTransient,
 		});
-		if (merged && merged.cards.length > 0) {
-			cacheSet(`community_items_v6_${language}_${steamAppId}`, merged);
+		if (merged) {
+			if (!backendTransient) cacheSet(`community_items_v7_${language}_${steamAppId}`, merged);
+			if (backendTransient && merged.cards.length === 0 && (merged.badges?.length || 0) === 0) return null;
 			return merged;
 		}
 		return null;
 		});
+		return loaded ?? snapshot?.data ?? null;
 	} catch (error) {
 		backendLog('Community item catalogue exhausted for ' + steamAppId + ': ' + error);
-		return null;
+		return snapshot?.data ?? null;
 	}
 }
 
 export function clearCommunityItemCaches(): void {
 	communityItemsCatalogRequests.clear();
+	nativeSteamBadgeStore = null;
+}
+
+export function invalidateCommunityItemCaches(appIds: Iterable<string | number>): void {
+	const ids = new Set(Array.from(appIds, value => String(value)).filter(value => /^\d+$/.test(value)));
+	if (ids.size === 0) return;
+	communityItemsCatalogRequests.invalidateMatching(key => ids.has(key.split(':', 1)[0]));
+	cacheDeleteMatching(key => {
+		const appId = key.match(/^community_items_v\d+_.+_(\d+)$/)?.[1];
+		return Boolean(appId && ids.has(appId));
+	});
 	nativeSteamBadgeStore = null;
 }

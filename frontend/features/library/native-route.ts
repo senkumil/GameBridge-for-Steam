@@ -2,6 +2,7 @@ import { LINKS_BAR_CLASSES } from '../../steam/css';
 import { elementsWithCssModuleClass, isRenderedElement } from '../../steam/native-dom';
 import { findMappingForShortcut, isShortcutDismissed } from '../shortcuts/runtime';
 import { GDL_INJECTED } from './constants';
+import { findNonSteamNotice } from './notice';
 
 export function routedSteamAppId(doc: Document): number | null {
 	for (const url of [String(doc.defaultView?.location?.href || ''), String(doc.location?.href || '')]) {
@@ -11,7 +12,19 @@ export function routedSteamAppId(doc: Document): number | null {
 	return null;
 }
 
-/** Detect Steam's own links bar without counting the GameBridge replacement. */
+/** Stable identity for a Library destination. Query/hash churn inside the same
+ * game must not invalidate a mounted page or restart its asynchronous work. */
+export function libraryRouteIdentity(doc: Document): string {
+	const appId = routedSteamAppId(doc);
+	if (appId !== null) return `app:${appId}`;
+	const raw = String(doc.defaultView?.location?.href || doc.location?.href || '');
+	try {
+		const url = new URL(raw);
+		return `${url.origin}${url.pathname}`;
+	} catch { return raw.split(/[?#]/, 1)[0]; }
+}
+
+/** Detect Steam's own links bar without counting the NativeGameLink replacement. */
 export function hasVisibleNativeLinksBar(doc: Document): boolean {
 	try {
 		const linksSection = LINKS_BAR_CLASSES().LinksSection;
@@ -49,15 +62,20 @@ export function hasVisibleNativeLinksBar(doc: Document): boolean {
 
 /**
  * A public Store AppID or Steam's own Library links row is an ownership
- * boundary: the visible page belongs to Steam, not to GameBridge.
+ * boundary: the visible page belongs to Steam, not to NativeGameLink.
  *
  * Keep this predicate read-only. Callers use it before running any Library
  * DOM synchronization so native game pages are never used as injection hosts.
  */
 export function isPublicSteamLibraryRoute(doc: Document): boolean {
 	const appId = routedSteamAppId(doc);
-	return Boolean((appId !== null && appId > 0 && appId < 2147483648)
-		|| hasVisibleNativeLinksBar(doc));
+	// A concrete public AppID is stronger than a shortcut notice left in the DOM
+	// for one React commit. Otherwise A's old notice can make a native B route
+	// look injectable during the transition.
+	if (appId !== null && appId > 0 && appId < 2147483648) return true;
+	if (findNonSteamNotice(doc)) return false;
+	if (hasVisibleNativeLinksBar(doc)) return true;
+	return false;
 }
 
 export interface LibraryNavigationState {
@@ -79,7 +97,7 @@ export function reconcileLibraryNavigation(doc: Document, state: LibraryNavigati
 	if (!hasGdlChrome) return;
 	const routeId = routedSteamAppId(doc);
 	// Native Library routes are deliberately outside this reconciler. The
-	// runtime's route boundary retires only GameBridge-owned nodes before this
+	// runtime's route boundary retires only NativeGameLink-owned nodes before this
 	// function is called and does not inspect or alter Steam's page state.
 	if (isPublicSteamLibraryRoute(doc)) return;
 	if (routeId === null) return;

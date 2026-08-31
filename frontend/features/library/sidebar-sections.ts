@@ -2,20 +2,36 @@ import { backendLog } from '../../api/backend';
 import type { FriendCategories, SteamGameData } from '../../domain/types';
 import { loc } from '../../steam/localization';
 import {
-	getCachedLocalAchievements,
+	getCachedLocalAchievementsForGame,
 	makeLinkedAchievementsClickable,
 	openLocalAchievementsModal,
 	renderLocalAchievementSidebarHtml,
+	ensureLocalAchievementSidebarResponsiveGrid,
 } from '../achievements/runtime';
-import { renderFriendsSection } from './social';
 import type { NativeLibraryLayout } from './layout';
 import { buildNativeSidebarSection } from './layout';
+import { buildHistoricalSidebarSections } from './historical-sidebar';
+import type { SteamLibraryAssets } from './artwork';
 
 export interface LinkedSidebarOptions {
 	steamAppId: string;
 	shortcutAppId: string | null;
 	data: SteamGameData;
 	friendResult: FriendCategories | null | undefined;
+	modern?: SteamLibraryAssets | null;
+}
+
+function insertHistoricalSections(doc: Document, layout: NativeLibraryLayout, data: SteamGameData, steamAppId: string, modern?: SteamLibraryAssets | null): void {
+	if (!layout.sidebarColumn) return;
+	for (const node of buildHistoricalSidebarSections(doc, layout, data, steamAppId, modern).reverse()) {
+		layout.sidebarColumn.insertBefore(node, layout.sidebarColumn.firstChild);
+	}
+}
+
+export function refreshHistoricalSidebarSections(doc: Document, layout: NativeLibraryLayout, data: SteamGameData, steamAppId: string, modern?: SteamLibraryAssets | null): void {
+	doc.getElementById('gdl-historical-info-section')?.remove();
+	doc.getElementById('gdl-external-achievements-section')?.remove();
+	insertHistoricalSections(doc, layout, data, steamAppId, modern);
 }
 
 /** Render the stable native-order sidebar core: Friends followed by Achievements. */
@@ -27,23 +43,16 @@ export function renderLinkedSidebarCore(
 	const { anchorRegion, sidebarColumn } = layout;
 	if (!anchorRegion || !sidebarColumn) return;
 	let lastSidebarInsert: HTMLElement | null = null;
+	const insertSidebarNode = (node: HTMLElement): void => {
+		sidebarColumn.insertBefore(node, lastSidebarInsert ? lastSidebarInsert.nextSibling : sidebarColumn.firstChild);
+		lastSidebarInsert = node;
+	};
 
-	if (options.friendResult && options.friendResult.totalCount > 0) {
-		const node = buildNativeSidebarSection(doc, layout, {
-			sectionId: 'gdl-friends-section',
-			headerText: loc('AppDetails_SectionTitle_Friends', 'Friends who play'),
-			innerId: 'gdl-friends-content',
-			innerHtml: renderFriendsSection(options.friendResult, options.steamAppId, options.data.name),
-		});
-		if (node) {
-			sidebarColumn.insertBefore(node, sidebarColumn.firstChild);
-			lastSidebarInsert = node;
-		}
-	}
+	for (const node of buildHistoricalSidebarSections(doc, layout, options.data, options.steamAppId, options.modern)) insertSidebarNode(node);
 
 	const total = options.data.achievements?.total || 0;
 	if (total <= 0) return;
-	const cachedAchievements = getCachedLocalAchievements(options.steamAppId, options.shortcutAppId);
+	const cachedAchievements = getCachedLocalAchievementsForGame(options.steamAppId, options.shortcutAppId);
 	let initialAchievements = cachedAchievements;
 	if (!initialAchievements && options.data.achievements && options.data.achievements.total > 0) {
 		const highlighted = options.data.achievements.highlighted || [];
@@ -99,9 +108,11 @@ export function renderLinkedSidebarCore(
 	if (!node) return;
 	if (!cachedAchievements) node.dataset.gdlAchievementsPending = '1';
 
+	const initialSummary = node.querySelector<HTMLElement>('.gdl-la-summary');
+	if (initialSummary && initialAchievements) ensureLocalAchievementSidebarResponsiveGrid(initialSummary, initialAchievements);
+
 	if (cachedAchievements) {
-		const summary = node.querySelector('.gdl-la-summary');
-		summary?.addEventListener('click', event => {
+		initialSummary?.addEventListener('click', (event: MouseEvent) => {
 			event.preventDefault();
 			event.stopPropagation();
 			openLocalAchievementsModal(doc, cachedAchievements!).catch(error => backendLog('Achievements modal error: ' + String(error)));
@@ -109,5 +120,5 @@ export function renderLinkedSidebarCore(
 	} else {
 		makeLinkedAchievementsClickable(doc, node, options.steamAppId);
 	}
-	sidebarColumn.insertBefore(node, lastSidebarInsert ? lastSidebarInsert.nextSibling : sidebarColumn.firstChild);
+	insertSidebarNode(node);
 }

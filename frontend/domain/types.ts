@@ -52,6 +52,7 @@ export interface SteamCommunityItemsCatalog {
 	foil_badge?: SteamCommunityBadgeAsset | null;
 	source?: string;
 	error?: string;
+	transient_error?: boolean;
 }
 
 export interface SteamGameData {
@@ -80,6 +81,21 @@ export interface SteamGameData {
 	achievements?: { total: number; highlighted?: { name: string; path: string }[] };
 	controller_support?: string;
 	platforms?: { windows?: boolean; mac?: boolean; linux?: boolean };
+	is_delisted?: boolean;
+	metadata_sources?: {
+		identity?: 'steam_store_api' | 'steam_community_app_hub';
+		artwork?: 'steam_store_api' | 'steam_cdn';
+		news?: 'steam_news_web_api';
+		community?: 'steam_community_app_hub';
+		achievements?: 'steam_community_stats' | 'unavailable';
+	};
+	historical_capabilities?: {
+		identity: 'available' | 'unavailable';
+		artwork: 'available' | 'unavailable' | 'probe_on_demand';
+		news: 'available' | 'unavailable' | 'probe_on_demand';
+		community: 'available' | 'unavailable' | 'probe_on_demand';
+		achievements: 'available' | 'unavailable' | 'probe_on_demand';
+	};
 }
 
 export interface ShortcutDetectionCandidate {
@@ -100,6 +116,7 @@ export interface ShortcutDetectionResult {
 	executable?: string;
 	source?: string;
 	error?: string;
+	transient_error?: boolean;
 }
 
 export interface ShortcutDetectionContext {
@@ -173,8 +190,12 @@ export interface LocalAchievementData {
 	metadata_source?: string;
 	state_source?: string;
 	simulation_enabled?: boolean;
-	simulate_unlock_all?: boolean;
+	simulate_count?: number;
+	simulate_online_count?: number;
+	simulate_percent?: number;
+	simulate_online_percent?: number;
 	unlock_online?: boolean;
+	unlocked_names?: string[];
 	zero_progress?: boolean;
 	unlocked: number;
 	total: number;
@@ -195,6 +216,7 @@ export interface NativeGameFeature {
 
 export interface NativeGameInfo {
 	key: string;
+	isLegacy: boolean;
 	title: string;
 	portrait: string;
 	description: string;

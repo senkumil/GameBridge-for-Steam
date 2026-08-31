@@ -1,19 +1,18 @@
-import type { ShortcutDetectionCandidate, ShortcutDetectionContext, ShortcutDetectionResult } from '../../domain/types';
+import type { ShortcutDetectionContext, ShortcutDetectionResult } from '../../domain/types';
 import { backendLog } from '../../api/backend';
 import { getGameData } from '../../core/game-data';
 import { escapeHtml, normalizeTitle } from '../../core/text';
 import { gdlText } from '../../steam/localization';
-import { shortcutPathBasename } from '../../steam/shortcuts';
+import { findActiveShortcutAppId, SHORTCUT_THRESHOLD, shortcutPathBasename } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
-import { findMappingForShortcut, getAllShortcutRecords, isUnrealShippingExecutable, shortcutAlreadyLinked } from './registry';
+import { findMappingForShortcut, getAllShortcutRecords, shortcutAlreadyLinked } from './registry';
 import { buildShortcutDetectionContext, detectShortcutCandidates } from './detection';
-import { enqueueLinkJob } from './link-job-queue';
-import { isShortcutIdentityMutationInProgress, linkShortcutToSteam } from './linking';
-import { undismissShortcut } from './dismissed';
-import { isNativeAddAutoPromptSuppressed, suppressNativeAddAutoPrompt } from './auto-prompt-policy';
+import { cancelPendingLinkJobs, enqueueLinkJob, getPendingLinkJob } from './link-job-queue';
+import { isShortcutIdentityMutationInProgress, linkShortcutToSteam, shouldAutoApplyNoLauncher } from './linking';
+import { isShortcutDismissed, undismissShortcut } from './dismissed';
+import { navigateToLibraryShortcut } from '../../steam/navigation';
 // Candidate confidence is presentation-only in the manual picker.
 const REVIEW_CONFIDENCE_THRESHOLD = 70;
-let shortcutManualLinkModalOpen = false;
 let shortcutLinkInProgress = false;
 const shortcutDetectionInFlight = new Set<number>();
 const shortcutDetectionScheduled = new Set<number>();
@@ -25,7 +24,10 @@ function shortcutMutationInProgress(): boolean {
 
 let activeModalEscapeHandler: ((e: KeyboardEvent) => void) | null = null;
 
-function manualLinkModalPresent(): boolean {
+function manualLinkModalPresent(doc?: Document | null): boolean {
+	try {
+		if (doc?.getElementById('gdl-manual-link-modal')) return true;
+	} catch {}
 	try {
 		const hostDoc = shortcutRuntimeHost().getMainWindowDoc();
 		if (hostDoc?.getElementById('gdl-manual-link-modal')) return true;
@@ -43,7 +45,6 @@ function closeShortcutManualLinkModal(doc: Document, _shortcutAppId: number, _di
 	}
 	doc.getElementById('gdl-manual-link-modal')?.remove();
 	try { document.getElementById('gdl-manual-link-modal')?.remove(); } catch {}
-	shortcutManualLinkModalOpen = false;
 }
 
 export type ShortcutLinkReviewSource = 'manual' | 'native-add-auto';
@@ -52,27 +53,35 @@ export function showShortcutManualLinkModal(
 	doc: Document,
 	context: ShortcutDetectionContext,
 	detection: ShortcutDetectionResult,
-	options: { source?: ShortcutLinkReviewSource } = {},
+	options: { source?: ShortcutLinkReviewSource; loading?: boolean } = {},
 ): void {
 	const targetDoc = (doc && doc.body) ? doc : (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' && document.body ? document : null));
 	if (!targetDoc || !targetDoc.body) return;
-	if (targetDoc.getElementById('gdl-manual-link-modal')) return;
-	try { targetDoc.getElementById('gdl-manual-link-modal')?.remove(); } catch {}
+	const existingModal = targetDoc.getElementById('gdl-manual-link-modal');
+	if (existingModal) {
+		existingModal.remove();
+	}
+	try { document?.getElementById('gdl-manual-link-modal')?.remove(); } catch {}
 	const source: ShortcutLinkReviewSource = options.source || 'manual';
+	const loading = options.loading === true;
 	const automaticNativeAddReview = source === 'native-add-auto';
 	const candidates = (detection.candidates || []).slice(0, 10);
+	const hasCandidates = candidates.length > 0;
 	const dialogTitle = automaticNativeAddReview
 		? gdlText('auto_link_title', 'Steam game detected')
 		: gdlText('link_game', 'Link game');
-	const dialogMessage = automaticNativeAddReview
-		? gdlText('auto_link_message', 'A likely Steam match was found for “{name}”. Confirm it before GameBridge loads the game data.', { name: context.title })
+	const dialogMessage = loading
+		? gdlText('link_searching', 'Searching for Steam matches…')
+		: automaticNativeAddReview && hasCandidates
+		? gdlText('auto_link_message', 'A likely Steam match was found for “{name}”. Confirm it before NativeGameLink loads the game data.', { name: context.title })
+		: automaticNativeAddReview
+		? gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.')
 		: gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.');
 	const hasTrackingRecommendation = !!(context.bootstrapDetected && context.recommendedExePath);
 	const exeName = context.exePath ? (shortcutPathBasename(context.exePath) || context.exePath) : context.title;
 	const executableSummary = hasTrackingRecommendation
 		? gdlText('selected_executable', 'Selected executable: {exe}', { exe: exeName })
 		: gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: exeName });
-	shortcutManualLinkModalOpen = true;
 
 	const overlay = targetDoc.createElement('div');
 	overlay.id = 'gdl-manual-link-modal';
@@ -80,13 +89,13 @@ export function showShortcutManualLinkModal(
 	overlay.innerHTML = `
 		<div role="dialog" aria-modal="true" style="width:min(620px,calc(100vw - 40px));overflow:hidden;border-radius:6px;background:linear-gradient(145deg,#1b2531,#121922);border:1px solid rgba(102,192,244,.30);box-shadow:0 24px 80px rgba(0,0,0,.78);">
 			<div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;background:linear-gradient(90deg,rgba(39,65,84,.95),rgba(24,31,41,.96));border-bottom:1px solid rgba(255,255,255,.09);">
-				<div><div style="font-size:20px;font-weight:600;color:#fff;">${escapeHtml(dialogTitle)}</div><div style="margin-top:4px;font-size:11px;letter-spacing:.8px;color:#66c0f4;text-transform:uppercase;">${escapeHtml(gdlText('auto_link_ready_to_review', 'Match ready for review'))}</div></div>
+				<div><div style="font-size:20px;font-weight:600;color:#fff;">${escapeHtml(dialogTitle)}</div><div style="margin-top:4px;font-size:11px;letter-spacing:.8px;color:#66c0f4;text-transform:uppercase;">${escapeHtml(loading ? gdlText('link_searching', 'Searching for Steam matches…') : hasCandidates ? gdlText('auto_link_ready_to_review', 'Match ready for review') : gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</div></div>
 				<button class="gdl-manual-link-close" aria-label="${escapeHtml(gdlText('close', 'Close'))}" style="border:0;background:transparent;color:#8f98a0;font-size:24px;line-height:1;cursor:pointer;padding:0 3px;">×</button>
 			</div>
 			<div style="padding:20px 22px 22px;">
 				<div style="font-size:13px;line-height:1.5;color:#acb2b8;margin-bottom:17px;">${escapeHtml(dialogMessage)}</div>
 				<div style="display:flex;gap:16px;align-items:stretch;margin-bottom:16px;padding:12px;background:rgba(0,0,0,.16);border:1px solid rgba(255,255,255,.06);border-radius:4px;">
-					<img class="gdl-manual-link-image" alt="" style="width:194px;height:91px;object-fit:cover;background:#10141a;border:1px solid rgba(255,255,255,.10);border-radius:2px;" />
+					<img class="gdl-manual-link-image" alt="" style="width:194px;height:91px;object-fit:cover;border:1px solid rgba(255,255,255,.10);border-radius:2px;" />
 					<div style="display:flex;flex:1;min-width:0;flex-direction:column;justify-content:center;gap:7px;">
 						<div class="gdl-manual-link-name" style="font-size:17px;font-weight:500;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
 						<div class="gdl-manual-link-id" style="font-size:12px;color:#66c0f4;"></div>
@@ -97,9 +106,9 @@ export function showShortcutManualLinkModal(
 					<span style="display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.45px;">${escapeHtml(gdlText('manual_appid_label', 'Or enter a Steam AppID manually'))}</span>
 					<input class="gdl-manual-link-manual-appid" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(gdlText('manual_appid_placeholder', 'Steam AppID'))}" style="box-sizing:border-box;width:100%;padding:8px 9px;background:#101820;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;" />
 				</label>
-				<div style="padding:9px 11px;background:rgba(0,0,0,.18);color:#8f98a0;font-size:11px;line-height:1.35;overflow-wrap:anywhere;">${escapeHtml(executableSummary)}</div>
+				<div class="gdl-manual-link-exe-summary" style="padding:9px 11px;background:rgba(0,0,0,.18);color:#8f98a0;font-size:11px;line-height:1.35;overflow-wrap:anywhere;">${escapeHtml(executableSummary)}</div>
 				<label class="gdl-manual-link-tracking" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;padding:10px 11px;background:rgba(91,163,43,.10);border:1px solid rgba(91,163,43,.28);color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;">
-					<input class="gdl-manual-link-tracking-input" type="checkbox" style="margin-top:2px;" />
+					<input class="gdl-manual-link-tracking-input" type="checkbox" checked style="margin-top:2px;" />
 					<span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam keeps tracking playtime.', { bootstrap: shortcutPathBasename(context.exePath), game: shortcutPathBasename(context.recommendedExePath || '') }))}</span>
 				</label>
 				<label class="gdl-manual-link-launcher" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;">
@@ -130,6 +139,27 @@ export function showShortcutManualLinkModal(
 	const resultPanel = overlay.querySelector('.gdl-manual-link-result') as HTMLElement;
 	const confirm = overlay.querySelector('.gdl-manual-link-confirm') as HTMLButtonElement;
 	const cancel = overlay.querySelector('.gdl-manual-link-cancel') as HTMLButtonElement;
+	const clearCandidateImage = (): void => {
+		image.onload = null;
+		image.onerror = null;
+		image.removeAttribute('src');
+		image.style.visibility = 'hidden';
+	};
+	const loadCandidateImage = (source: string): void => {
+		const url = source.trim();
+		if (!url) {
+			clearCandidateImage();
+			return;
+		}
+		image.style.visibility = 'visible';
+		const settleImage = (loaded: boolean): void => {
+			image.style.visibility = loaded ? 'visible' : 'hidden';
+		};
+		image.onload = () => settleImage(true);
+		image.onerror = () => settleImage(false);
+		if (image.getAttribute('src') !== url) image.src = url;
+		else if (image.complete) settleImage(image.naturalWidth > 0);
+	};
 
 	for (const candidate of candidates) {
 		const option = targetDoc.createElement('option');
@@ -146,7 +176,9 @@ export function showShortcutManualLinkModal(
 	} else {
 		const option = targetDoc.createElement('option');
 		option.value = '';
-		option.textContent = gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)');
+		option.textContent = loading
+			? gdlText('link_searching', 'Searching for Steam matches…')
+			: gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)');
 		select.appendChild(option);
 		select.disabled = true;
 	}
@@ -162,8 +194,7 @@ export function showShortcutManualLinkModal(
 		if (!candidate) {
 			name.textContent = context.title;
 			appId.textContent = '';
-			image.removeAttribute('src');
-			image.style.visibility = 'hidden';
+			clearCandidateImage();
 			status.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
 			status.style.color = '#e5ad37';
 			return;
@@ -189,17 +220,13 @@ export function showShortcutManualLinkModal(
 		// Store-search thumbnails and guessed static CDN paths are not stable for
 		// every Steam game. Show the candidate image immediately, then reconcile
 		// it with the authoritative appdetails header for the selected AppID.
-		image.onerror = () => { image.style.visibility = 'hidden'; };
-		image.src = candidate.image || '';
-		image.style.visibility = candidate.image ? 'visible' : 'hidden';
+		loadCandidateImage(candidate.image || '');
 		void getGameData(candidate.appid).then(official => {
 			if (requestRevision !== imageRequestRevision || select.value !== candidate.appid) return;
 			const officialImage = String(official?.header_image || official?.capsule_image || official?.capsule_imagev5 || '').trim();
 			if (!officialImage) return;
 			candidate.image = officialImage;
-			image.onerror = () => { image.style.visibility = 'hidden'; };
-			if (image.src !== officialImage) image.src = officialImage;
-			image.style.visibility = 'visible';
+			loadCandidateImage(officialImage);
 		}).catch(() => {});
 	};
 	const renderManualAppId = () => {
@@ -212,8 +239,7 @@ export function showShortcutManualLinkModal(
 			imageRequestRevision += 1;
 			name.textContent = gdlText('manual_appid_title', 'Manual Steam AppID');
 			appId.textContent = '';
-			image.removeAttribute('src');
-			image.style.visibility = 'hidden';
+			clearCandidateImage();
 			status.textContent = gdlText('manual_appid_invalid', 'Enter a numeric Steam AppID.');
 			status.style.color = '#e5ad37';
 			return;
@@ -221,8 +247,7 @@ export function showShortcutManualLinkModal(
 		const requestRevision = ++imageRequestRevision;
 		name.textContent = gdlText('manual_appid_title', 'Manual Steam AppID');
 		appId.textContent = `Steam AppID ${manualAppId}`;
-		image.removeAttribute('src');
-		image.style.visibility = 'hidden';
+		clearCandidateImage();
 		status.textContent = gdlText('verifying_steam', 'Verifying on Steam...');
 		status.style.color = '#8f98a0';
 		if (manualLookupTimer) clearTimeout(manualLookupTimer);
@@ -236,11 +261,7 @@ export function showShortcutManualLinkModal(
 				}
 				name.textContent = String(official.name || gdlText('manual_appid_title', 'Manual Steam AppID'));
 				const officialImage = String(official.header_image || official.capsule_image || official.capsule_imagev5 || '').trim();
-				if (officialImage) {
-					image.onerror = () => { image.style.visibility = 'hidden'; };
-					image.src = officialImage;
-					image.style.visibility = 'visible';
-				}
+				if (officialImage) loadCandidateImage(officialImage);
 				status.textContent = gdlText('manual_appid_ready', 'Manual AppID selected. Review the Steam game before linking.');
 				status.style.color = '#66c0f4';
 			}).catch(() => {
@@ -250,32 +271,86 @@ export function showShortcutManualLinkModal(
 			});
 		}, 250);
 	};
+	const updateLauncherBypass = (appId: string) => {
+		const shouldBypass = shouldAutoApplyNoLauncher(appId);
+		if (shouldBypass) {
+			launcherLabel.style.display = 'flex';
+			launcherInput.checked = true;
+		} else {
+			launcherLabel.style.display = 'none';
+			launcherInput.checked = false;
+		}
+	};
+
 	select.addEventListener('change', () => {
 		if (manualAppIdInput.value) manualAppIdInput.value = '';
 		renderCandidate();
+		const currentSelected = candidates.find(candidate => candidate.appid === select.value) || candidates[0];
+		updateLauncherBypass(currentSelected?.appid || '');
 	});
-	manualAppIdInput.addEventListener('input', renderManualAppId);
+	manualAppIdInput.addEventListener('input', () => {
+		renderManualAppId();
+		updateLauncherBypass(manualAppIdInput.value.trim());
+	});
 	renderCandidate();
-	if (hasTrackingRecommendation) trackingLabel.style.display = 'flex';
+	if (loading) {
+		status.textContent = gdlText('link_searching', 'Searching for Steam matches…');
+		status.style.color = '#66c0f4';
+		confirm.disabled = true;
+		confirm.style.opacity = '.65';
+	}
+	const exeSummary = overlay.querySelector('.gdl-manual-link-exe-summary') as HTMLElement;
+	const updateExeSummary = () => {
+		if (hasTrackingRecommendation && trackingInput.checked) {
+			const recName = shortcutPathBasename(context.recommendedExePath || '') || context.recommendedExePath || '';
+			exeSummary.textContent = gdlText('selected_executable', 'Selected executable: {exe}', { exe: recName });
+			exeSummary.style.color = '#a4d007';
+		} else {
+			exeSummary.textContent = gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: exeName });
+			exeSummary.style.color = '#8f98a0';
+		}
+	};
+	if (hasTrackingRecommendation) {
+		trackingLabel.style.display = 'flex';
+		trackingInput.checked = true;
+		trackingInput.addEventListener('change', updateExeSummary);
+		updateExeSummary();
+	}
 
-	const allowNoLauncher = detection.launcher_detected
-		&& !detection.generic_launcher
-		&& !isUnrealShippingExecutable(context.exePath || '');
-	if (allowNoLauncher) launcherLabel.style.display = 'flex';
+	updateLauncherBypass(candidates[0]?.appid || '');
 
 	let modalSubmitting = false;
 	let linkSucceeded = false;
-	const setProgress = (completed: number, warning = false) => {
+	let successfulLinkedShortcutId: number | null = null;
+	let queuedLinkWatch: ReturnType<typeof setInterval> | null = null;
+	let queuedInBackground = false;
+	const stopQueuedLinkWatch = (): void => {
+		if (queuedLinkWatch !== null) clearInterval(queuedLinkWatch);
+		queuedLinkWatch = null;
+	};
+	const setProgress = (completed: number, warning = false, active = 0) => {
 		for (const step of Array.from(progress.querySelectorAll<HTMLElement>('[data-step]'))) {
 			const index = ['link', 'identity', 'assets'].indexOf(String(step.dataset.step)) + 1;
-			step.style.background = index <= completed ? (warning && index === 3 ? 'rgba(229,173,55,.18)' : 'rgba(91,163,43,.18)') : 'rgba(255,255,255,.05)';
-			step.style.color = index <= completed ? (warning && index === 3 ? '#e5ad37' : '#a4d007') : '#8f98a0';
+			step.style.background = index <= completed
+				? (warning && index === 3 ? 'rgba(229,173,55,.18)' : 'rgba(91,163,43,.18)')
+				: index === active ? 'rgba(102,192,244,.16)' : 'rgba(255,255,255,.05)';
+			step.style.color = index <= completed
+				? (warning && index === 3 ? '#e5ad37' : '#a4d007')
+				: index === active ? '#66c0f4' : '#8f98a0';
 		}
 	};
 	const dismiss = () => {
-		if (modalSubmitting) return;
-		if (automaticNativeAddReview && !linkSucceeded) suppressNativeAddAutoPrompt(context.shortcutAppId, context.exePath);
+		// Closing is always allowed. The link transaction continues in the
+		// background and the retry queue will reconcile it if Steam is still
+		// rebuilding the shortcut identity; never trap the user behind a modal.
+		stopQueuedLinkWatch();
+		modalSubmitting = false;
 		closeShortcutManualLinkModal(targetDoc, context.shortcutAppId, false);
+		if (successfulLinkedShortcutId) {
+			const liveDoc = shortcutRuntimeHost().getMainWindowDoc() || targetDoc;
+			navigateToLibraryShortcut(liveDoc, successfulLinkedShortcutId);
+			shortcutRuntimeHost().resetLibraryInjection?.(true, liveDoc);
+		}
 	};
 	overlay.querySelector('.gdl-manual-link-close')?.addEventListener('click', dismiss);
 	cancel.addEventListener('click', dismiss);
@@ -293,6 +368,64 @@ export function showShortcutManualLinkModal(
 		}
 	};
 	targetDoc.addEventListener('keydown', activeModalEscapeHandler);
+	const watchQueuedLink = (jobId: string): void => {
+		stopQueuedLinkWatch();
+		queuedInBackground = true;
+		confirm.disabled = true;
+		confirm.style.opacity = '.65';
+		cancel.disabled = false;
+		cancel.textContent = gdlText('close', 'Close');
+		const refreshQueuedState = (): void => {
+			if (!targetDoc.getElementById('gdl-manual-link-modal')) {
+				stopQueuedLinkWatch();
+				return;
+			}
+			const job = getPendingLinkJob(jobId);
+			if (!job) {
+				stopQueuedLinkWatch();
+				queuedInBackground = false;
+				linkSucceeded = true;
+				setProgress(3);
+				status.textContent = gdlText('link_queued_complete', '✓ The background link completed. The game is ready in your library.');
+				status.style.color = '#5ba32b';
+				confirm.style.display = 'none';
+				cancel.textContent = gdlText('done', 'Done');
+				shortcutRuntimeHost().resetLibraryInjection?.(true, shortcutRuntimeHost().getMainWindowDoc() || targetDoc);
+				return;
+			}
+			if (job.status === 'failed') {
+				stopQueuedLinkWatch();
+				queuedInBackground = false;
+				status.textContent = gdlText('link_queued_failed', 'The background link could not be completed. You can try again.');
+				status.style.color = '#ff6b6b';
+				confirm.disabled = false;
+				confirm.style.opacity = '1';
+				return;
+			}
+			if (job.attempts > 0) {
+				status.textContent = gdlText('link_queued_retrying', 'Retrying the link in the background (attempt {attempts}).', { attempts: job.attempts });
+				status.style.color = '#e5ad37';
+			}
+		};
+		refreshQueuedState();
+		if (queuedInBackground) queuedLinkWatch = setInterval(refreshQueuedState, 1000);
+	};
+	const queueLinkInBackground = (steamAppId: string, shortcutAppId = context.shortcutAppId, repairResources = false): void => {
+		const job = enqueueLinkJob({
+			title: context.title,
+			shortcutAppId,
+			steamAppId,
+			skipLauncher: launcherInput.checked || shouldAutoApplyNoLauncher(steamAppId),
+			existingLaunchOptions: context.launchOptions,
+			trackingExecutable: hasTrackingRecommendation && trackingInput.checked ? context.recommendedExePath : '',
+			trackingStartDir: hasTrackingRecommendation && trackingInput.checked ? context.recommendedStartDir : '',
+			shortcutExecutable: context.exePath || '',
+			repairResources,
+		});
+		status.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
+		status.style.color = '#66c0f4';
+		watchQueuedLink(job.id);
+	};
 	confirm.addEventListener('click', async () => {
 		if (modalSubmitting) return;
 		const manualAppId = manualAppIdInput.value.trim();
@@ -313,8 +446,10 @@ export function showShortcutManualLinkModal(
 		shortcutLinkInProgress = true;
 		setProgress(1);
 		confirm.disabled = true;
-		cancel.disabled = true;
+		cancel.disabled = false;
+		cancel.textContent = gdlText('close', 'Close');
 		confirm.style.opacity = '.65';
+		cancelPendingLinkJobs(context.shortcutAppId, context.title);
 		undismissShortcut(context.shortcutAppId);
 
 		try {
@@ -323,7 +458,7 @@ export function showShortcutManualLinkModal(
 				title: context.title,
 				shortcutAppId: context.shortcutAppId,
 				steamAppId,
-				skipLauncher: allowNoLauncher && launcherInput.checked,
+				skipLauncher: launcherInput.checked || shouldAutoApplyNoLauncher(steamAppId),
 				existingLaunchOptions: context.launchOptions,
 				trackingExecutable: hasTrackingRecommendation && trackingInput.checked ? context.recommendedExePath : '',
 				trackingStartDir: hasTrackingRecommendation && trackingInput.checked ? context.recommendedStartDir : '',
@@ -331,30 +466,25 @@ export function showShortcutManualLinkModal(
 				onStatus: (message, color = '#8f98a0') => {
 					status.textContent = message;
 					status.style.color = color;
-					if (/actualizando nombre|updating name/i.test(message)) setProgress(2);
+				},
+				onPhase: phase => {
+					if (phase === 'identity') setProgress(1, false, 2);
+					if (phase === 'assets') setProgress(2, false, 3);
 				},
 			});
 			if (result.ok) {
 				linkSucceeded = true;
-				const setup = result.setup;
-				const complete = Boolean(setup?.nameReady && setup?.iconApplied && setup?.artworkComplete);
-				setProgress(3, !complete);
+				const setup = result.setup; setProgress(3, false);
 				resultPanel.style.display = 'block';
-				resultPanel.style.border = `1px solid ${complete ? 'rgba(91,163,43,.48)' : 'rgba(229,173,55,.48)'}`;
-				resultPanel.style.background = complete ? 'rgba(91,163,43,.12)' : 'rgba(229,173,55,.10)';
-				resultPanel.style.color = complete ? '#b4d99a' : '#e5c07b';
-				if (complete) {
-					const community = setup?.communityArtwork?.length
-						? gdlText('steamgriddb_contributed', ' SteamGridDB provided: {assets}.', { assets: setup.communityArtwork.join(', ') }) : '';
-					resultPanel.innerHTML = `<strong style="color:#a4d007;">${escapeHtml(gdlText('link_complete_title', '✓ Link complete.'))}</strong><br>${escapeHtml(gdlText('link_complete_body', 'The official name, icon, and four library images were applied successfully.'))}${escapeHtml(community)}`;
-					status.textContent = gdlText('link_ready_library', 'The game is ready in your library.');
-				} else {
-					const missing = setup?.missingArtwork?.length
-						? gdlText('link_warning_missing', ' Missing: {assets}.', { assets: setup.missingArtwork.join(', ') }) : '';
-					const iconWarning = setup?.iconApplied ? '' : gdlText('link_warning_icon', 'The official icon could not be applied. ');
-					resultPanel.innerHTML = `<strong style="color:#e5ad37;">${escapeHtml(gdlText('link_warning_title', 'Linked with warnings.'))}</strong><br>${escapeHtml(iconWarning + missing + gdlText('link_warning_fallback', 'When Steam does not publish a library asset, its available official artwork is retained as an alternative.'))}`;
-					status.textContent = gdlText('link_saved_review', 'The link was saved; review the indicated artwork.');
-				}
+				const resourcesComplete = Boolean(setup?.artworkComplete && setup?.iconApplied);
+				Object.assign(resultPanel.style, { border: resourcesComplete ? '1px solid rgba(91,163,43,.48)' : '1px solid rgba(229,173,55,.48)', background: resourcesComplete ? 'rgba(91,163,43,.12)' : 'rgba(229,173,55,.12)', color: resourcesComplete ? '#b4d99a' : '#f0c36b' });
+				const community = setup?.communityArtwork?.length
+					? gdlText('steamgriddb_contributed', ' SteamGridDB provided: {assets}.', { assets: setup.communityArtwork.join(', ') }) : '';
+				resultPanel.innerHTML = resourcesComplete
+					? `<strong style="color:#a4d007;">${escapeHtml(gdlText('link_complete_title', '✓ Link complete.'))}</strong><br>${escapeHtml(gdlText('link_complete_body', 'The official name, icon, and four library images were applied successfully.'))}${escapeHtml(community)}`
+					: `<strong>${escapeHtml(gdlText('link_complete_title', '✓ Link complete.'))}</strong><br>${escapeHtml(gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.'))}`;
+				status.textContent = resourcesComplete ? gdlText('link_ready_library', 'The game is ready in your library.') : gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
+				if (!resourcesComplete) queueLinkInBackground(steamAppId, result.shortcutAppId || context.shortcutAppId, true);
 				confirm.style.display = 'none';
 				cancel.textContent = gdlText('done', 'Done');
 				cancel.disabled = false;
@@ -362,49 +492,28 @@ export function showShortcutManualLinkModal(
 				// The completion view stays open for the user to read, but it is no
 				// longer submitting. This lets both “Listo” and Escape close it.
 				modalSubmitting = false;
-				const liveDoc = shortcutRuntimeHost().getMainWindowDoc() || targetDoc;
-				shortcutRuntimeHost().resetLibraryInjection?.(true, liveDoc);
+				successfulLinkedShortcutId = Number(result.shortcutAppId || context.shortcutAppId) || null;
 				return;
 			}
 			if (!result.ok) {
 				const retryable = !['invalid_appid', 'refusing_to_modify_native_steam_app'].includes(String(result.error || ''));
 				if (retryable) {
-					enqueueLinkJob({
-						title: context.title,
-						shortcutAppId: result.shortcutAppId || context.shortcutAppId,
-						steamAppId,
-						skipLauncher: allowNoLauncher && launcherInput.checked,
-						existingLaunchOptions: context.launchOptions,
-						trackingExecutable: hasTrackingRecommendation && trackingInput.checked ? context.recommendedExePath : '',
-						trackingStartDir: hasTrackingRecommendation && trackingInput.checked ? context.recommendedStartDir : '',
-						shortcutExecutable: context.exePath || '',
-					});
-					status.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
-					status.style.color = '#66c0f4';
+					queueLinkInBackground(steamAppId, result.shortcutAppId || context.shortcutAppId);
 				}
 				backendLog(`Link did not complete for ${context.title}: ${result.error || 'unknown_error'}`);
 			}
 		} catch (error) {
-			enqueueLinkJob({
-				title: context.title,
-				shortcutAppId: context.shortcutAppId,
-				steamAppId,
-				skipLauncher: allowNoLauncher && launcherInput.checked,
-				existingLaunchOptions: context.launchOptions,
-				trackingExecutable: hasTrackingRecommendation && trackingInput.checked ? context.recommendedExePath : '',
-				trackingStartDir: hasTrackingRecommendation && trackingInput.checked ? context.recommendedStartDir : '',
-				shortcutExecutable: context.exePath || '',
-			});
-			status.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
-			status.style.color = '#66c0f4';
+			queueLinkInBackground(steamAppId);
 			backendLog(`Background link failed for ${context.title}: ${error}`);
 		} finally {
 			shortcutLinkInProgress = false;
 			if (targetDoc.getElementById('gdl-manual-link-modal') && !linkSucceeded) {
 				modalSubmitting = false;
-				confirm.disabled = false;
 				cancel.disabled = false;
-				confirm.style.opacity = '1';
+				if (!queuedInBackground) {
+					confirm.disabled = false;
+					confirm.style.opacity = '1';
+				}
 			}
 		}
 	});
@@ -412,9 +521,48 @@ export function showShortcutManualLinkModal(
 	targetDoc.body.appendChild(overlay);
 }
 
-async function inspectShortcutReview(record: { id: number; title: string }, source: ShortcutLinkReviewSource): Promise<void> {
-	if (shortcutMutationInProgress()) {
-		setTimeout(() => { void inspectShortcutReview(record, source); }, 250);
+async function inspectShortcutReview(
+	record: { id: number; title: string },
+	source: ShortcutLinkReviewSource,
+	targetDoc?: Document | null,
+): Promise<void> {
+	// A dismissed shortcut intentionally renders the manual-link button even if
+	// an older mapping remains on disk. It must be allowed to re-open review.
+	if (shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id)) return;
+	// Paint the real picker immediately. Detection continues in the background
+	// and replaces this same modal once candidates are ready; there is no separate
+	// loading dialog that makes the click feel delayed or disconnected.
+	const immediateDoc = (targetDoc && targetDoc.body)
+		? targetDoc
+		: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
+	const immediateContext: ShortcutDetectionContext = {
+		shortcutAppId: record.id,
+		title: record.title,
+		exePath: '',
+		startDir: '',
+		launchOptions: '',
+		bootstrapDetected: false,
+		recommendedExePath: '',
+		recommendedStartDir: '',
+	};
+	const loadingShown = Boolean(immediateDoc?.body && !immediateDoc.getElementById('gdl-manual-link-modal'));
+	if (loadingShown) {
+		showShortcutManualLinkModal(immediateDoc as Document, immediateContext, { candidates: [] }, { source, loading: true });
+		immediateDoc?.getElementById('gdl-manual-link-modal')?.setAttribute('data-gdl-link-loading', '1');
+	}
+	// A background queue mutation must not make an explicit click look dead.
+	// Wait briefly for the current mutation to settle, then continue even if a
+	// stale flag survived a route/cache rebuild. Automatic prompts still yield
+	// immediately while another identity operation is active.
+	if (shortcutMutationInProgress() && source === 'manual') {
+		let waitMs = 0;
+		while (shortcutMutationInProgress() && waitMs < 8000) {
+			await new Promise(resolve => setTimeout(resolve, 250));
+			waitMs += 250;
+		}
+	}
+	if (shortcutMutationInProgress() && source !== 'manual') {
+		backendLog(`Ignoring automatic link review for ${record.title} while another identity operation is active.`);
 		return;
 	}
 	if (shortcutDetectionInFlight.has(record.id)) return;
@@ -422,7 +570,7 @@ async function inspectShortcutReview(record: { id: number; title: string }, sour
 	try {
 		let context: ShortcutDetectionContext | null = null;
 		for (let attempt = 0; attempt < 3; attempt++) {
-			context = await buildShortcutDetectionContext(null, record.title, record.id);
+			context = await buildShortcutDetectionContext(immediateDoc, record.title, record.id);
 			if (context?.exePath || context?.title) break;
 			await new Promise(resolve => setTimeout(resolve, 100));
 		}
@@ -443,7 +591,29 @@ async function inspectShortcutReview(record: { id: number; title: string }, sour
 			return;
 		}
 
-		const detection = await detectShortcutCandidates(context);
+		let rawDetection: ShortcutDetectionResult | null = null;
+		try {
+			rawDetection = await detectShortcutCandidates(context);
+		} catch (detectionErr) {
+			backendLog(`Candidate detection error for ${record.title}: ${detectionErr}`);
+		}
+		const detection: ShortcutDetectionResult = rawDetection && typeof rawDetection === 'object'
+			? {
+				candidates: Array.isArray(rawDetection.candidates) ? rawDetection.candidates : [],
+				launcher_detected: Boolean(rawDetection.launcher_detected),
+				generic_launcher: Boolean(rawDetection.generic_launcher),
+				executable: String(rawDetection.executable || ''),
+				source: String(rawDetection.source || ''),
+				error: rawDetection.error,
+			}
+			: {
+				candidates: [],
+				launcher_detected: false,
+				generic_launcher: false,
+				executable: '',
+				source: '',
+			};
+
 		const existingMappedId = findMappingForShortcut(record.id, record.title, context.exePath);
 		if (existingMappedId && /^\d+$/.test(existingMappedId)) {
 			const mappedData = await getGameData(existingMappedId);
@@ -466,219 +636,93 @@ async function inspectShortcutReview(record: { id: number; title: string }, sour
 			}
 		}
 
-		while (shortcutManualLinkModalOpen && manualLinkModalPresent()) {
-			await new Promise(resolve => setTimeout(resolve, 250));
-		}
-		const doc = shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null);
+		// A route change or an explicit close can remove the immediate modal while
+		// detection is running. Never resurrect it after that cancellation.
+		if (loadingShown && !manualLinkModalPresent(immediateDoc)) return;
+		const doc = (immediateDoc && immediateDoc.body)
+			? immediateDoc
+			: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
 		if (!doc?.body) return;
-		if (shortcutMutationInProgress()) {
-			setTimeout(() => { void inspectShortcutReview(record, source); }, 250);
-			return;
+		// The immediate picker is replaced in-place with the detected candidate
+		// data. Closing it is an explicit cancellation, so stop here.
+		if (loadingShown) {
+			if (!doc.getElementById('gdl-manual-link-modal')) return;
+			doc.getElementById('gdl-manual-link-modal')?.remove();
 		}
-		if (source === 'native-add-auto' && isNativeAddAutoPromptSuppressed(record.id)) {
-			backendLog(`Native-add link prompt suppressed for ${record.title} (${record.id}).`);
-			return;
-		}
+		if (shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id) && source !== 'manual') return;
 		backendLog(`Showing ${source} link modal for ${record.title} with ${detection.candidates.length} candidate(s)`);
 		showShortcutManualLinkModal(doc, context, detection, { source });
 	} catch (error) {
 		backendLog(`Manual shortcut review failed for ${record.title}: ${error}`);
 	} finally {
+		if (loadingShown) {
+			const liveDoc = (immediateDoc && immediateDoc.body)
+				? immediateDoc
+				: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
+			liveDoc?.querySelector('#gdl-manual-link-modal[data-gdl-link-loading="1"]')?.remove();
+		}
 		shortcutDetectionScheduled.delete(record.id);
 		shortcutDetectionInFlight.delete(record.id);
 	}
 }
 
-function scheduleShortcutReview(record: { id: number; title: string }, delay = 50, source: ShortcutLinkReviewSource = 'manual'): void {
+function scheduleShortcutReview(
+	record: { id: number; title: string },
+	delay = 50,
+	source: ShortcutLinkReviewSource = 'manual',
+	targetDoc?: Document | null,
+): void {
 	if (!Number.isFinite(record.id) || record.id < 2147483648 || !record.title.trim()) return;
 	if (shortcutDetectionScheduled.has(record.id) || shortcutDetectionInFlight.has(record.id)) return;
 	shortcutDetectionScheduled.add(record.id);
 	setTimeout(() => {
-		void inspectShortcutReview(record, source).finally(() => shortcutDetectionScheduled.delete(record.id));
+		void inspectShortcutReview(record, source, targetDoc).finally(() => shortcutDetectionScheduled.delete(record.id));
 	}, delay);
 }
 
-/** User-initiated linking. No background path calls this workflow. */
-export function requestManualShortcutLink(shortcutAppId: number): boolean {
-	const record = getAllShortcutRecords().find(candidate => candidate.id === shortcutAppId);
-	if (!record || shortcutAlreadyLinked(record.id)) return false;
-	// Explicit user actions may expose every Store candidate plus manual AppID entry.
-	undismissShortcut(record.id);
-	scheduleShortcutReview(record, 50, 'manual');
-	return true;
-}
-
-
-
-/** Native-add-only automatic review. This function is intentionally not used by
- * startup, language changes, navigation, unlink, or ordinary shortcut scans. */
-export function requestNativeAddShortcutReview(shortcutAppId: number): boolean {
-	const record = getAllShortcutRecords().find(candidate => candidate.id === shortcutAppId);
-	if (!record || shortcutAlreadyLinked(record.id) || isNativeAddAutoPromptSuppressed(record.id)) return false;
-	scheduleShortcutReview(record, 80, 'native-add-auto');
-	return true;
-}
-
-export type BulkLinkOutcomeStatus = 'linked' | 'queued' | 'skipped' | 'failed';
-
-export interface BulkLinkGameOutcome {
-	title: string;
-	shortcutAppId: number;
-	steamAppId?: string;
-	status: BulkLinkOutcomeStatus;
-	reason?: string;
-}
-
-export interface BulkLinkAllResult {
-	total: number;
-	matched: number;
-	linked: number;
-	queued: number;
-	skipped: number;
-	failed: number;
-	outcomes: BulkLinkGameOutcome[];
-}
-
-export type BulkLinkProgressPhase = 'analyzing' | 'linking';
-
-function reliableBulkCandidate(
-	context: ShortcutDetectionContext,
-	candidates: ShortcutDetectionCandidate[],
-): ShortcutDetectionCandidate | null {
-	const top = candidates[0];
-	if (!top) return null;
-	const second = candidates[1];
-	const secondScore = second?.score ?? 0;
-	const margin = top.score - secondScore;
-	const reasons = new Set((top.reasons || []).map(String));
-	const exactTitle = normalizeTitle(context.title) !== ''
-		&& normalizeTitle(context.title) === normalizeTitle(top.name);
-	const secondExactTitle = Boolean(second && normalizeTitle(context.title) !== ''
-		&& normalizeTitle(context.title) === normalizeTitle(second.name));
-	const aliasOnly = reasons.has('alias_requires_confirmation') && !top.executable_match;
-	const invalidType = reasons.has('non_game_result');
-
-	if (invalidType) return null;
-	// Authoritative evidence: an AppID read from the launch arguments,
-	// steam_appid.txt or appmanifest and verified against Steam appdetails.
-	if (top.direct && top.score >= 80) return top;
-	if (top.confidence === 'exact' && top.score >= 82) return top;
-
-	// A unique exact official title is authoritative enough for experimental
-	// bulk linking even when the candidate was originally discovered through a
-	// maintained alias (wukong, rdr2, etc.).  The secondExactTitle guard keeps
-	// editions that genuinely share a Store title out of silent bulk linking.
-	if (exactTitle && !secondExactTitle && top.score >= 70) return top;
-
-	// An exact game-folder match is also strong evidence for deeply nested
-	// shipping executables (Game\Binaries\Win64\*-Shipping.exe).
-	if (reasons.has('folder_exact') && top.score >= 80 && margin >= 5) return top;
-
-	// A launch executable confirmed in Steam appinfo is strong evidence. Keep a
-	// modest margin unless the title itself is exact, so generic game.exe names
-	// cannot decide between editions or sequels on their own.
-	if (top.executable_match && top.score >= 76 && (exactTitle || margin >= 8)) return top;
-
-	// Strong non-exact candidates still need separation from the runner-up.
-	if (top.confidence === 'high' && top.score >= 88 && margin >= 8) return top;
-	if (top.score >= 93 && margin >= 12 && !aliasOnly) return top;
-	return null;
-}
-
-/** Experimental bulk linking: detect all candidates first, then link only
- * high-confidence matches without opening per-game modals. Ambiguous games are
- * deliberately skipped so the feature can never guess through franchise names. */
-export async function linkAllShortcutsExperimental(
-	onProgress?: (done: number, total: number, title: string, phase: BulkLinkProgressPhase) => void,
-): Promise<BulkLinkAllResult> {
-	const records = getAllShortcutRecords().filter(record => !shortcutAlreadyLinked(record.id));
-	const result: BulkLinkAllResult = {
-		total: records.length, matched: 0, linked: 0, queued: 0, skipped: 0, failed: 0, outcomes: [],
-	};
-	if (!records.length) return result;
-
-	let analyzed = 0;
-	const prepared = await Promise.all(records.map(async record => {
+function resolveOrSynthesizeShortcutRecord(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): { id: number; title: string; app: any } | null {
+	const numericId = Number(shortcutAppId);
+	let normalizedId = Number.isFinite(numericId) && numericId < SHORTCUT_THRESHOLD ? (numericId >>> 0) : numericId;
+	const records = getAllShortcutRecords();
+	if (!records.some(candidate => candidate.id === normalizedId) && gameTitle.trim()) {
 		try {
-			const context = await buildShortcutDetectionContext(null, record.title, record.id);
-			if (!context) return { record, context: null, candidate: null, reason: 'context_unavailable' };
-			const detection = await detectShortcutCandidates(context);
-			const candidate = reliableBulkCandidate(context, detection?.candidates || []);
-			return { record, context, candidate, reason: candidate ? '' : 'ambiguous_or_low_confidence' };
-		} catch (error) {
-			backendLog(`Bulk detection failed for ${record.title}: ${error}`);
-			return { record, context: null, candidate: null, reason: 'detection_failed' };
-		} finally {
-			analyzed += 1;
-			onProgress?.(analyzed, records.length, record.title, 'analyzing');
-		}
-	}));
-
-	const actionable = prepared.filter(item => item.context && item.candidate) as Array<{
-		record: { id: number; title: string };
-		context: ShortcutDetectionContext;
-		candidate: ShortcutDetectionCandidate;
-		reason: string;
-	}>;
-	result.matched = actionable.length;
-	for (const item of prepared) {
-		if (item.context && item.candidate) continue;
-		const status: BulkLinkOutcomeStatus = item.reason === 'detection_failed' ? 'failed' : 'skipped';
-		if (status === 'failed') result.failed += 1;
-		else result.skipped += 1;
-		result.outcomes.push({
-			title: item.record.title,
-			shortcutAppId: item.record.id,
-			status,
-			reason: item.reason || 'ambiguous_or_low_confidence',
-		});
+			const activeDoc = targetDoc || shortcutRuntimeHost().getMainWindowDoc();
+			const active = findActiveShortcutAppId(activeDoc as Document, gameTitle);
+			const activeId = Number(active || 0);
+			if (activeId >= SHORTCUT_THRESHOLD && records.some(candidate => candidate.id === activeId)) normalizedId = activeId;
+		} catch {}
 	}
-
-	let cursor = 0;
-	let completed = 0;
-	const worker = async (): Promise<void> => {
-		while (true) {
-			const index = cursor++;
-			if (index >= actionable.length) return;
-			const item = actionable[index];
-			undismissShortcut(item.record.id);
-			try {
-				const linked = await linkShortcutToSteam({
-					doc: null,
-					title: item.context.title,
-					shortcutAppId: item.record.id,
-					steamAppId: item.candidate.appid,
-					shortcutExecutable: item.context.exePath,
-					refreshLibrary: false,
-					onStatus: message => backendLog(`Bulk link ${item.record.title}: ${message}`),
-				});
-				if (linked.ok) {
-					result.linked += 1;
-					result.outcomes.push({ title: item.record.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid, status: 'linked' });
-				} else if (!['invalid_appid', 'refusing_to_modify_native_steam_app'].includes(String(linked.error || ''))) {
-					enqueueLinkJob({
-						title: item.context.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid,
-						skipLauncher: false, existingLaunchOptions: item.context.launchOptions,
-						trackingExecutable: '', trackingStartDir: '', shortcutExecutable: item.context.exePath,
-					});
-					result.queued += 1;
-					result.outcomes.push({ title: item.record.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid, status: 'queued', reason: String(linked.error || 'setup_incomplete') });
-				} else {
-					result.failed += 1;
-					result.outcomes.push({ title: item.record.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid, status: 'failed', reason: String(linked.error || 'link_failed') });
-				}
-			} catch (error) {
-				backendLog(`Bulk link failed for ${item.record.title}: ${error}`);
-				result.failed += 1;
-				result.outcomes.push({ title: item.record.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid, status: 'failed', reason: 'link_failed' });
-			} finally {
-				completed += 1;
-				onProgress?.(completed, actionable.length, item.record.title, 'linking');
-			}
-		}
-	};
-
-	await Promise.all([worker(), worker()]);
-	shortcutRuntimeHost().resetLibraryInjection?.(true, shortcutRuntimeHost().getMainWindowDoc());
-	return result;
+	const exact = normalizedId ? records.find(candidate => candidate.id === normalizedId) : undefined;
+	const titleMatches = gameTitle.trim() ? records.filter(candidate => normalizeTitle(candidate.title) === normalizeTitle(gameTitle)) : [];
+	const record = exact || (titleMatches.length === 1 ? titleMatches[0] : (titleMatches.find(c => !shortcutAlreadyLinked(c.id)) || titleMatches[0]));
+	if (record) return record;
+	const cleanTitle = gameTitle.trim();
+	if (!cleanTitle && (!normalizedId || normalizedId < SHORTCUT_THRESHOLD)) return null;
+	let fallbackId = normalizedId && normalizedId >= SHORTCUT_THRESHOLD ? normalizedId : 0;
+	if (!fallbackId && cleanTitle) {
+		let hash = 0;
+		for (let i = 0; i < cleanTitle.length; i++) hash = (hash * 31 + cleanTitle.charCodeAt(i)) >>> 0;
+		fallbackId = SHORTCUT_THRESHOLD + (hash % 1000000000);
+	}
+	return { id: fallbackId, title: cleanTitle || 'Non-Steam Game', app: null };
 }
+
+/** User-initiated linking. No background path calls this workflow. */
+export function requestManualShortcutLink(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): boolean {
+	const record = resolveOrSynthesizeShortcutRecord(shortcutAppId, gameTitle, targetDoc);
+	if (!record) return false;
+	undismissShortcut(record.id);
+	scheduleShortcutReview(record, 0, 'manual', targetDoc);
+	return true;
+}
+
+/** Native-add-only automatic review. */
+export function requestNativeAddShortcutReview(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): boolean {
+	const record = resolveOrSynthesizeShortcutRecord(shortcutAppId, gameTitle, targetDoc);
+	if (!record || shortcutAlreadyLinked(record.id)) return false;
+	undismissShortcut(record.id);
+	scheduleShortcutReview(record, 0, 'native-add-auto', targetDoc);
+	return true;
+}
+
+export { linkAllShortcutsExperimental, type BulkLinkAllResult, type BulkLinkGameOutcome, type BulkLinkOutcomeStatus, type BulkLinkProgressPhase } from './bulk-link';

@@ -2,10 +2,10 @@ import type { CommunityContentItem, SteamGameData } from '../../domain/types';
 import { escapeHtml } from '../../core/text';
 import { gdlText, loc } from '../../steam/localization';
 import type { NativeLibraryLayout } from './layout';
-import { buildNativeSidebarSection } from './layout';
 
 const progressiveRevealCleanup = new WeakMap<HTMLElement, () => void>();
 const deferredHydrationCleanup = new WeakMap<HTMLElement, () => void>();
+const adaptiveWidthCleanup = new WeakMap<HTMLElement, () => void>();
 
 function createCommunityHeader(doc: Document): HTMLElement {
 	const header = doc.createElement('div');
@@ -19,6 +19,67 @@ function createCommunityHeader(doc: Document): HTMLElement {
 export function disposeCommunityProgressiveReveal(root: HTMLElement): void {
 	progressiveRevealCleanup.get(root)?.();
 	deferredHydrationCleanup.get(root)?.();
+}
+
+/** Dispose every observer owned by a Community section before removing it. */
+export function disposeCommunitySection(root: HTMLElement): void {
+	disposeCommunityProgressiveReveal(root);
+	adaptiveWidthCleanup.get(root)?.();
+}
+
+/**
+ * Let Community use the area below a shorter right sidebar without ever
+ * crossing it. Steam's sidebar is a float, so this must follow live geometry:
+ * news hydration and optional sidebar sections can change both heights later.
+ */
+function setupCommunityAdaptiveWidth(
+	doc: Document,
+	root: HTMLElement,
+	activity: HTMLElement,
+	layout: NativeLibraryLayout,
+): void {
+	adaptiveWidthCleanup.get(root)?.();
+	const sidebar = layout.sidebarColumn;
+	const content = layout.contentColumn;
+	if (!sidebar || !content) return;
+	const win = doc.defaultView;
+	let frame = 0;
+	let disposed = false;
+	const update = (): void => {
+		frame = 0;
+		if (disposed || !root.isConnected || !activity.isConnected || !sidebar.isConnected || !content.isConnected) return;
+		const sidebarStyle = win?.getComputedStyle(sidebar);
+		const sidebarRect = sidebar.getBoundingClientRect();
+		const activityRect = activity.getBoundingClientRect();
+		const contentRect = content.getBoundingClientRect();
+		const sidebarVisible = sidebarStyle?.display !== 'none' && sidebarStyle?.visibility !== 'hidden'
+			&& sidebarRect.width > 1 && sidebarRect.height > 1;
+		const canUseFreedSidebarArea = !sidebarVisible || activityRect.bottom + 34 >= sidebarRect.bottom - 1;
+		root.classList.toggle('gdl-community-wide', canUseFreedSidebarArea);
+		if (canUseFreedSidebarArea) root.style.setProperty('--gdl-community-wide-width', `${Math.max(0, contentRect.width)}px`);
+		else root.style.removeProperty('--gdl-community-wide-width');
+	};
+	const queueUpdate = (): void => {
+		if (disposed || frame) return;
+		frame = win?.requestAnimationFrame(update) || 0;
+		if (!frame) update();
+	};
+	const ResizeObserverCtor = win?.ResizeObserver;
+	const observer = typeof ResizeObserverCtor === 'function' ? new ResizeObserverCtor(queueUpdate) : null;
+	observer?.observe(activity);
+	observer?.observe(sidebar);
+	observer?.observe(content);
+	win?.addEventListener('resize', queueUpdate, { passive: true });
+	const cleanup = (): void => {
+		if (disposed) return;
+		disposed = true;
+		if (frame) win?.cancelAnimationFrame(frame);
+		observer?.disconnect();
+		win?.removeEventListener('resize', queueUpdate);
+		adaptiveWidthCleanup.delete(root);
+	};
+	adaptiveWidthCleanup.set(root, cleanup);
+	queueUpdate();
 }
 
 /** Progressive reveal that owns and disposes every listener/observer it installs. */
@@ -94,6 +155,7 @@ export function scheduleCommunityHydration(
 	data: SteamGameData,
 	load: () => Promise<CommunityContentItem[]>,
 	isCurrent: () => boolean,
+	onHydrated?: (items: CommunityContentItem[]) => void,
 ): () => void {
 	const root = doc.getElementById('gdl-community-content') as HTMLElement | null;
 	if (!root) return () => {};
@@ -112,11 +174,20 @@ export function scheduleCommunityHydration(
 		started = true;
 		observer?.disconnect();
 		void load().then(items => {
-			if (disposed || !root.isConnected || !isCurrent() || items.length === 0) return;
+			if (disposed || !root.isConnected || !isCurrent()) return;
+			onHydrated?.(items);
 			const inner = root.querySelector<HTMLElement>('#gdl-community-inner');
 			if (!inner) return;
-			inner.innerHTML = renderCommunityContentHtml(data, items);
-			setupCommunityProgressiveReveal(doc, root);
+			if (items.length > 0) {
+				const signature = communityItemsSignature(items);
+				if (root.dataset.gdlCommunitySignature !== signature) {
+					inner.innerHTML = renderCommunityContentHtml(data, items);
+					root.dataset.gdlCommunitySignature = signature;
+				}
+				setupCommunityProgressiveReveal(doc, root);
+			} else if (!inner.querySelector('.gdl-community-card')) {
+				root.style.display = 'none';
+			}
 		}).finally(cleanup);
 	};
 	const Observer = (doc.defaultView as any)?.IntersectionObserver as typeof IntersectionObserver | undefined;
@@ -130,6 +201,10 @@ export function scheduleCommunityHydration(
 	}
 	deferredHydrationCleanup.set(root, cleanup);
 	return cleanup;
+}
+
+export function communityItemsSignature(items: CommunityContentItem[]): string {
+	return `${items.length}:` + items.map(item => `${item.type}|${item.image}|${item.link || ''}`).join('|');
 }
 
 export function renderCommunityContentHtml(data: SteamGameData, communityItems: CommunityContentItem[] | undefined): string {
@@ -178,40 +253,25 @@ export function renderCommunityContentHtml(data: SteamGameData, communityItems: 
 
 export function insertCommunitySection(
 	doc: Document,
-	layout: NativeLibraryLayout,
+	_layout: NativeLibraryLayout,
 	activityWrapper: HTMLElement,
 	communityHtml: string,
 ): HTMLElement | null {
-	if (!communityHtml || !activityWrapper.parentElement) return null;
-	let node = buildNativeSidebarSection(doc, layout, {
-		sectionId: 'gdl-community-content',
-		headerText: loc('AppDetails_SectionTitle_Community', 'Community Content'),
-		innerId: 'gdl-community-inner',
-		innerHtml: communityHtml,
-		cloneInnerClass: false,
-	});
+	if (!activityWrapper.parentElement) return null;
+	const node = doc.createElement('section');
+	node.id = 'gdl-community-content';
+	node.className = 'gdl-community-section';
+	node.style.cssText = 'display:block;min-width:0;box-sizing:border-box;color:#acb2b8;font-family:inherit;padding:0 12px 24px;overflow:visible;';
+	node.appendChild(createCommunityHeader(doc));
+	const inner = doc.createElement('div');
+	inner.id = 'gdl-community-inner';
+	inner.innerHTML = communityHtml || '';
+	node.appendChild(inner);
+	activityWrapper.parentElement.insertBefore(node, activityWrapper.nextSibling);
+	setupCommunityAdaptiveWidth(doc, node, activityWrapper, _layout);
 
-	if (node) {
-		node.classList.add('gdl-community-section');
-		activityWrapper.parentElement.insertBefore(node, activityWrapper.nextSibling);
-		const region = node.querySelector<HTMLElement>('[role="region"]') || node;
-		const inner = node.querySelector<HTMLElement>('#gdl-community-inner');
-		const body = inner?.parentElement;
-		region.querySelector('h2')?.remove();
-		if (body) region.insertBefore(createCommunityHeader(doc), body);
-	} else {
-		node = doc.createElement('div');
-		node.id = 'gdl-community-content';
-		node.className = 'gdl-community-section';
-		node.style.cssText = 'color:#acb2b8;font-family:inherit;padding:0 12px 24px;overflow:visible;';
-		node.appendChild(createCommunityHeader(doc));
-		const inner = doc.createElement('div');
-		inner.id = 'gdl-community-inner';
-		inner.innerHTML = communityHtml;
-		node.appendChild(inner);
-		activityWrapper.parentElement.insertBefore(node, activityWrapper.nextSibling);
+	if (communityHtml) {
+		setupCommunityProgressiveReveal(doc, node);
 	}
-
-	setupCommunityProgressiveReveal(doc, node);
 	return node;
 }

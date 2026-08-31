@@ -37,20 +37,67 @@ export function persistMappingsSnapshot(value: Mappings): void {
 
 export let mappings: Mappings = readCachedMappings();
 
-export async function loadMappings(): Promise<void> {
-	try {
-		const json = await getAllMappings();
-		const parsed = parseMappingsResponse(json);
-		if (!parsed) throw new Error('invalid_mappings_response');
-		mappings = parsed;
-		persistMappingsSnapshot(mappings);
-		notifyMappingsChanged();
-		backendLog('Loaded mapping snapshot (' + Object.keys(mappings).length + ' entries).');
-	} catch (e) {
-		backendLog('Failed to load mappings: ' + e);
-		// Retain the last backend-verified snapshot. Clearing it here causes all
-		// linked pages to disappear temporarily when the backend starts slowly.
+const wait = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
+let mappingLoadInFlight: Promise<void> | null = null;
+let mappingOperationTail: Promise<void> = Promise.resolve();
+
+/** Backend mutations return a complete mapping snapshot. Serializing them is
+ * essential: otherwise a slower, older bulk-link response can overwrite a
+ * newer snapshot in memory and make successful links appear to disappear. */
+function enqueueMappingOperation<T>(operation: () => Promise<T>): Promise<T> {
+	const request = mappingOperationTail.then(operation, operation);
+	mappingOperationTail = request.then((): void => {}, (): void => {});
+	return request;
+}
+
+function cleanMappings(value: Record<string, string>): Mappings {
+	const clean: Mappings = {};
+	for (const [key, appId] of Object.entries(value)) {
+		if (key && typeof appId === 'string' && /^\d+$/.test(appId)) clean[key] = appId;
 	}
+	return clean;
+}
+
+async function hydrateMappings(): Promise<void> {
+	let lastError: unknown = null;
+	for (let attempt = 0; attempt < 7; attempt += 1) {
+		try {
+			const parsed = parseMappingsResponse(await getAllMappings());
+			if (!parsed) throw new Error('invalid_mappings_response');
+			const backendMappings = cleanMappings(parsed);
+			const cachedMappings = { ...mappings };
+			const backendCount = Object.keys(backendMappings).length;
+			const cachedCount = Object.keys(cachedMappings).length;
+			if (backendCount === 0 && cachedCount > 0) {
+				// A backend that is still activating (or a missing/corrupt primary
+				// file) must never erase a verified browser snapshot. Repair the
+				// source of truth transactionally from that snapshot.
+				const repairRaw = await updateMappingsBackend({ request_json: JSON.stringify({ set: cachedMappings, remove: [] }) });
+				const repair = parseMappingMutationResponse(repairRaw);
+				if (!repair?.ok) throw new Error(repair?.error || 'empty_mapping_repair_failed');
+				mappings = cleanMappings(repair.data || cachedMappings);
+				backendLog('Recovered ' + Object.keys(mappings).length + ' mapping(s) from the persistent snapshot.');
+			} else {
+				mappings = backendMappings;
+			}
+			persistMappingsSnapshot(mappings);
+			notifyMappingsChanged();
+			backendLog('Loaded mapping snapshot (' + Object.keys(mappings).length + ' entries).');
+			return;
+		} catch (error) {
+			lastError = error;
+			if (attempt < 6) await wait(Math.min(250 * (2 ** attempt), 2500));
+		}
+	}
+	backendLog('Failed to load mappings after startup retries: ' + lastError);
+	// Retain the last verified snapshot. Clearing it here makes every linked
+	// page look unlinked whenever the backend takes longer to reactivate.
+}
+
+export function loadMappings(): Promise<void> {
+	if (mappingLoadInFlight) return mappingLoadInFlight;
+	mappingLoadInFlight = enqueueMappingOperation(hydrateMappings).finally(() => { mappingLoadInFlight = null; });
+	return mappingLoadInFlight;
 }
 
 
@@ -78,7 +125,7 @@ function parseMappingMutationResponse(raw: unknown): MappingMutationResponse | n
 }
 
 /** Apply mapping aliases/removals in one backend file transaction. */
-export async function updateMappingsChecked(mutation: MappingMutation): Promise<boolean> {
+async function updateMappingsCheckedUnlocked(mutation: MappingMutation): Promise<boolean> {
 	const set: Record<string, string> = {};
 	for (const [key, value] of Object.entries(mutation.set || {})) {
 		if (key && /^\d+$/.test(String(value))) set[key] = String(value);
@@ -117,10 +164,15 @@ export async function updateMappingsChecked(mutation: MappingMutation): Promise<
 	} catch { return false; }
 }
 
-export async function saveMappingChecked(key: string, value: string): Promise<boolean> {
+export function updateMappingsChecked(mutation: MappingMutation): Promise<boolean> {
+	return enqueueMappingOperation(() => updateMappingsCheckedUnlocked(mutation));
+}
+
+export function saveMappingChecked(key: string, value: string): Promise<boolean> {
+	return enqueueMappingOperation(async () => {
 	// New source prefers the transactional endpoint. Keep legacy callables as a
 	// compatibility fallback for users who update the frontend before backend.
-	if (await updateMappingsChecked({ set: { [key]: value } })) return true;
+	if (await updateMappingsCheckedUnlocked({ set: { [key]: value } })) return true;
 	try {
 		const result = await saveMappingBackend({ non_steam_id: key, steam_id: value });
 		if (backendResultStatus(result) !== 'ok') return false;
@@ -129,10 +181,12 @@ export async function saveMappingChecked(key: string, value: string): Promise<bo
 		notifyMappingsChanged();
 		return true;
 	} catch { return false; }
+	});
 }
 
-export async function removeMappingChecked(key: string): Promise<boolean> {
-	if (await updateMappingsChecked({ remove: [key] })) return true;
+export function removeMappingChecked(key: string): Promise<boolean> {
+	return enqueueMappingOperation(async () => {
+	if (await updateMappingsCheckedUnlocked({ remove: [key] })) return true;
 	try {
 		const result = await removeMappingBackend({ non_steam_id: key });
 		if (backendResultStatus(result) !== 'ok') return false;
@@ -141,6 +195,7 @@ export async function removeMappingChecked(key: string): Promise<boolean> {
 		notifyMappingsChanged();
 		return true;
 	} catch { return false; }
+	});
 }
 
 export function shortcutMappingKey(shortcutAppId: string | number): string {
@@ -270,6 +325,17 @@ export function findMappingForTitle(title: string, shortcutAppId?: string | numb
 		if (k.startsWith('shortcut:') || k.startsWith('exe:') || k.startsWith('exe_stem:') || !/^\d+$/.test(String(v))) continue;
 		if (k.toLowerCase() === lower || normalizeTitle(k) === normKey) {
 			return String(v);
+		}
+	}
+	return null;
+}
+
+export function findShortcutIdForMappedSteamAppId(steamAppId: string | number): number | null {
+	const target = String(steamAppId);
+	for (const [key, mappedAppId] of Object.entries(mappings)) {
+		if (mappedAppId === target && key.startsWith('shortcut:')) {
+			const rawId = Number(key.replace('shortcut:', ''));
+			if (Number.isFinite(rawId) && rawId >= 2147483648) return rawId;
 		}
 	}
 	return null;

@@ -3,9 +3,9 @@ import { escapeHtml } from '../../core/text';
 import { FEED_CLASSES, POST_CLASSES } from '../../steam/css';
 import { gdlText, loc } from '../../steam/localization';
 import { GDL_INJECTED } from './constants';
+import { newsItemsSignature } from './news';
 import type { NativeLibraryLayout } from './layout';
-import { renderUnifiedActivityFeed, setupStatusPostBox } from './social';
-import { renderActivityFeedSkeletonHtml } from './activity-skeleton';
+import { renderUnifiedActivityFeedSnapshot, setupStatusPostBox } from './social';
 
 export interface ActivityViewOptions {
 	steamAppId: string;
@@ -28,28 +28,35 @@ export function createActivityView(
 
 	const postClasses = POST_CLASSES();
 	const feedClasses = FEED_CLASSES();
-	// An empty array while the asynchronous streams are unresolved is not proof
-	// that the game has no activity. Keep an honest placeholder until the feed
-	// request publishes either content or a confirmed empty result.
-	const feedHtml = options.newsItems.length > 0
-		? renderUnifiedActivityFeed(options.steamAppId, options.shortcutAppId, options.newsItems, options.headerImage)
-		: renderActivityFeedSkeletonHtml(gdlText('activity', loc('AppDetails_SectionTitle_Activity', 'Activity')));
+	// Remote activity is hydrated after the page is mounted. Leave this area
+	// empty until it arrives instead of rendering a second skeleton state.
+	const sortedNews = [...options.newsItems].filter(item => item && item.title && Number(item.date || 0) > 0).sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
+	const latestNewsUrl = String(sortedNews[0]?.url || '').trim();
+	// Always ask the feed snapshot owner for initial markup. It can reuse the
+	// last in-memory news/friend snapshot when persistent storage is under quota,
+	// avoiding an empty feed followed by a second paint on every revisit.
+	const feedSnapshot = renderUnifiedActivityFeedSnapshot(
+		options.steamAppId, options.shortcutAppId, options.newsItems, options.headerImage,
+	);
 	wrapper.innerHTML = `
-		<div class="gdl-native-activity-heading-fallback" style="font-family:'Motiva Sans',Arial,Helvetica,sans-serif;font-size:13.5px;font-weight:700;letter-spacing:1.5px;color:#8f98a0;margin:0 0 12px 0 !important;padding:0 !important;text-transform:uppercase;">${escapeHtml(gdlText('activity', loc('AppDetails_SectionTitle_Activity', 'Activity')).toUpperCase())}</div>
-		<div class="${feedClasses.AddToFeed || ''} ${feedClasses.PostTextEntry || ''} gdl-status-box-container ${postClasses.PostTextEntry || ''}" style="display:block !important;margin:0 0 16px 0 !important;min-height:0 !important;position:relative !important;z-index:50 !important;">
+		<div class="gdl-native-activity-heading-fallback gdl-ui-activity-heading" style="font-family:'Motiva Sans',Arial,Helvetica,sans-serif;font-size:13.5px;font-weight:700;letter-spacing:1.5px;color:#8f98a0;margin:0 0 12px 0 !important;padding:0 !important;text-transform:uppercase;">${escapeHtml(gdlText('activity', loc('AppDetails_SectionTitle_Activity', 'Activity')).toUpperCase())}</div>
+		<div class="${feedClasses.AddToFeed || ''} ${feedClasses.PostTextEntry || ''} gdl-status-box-container ${postClasses.PostTextEntry || ''}" style="display:block !important;margin:0 0 2px 0 !important;min-height:0 !important;position:relative !important;z-index:50 !important;">
 			<textarea id="gdl-status-text" class="${postClasses.PostTextEntryArea}" rows="1" placeholder="${escapeHtml(gdlText('post_placeholder', loc('AppActivity_StatusUpdate_Post', 'Say something about this game to your friends...')))}"></textarea>
 			<div id="gdl-status-controls" class="${postClasses.Controls}">
 				<div class="${postClasses.FormattingSpacer}"></div>
 				<button type="button" class="${postClasses.EmoticonButton} gdl-emoticon-btn" tabindex="-1" title="${escapeHtml(gdlText('emoticons', 'Emoticons'))}" style="position:relative;">
-					<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9" stroke-width="1.5"></circle><circle cx="9" cy="10" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="10" r="1.2" fill="currentColor" stroke="none"></circle><path d="M8 14c1 1.6 2.4 2.4 4 2.4s3-.8 4-2.4" stroke-width="1.5" stroke-linecap="round"></path></svg>
-					<span style="position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%;background:#ffc83d;box-shadow:0 0 6px rgba(255,200,61,0.9);pointer-events:none;"></span>
+					<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" style="display:block;">
+						<path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2Zm-3.6 7.6a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm8.7 0a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM6.5 14.1h11c0 3.3-2.46 4.1-5.5 4.1s-5.5-.8-5.5-4.1Z"/>
+					</svg>
+					<span style="position:absolute;top:3px;right:4px;width:6px;height:6px;border-radius:50%;background:#ffd000;box-shadow:0 0 5px rgba(255,208,0,.95),0 0 10px rgba(255,180,0,.5);pointer-events:none;"></span>
 				</button>
 				<button type="button" id="gdl-status-post" class="${postClasses.PostButton}">
 					<div class="${postClasses.Label}">${escapeHtml(gdlText('publish', loc('AppActivity_PostStatusUpdate', 'Post')))}</div>
 				</button>
 			</div>
 		</div>
-		<div id="gdl-activity-feed">${feedHtml}</div>`;
+		${latestNewsUrl ? `<div class="gdl-latest-news-row"><button type="button" class="gdl-latest-news-button" data-gdl-open-url="${escapeHtml(latestNewsUrl)}">${escapeHtml(gdlText('latest_news', loc('AppActivity_ViewLatestNews', 'View latest news')))}</button></div>` : ''}
+		<div id="gdl-activity-feed" data-gdl-news-signature="${newsItemsSignature(options.newsItems)}" data-gdl-feed-signature="${feedSnapshot.signature}">${feedSnapshot.html}</div>`;
 
 	const sourceHeading = layout.anchorRegion
 		? Array.from(layout.anchorRegion.children).find(child => child.tagName === 'H2') as HTMLElement | undefined
@@ -59,8 +66,10 @@ export function createActivityView(
 		const heading = sourceHeading.cloneNode(true) as HTMLElement;
 		const headingText = heading.querySelector('div div') || heading.querySelector('div') || heading;
 		headingText.textContent = gdlText('activity', loc('AppDetails_SectionTitle_Activity', 'Activity'));
+		heading.classList.add('gdl-ui-activity-heading');
 		heading.style.setProperty('margin-top', '0px', 'important');
 		heading.style.setProperty('margin-bottom', '12px', 'important');
+		heading.style.setProperty('margin-left', '-12px', 'important');
 		heading.style.setProperty('padding-bottom', '0px', 'important');
 		fallbackHeading.replaceWith(heading);
 	}

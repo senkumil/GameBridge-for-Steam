@@ -132,7 +132,7 @@ export function installLocalAchievementUI(doc: Document): void {
 			const data = await fetchLocalAchievementData(appid, {
 				stateAppId: achievementRuntimeHost().getCurrentInjectedShortcutAppId(),
 			});
-			if (disposed) return;
+			if (disposed || detectLinkedSteamAppId(doc) !== appid) return;
 			applyData(appid, data);
 		} catch (error) {
 			if (!disposed) backendLog('Local achievements bridge error: ' + String(error));

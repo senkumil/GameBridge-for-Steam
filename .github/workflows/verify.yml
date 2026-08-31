@@ -1,3 +1,4 @@
+# NativeGameLink for Steam v3.0.0 - CI Verification Workflow
 name: Verify
 
 on:

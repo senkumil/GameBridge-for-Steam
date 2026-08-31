@@ -3,10 +3,12 @@ import { escapeHtml } from '../../core/text';
 import { ACH_CLASSES, PLAYBAR_CLASSES } from '../../steam/css';
 import { gdlText, loc } from '../../steam/localization';
 import {
+	applyNativePlaybarTypography,
 	buildNativeAchievementPlaybarBlueprint,
 	elementsWithCssModuleClass,
 	hasCssModuleClass,
 	isRenderedElement,
+	NATIVE_UI_BLUEPRINT_KEYS,
 } from '../../steam/native-dom';
 import {
 	ensureLocalPlaybarStat,
@@ -29,7 +31,35 @@ export interface LinkedAchievementChromeContext {
 async function injectPlayBarAchievements(doc: Document, context: LinkedAchievementChromeContext): Promise<void> {
 	const progress = await getAchievementProgress(Number(context.steamAppId), context.fallbackTotal);
 	if (!progress || progress.total <= 0 || !context.isCurrent()) return;
-	if (doc.getElementById('gdl-playbar-achievements')) return;
+	const playbar = PLAYBAR_CLASSES();
+	const achievements = ACH_CLASSES();
+	const pct = Math.round((100 * progress.unlocked) / progress.total);
+	const open = (event: Event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		focusAchievementsSection(doc);
+	};
+
+	let existing = doc.getElementById('gdl-playbar-achievements');
+	if (existing) {
+		if (existing.dataset.gdlNativeBlueprint !== '1') {
+			const upgraded = buildNativeAchievementPlaybarBlueprint(doc, progress.unlocked, progress.total, open);
+			if (upgraded) {
+				existing.replaceWith(upgraded);
+				existing = upgraded;
+			}
+		}
+		const count = elementsWithCssModuleClass(existing, playbar.AchievementCountLabel)[0]
+			|| Array.from(existing.querySelectorAll<HTMLElement>('div,span')).find(element => /^\s*\d+\s*\/\s*\d+\s*$/.test(element.textContent || ''))
+			|| null;
+		if (count) count.textContent = `${progress.unlocked}/${progress.total}`;
+		const fill = elementsWithCssModuleClass(existing, playbar.DetailsProgressBar)[0]
+			|| elementsWithCssModuleClass(existing, achievements.AchievementProgress)[0]
+			|| null;
+		if (fill) fill.style.width = `${pct}%`;
+		applyNativePlaybarTypography(existing, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
+		return;
+	}
 
 	const findLabel = (text: string): HTMLElement | null => {
 		const target = text.trim().toLocaleLowerCase();
@@ -41,7 +71,6 @@ async function injectPlayBarAchievements(doc: Document, context: LinkedAchieveme
 		return null;
 	};
 
-	const playbar = PLAYBAR_CLASSES();
 	const nativePlayStat = elementsWithCssModuleClass(doc, playbar.GameStatsSection)
 		.flatMap(section => elementsWithCssModuleClass(section, playbar.GameStat))
 		.find(candidate => hasCssModuleClass(candidate, playbar.Playtime) && isRenderedElement(doc, candidate)) || null;
@@ -66,21 +95,19 @@ async function injectPlayBarAchievements(doc: Document, context: LinkedAchieveme
 	const statsRow = statRoot.parentElement;
 	if (!statsRow) return;
 
-	const open = (event: Event) => {
-		event.preventDefault();
-		event.stopPropagation();
-		focusAchievementsSection(doc);
-	};
 	const nativeBlueprint = buildNativeAchievementPlaybarBlueprint(doc, progress.unlocked, progress.total, open);
 	if (nativeBlueprint) {
+		const achievementGraphic = nativeBlueprint.querySelector<HTMLElement>('svg, img');
+		if (achievementGraphic?.parentElement) achievementGraphic.parentElement.dataset.gdlUiIconHost = 'playbar-achievements';
+		applyNativePlaybarTypography(nativeBlueprint, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
 		statsRow.insertBefore(nativeBlueprint, statRoot.nextSibling);
 		return;
 	}
 
-	const achievements = ACH_CLASSES();
-	const pct = Math.round((100 * progress.unlocked) / progress.total);
 	const stat = doc.createElement('div');
 	stat.id = 'gdl-playbar-achievements';
+	stat.dataset.gdlPlaybarAchievements = '1';
+	stat.dataset.gdlNativeBlueprint = '0';
 	stat.className = statRoot.className;
 	const inner = `<div class="${label.className}">${escapeHtml(loc('AppDetails_SectionTitle_Achievements', 'Achievements'))}</div>
 		<div class="${value.className}" style="display:flex;align-items:center;gap:8px;">
@@ -92,6 +119,7 @@ async function injectPlayBarAchievements(doc: Document, context: LinkedAchieveme
 	stat.style.cursor = 'pointer';
 	stat.title = gdlText('view_linked_achievements', 'View achievements for this linked game');
 	stat.addEventListener('click', open);
+	applyNativePlaybarTypography(stat, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
 	statsRow.insertBefore(stat, statRoot.nextSibling);
 }
 

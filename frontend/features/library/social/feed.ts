@@ -136,21 +136,156 @@ const lastInjectedNews = new Map<string, NewsItem[]>();
 
 const lastInjectedFriendActivity = new Map<string, string>();
 
+const friendActivityFreshUntil = new Map<string, number>();
+
+const activityCacheAccessAt = new Map<string, number>();
+
 const visibleActivityNewsCount = new Map<string, number>();
 const activityEndReached = new Map<string, boolean>();
 
 const ACTIVITY_NEWS_PAGE_SIZE = 8;
 const MAX_ACTIVITY_GAME_ENTRIES = 32;
+const FRIEND_ACTIVITY_TTL_MS = 5 * 60 * 1000;
+
+function deleteActivityCacheEntry(appId: string): void {
+	lastInjectedNews.delete(appId);
+	lastInjectedFriendActivity.delete(appId);
+	friendActivityFreshUntil.delete(appId);
+	activityCacheAccessAt.delete(appId);
+	visibleActivityNewsCount.delete(appId);
+	activityEndReached.delete(appId);
+}
+
+function touchActivityCache(appId: string): void {
+	activityCacheAccessAt.set(appId, Date.now());
+	trimActivityCaches();
+}
 
 function trimActivityCaches(): void {
-	while (lastInjectedNews.size > MAX_ACTIVITY_GAME_ENTRIES) {
-		const oldest = lastInjectedNews.keys().next().value as string | undefined;
+	while (activityCacheAccessAt.size > MAX_ACTIVITY_GAME_ENTRIES) {
+		const oldest = Array.from(activityCacheAccessAt.entries())
+			.sort((left, right) => left[1] - right[1])[0]?.[0];
 		if (!oldest) break;
-		lastInjectedNews.delete(oldest);
-		lastInjectedFriendActivity.delete(oldest);
-		visibleActivityNewsCount.delete(oldest);
-		activityEndReached.delete(oldest);
+		deleteActivityCacheEntry(oldest);
 	}
+}
+
+export function hasFreshFriendActivitySnapshot(steamAppId: string): boolean {
+	return (friendActivityFreshUntil.get(steamAppId) || 0) > Date.now();
+}
+
+export function markFriendActivitySnapshotChecked(
+	steamAppId: string,
+	ttlMs = FRIEND_ACTIVITY_TTL_MS,
+): void {
+	friendActivityFreshUntil.set(steamAppId, Date.now() + Math.max(1_000, ttlMs));
+	touchActivityCache(steamAppId);
+}
+
+function effectiveActivityNews(steamAppId: string, newsItems: NewsItem[]): NewsItem[] {
+	return Array.isArray(newsItems) && newsItems.length > 0
+		? newsItems
+		: (lastInjectedNews.get(steamAppId) || []);
+}
+
+function rememberActivityFeedInputs(
+	steamAppId: string,
+	newsItems: NewsItem[],
+	friendActivityHtml: string,
+): { newsItems: NewsItem[]; friendActivityHtml: string } {
+	touchActivityCache(steamAppId);
+	if (Array.isArray(newsItems) && newsItems.length > 0) {
+		lastInjectedNews.set(steamAppId, newsItems);
+	} else {
+		newsItems = lastInjectedNews.get(steamAppId) || [];
+	}
+	if (friendActivityHtml) {
+		lastInjectedFriendActivity.set(steamAppId, friendActivityHtml);
+		friendActivityFreshUntil.set(steamAppId, Date.now() + FRIEND_ACTIVITY_TTL_MS);
+	} else {
+		friendActivityHtml = lastInjectedFriendActivity.get(steamAppId) || '';
+	}
+	return { newsItems, friendActivityHtml };
+}
+
+function hashFeedPart(hash: number, value: unknown): number {
+	const text = String(value ?? '');
+	for (let index = 0; index < text.length; index += 1) {
+		hash ^= text.charCodeAt(index);
+		hash = Math.imul(hash, 16777619);
+	}
+	return hash;
+}
+
+/** Content identity independent of DOM serialization. Steam normalizes the
+ * injected HTML, so comparing innerHTML strings caused false changes and made
+ * the whole feed repaint after every route visit. */
+export function activityFeedContentSignature(
+	steamAppId: string,
+	shortcutAppId: string | null | undefined,
+	newsItems: NewsItem[],
+	fallbackImage: string,
+	friendActivityHtml: string = '',
+): string {
+	const effectiveNews = effectiveActivityNews(steamAppId, newsItems);
+	const effectiveFriend = friendActivityHtml || lastInjectedFriendActivity.get(steamAppId) || '';
+	const posts = loadLocalActivityPosts(steamAppId, shortcutAppId);
+	let hash = 2166136261;
+	for (const value of [steamAppId, shortcutAppId || '', fallbackImage,
+		visibleActivityNewsCount.get(steamAppId) || ACTIVITY_NEWS_PAGE_SIZE,
+		activityEndReached.get(steamAppId) === true ? 1 : 0, effectiveFriend]) {
+		hash = hashFeedPart(hash, value);
+	}
+	for (const item of effectiveNews) {
+		for (const value of [item.gid, item.date, item.event_type, item.title, item.url,
+			item.image, newsExcerpt(item.contents || '', 320)]) hash = hashFeedPart(hash, value);
+	}
+	for (const post of posts) {
+		for (const value of [post.id, post.timestamp, post.user_name, post.user_avatar, post.text]) {
+			hash = hashFeedPart(hash, value);
+		}
+	}
+	return `${effectiveNews.length}:${posts.length}:${effectiveFriend.length}:${(hash >>> 0).toString(16)}`;
+}
+
+export interface UnifiedActivityFeedSnapshot {
+	html: string;
+	signature: string;
+}
+
+export function renderUnifiedActivityFeedSnapshot(
+	steamAppId: string,
+	shortcutAppId: string | null | undefined,
+	newsItems: NewsItem[],
+	fallbackImage: string,
+	friendActivityHtml: string = '',
+): UnifiedActivityFeedSnapshot {
+	const html = renderUnifiedActivityFeed(steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivityHtml);
+	return {
+		html,
+		signature: activityFeedContentSignature(steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivityHtml),
+	};
+}
+
+export function applyUnifiedActivityFeed(
+	container: HTMLElement,
+	steamAppId: string,
+	shortcutAppId: string | null | undefined,
+	newsItems: NewsItem[],
+	fallbackImage: string,
+	friendActivityHtml: string = '',
+): boolean {
+	rememberActivityFeedInputs(steamAppId, newsItems, friendActivityHtml);
+	const signature = activityFeedContentSignature(
+		steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivityHtml,
+	);
+	if (container.dataset.gdlFeedSignature === signature) return false;
+	const snapshot = renderUnifiedActivityFeedSnapshot(
+		steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivityHtml,
+	);
+	container.innerHTML = snapshot.html;
+	container.dataset.gdlFeedSignature = snapshot.signature;
+	return true;
 }
 
 export function renderUnifiedActivityFeed(
@@ -160,18 +295,9 @@ export function renderUnifiedActivityFeed(
 	fallbackImage: string,
 	friendActivityHtml: string = ''
 ): string {
-	if (Array.isArray(newsItems) && newsItems.length > 0) {
-		lastInjectedNews.set(steamAppId, newsItems);
-		trimActivityCaches();
-	} else if (lastInjectedNews.has(steamAppId)) {
-		newsItems = lastInjectedNews.get(steamAppId)!;
-	}
-
-	if (friendActivityHtml) {
-		lastInjectedFriendActivity.set(steamAppId, friendActivityHtml);
-	} else if (lastInjectedFriendActivity.has(steamAppId)) {
-		friendActivityHtml = lastInjectedFriendActivity.get(steamAppId)!;
-	}
+	({ newsItems, friendActivityHtml } = rememberActivityFeedInputs(
+		steamAppId, newsItems, friendActivityHtml,
+	));
 
 	const localPosts = loadLocalActivityPosts(steamAppId, shortcutAppId);
 	const sortedNews = (Array.isArray(newsItems) ? [...newsItems] : [])
@@ -205,7 +331,6 @@ export function renderUnifiedActivityFeed(
 	const n = EVENT_CLASSES();
 	let feedHtml = '';
 	if (sortedNews.length > 0) {
-		feedHtml += `<div id="gdl-view-latest-news" style="text-align:right;margin-bottom:8px;"><span class="gdl-latest-news-link" data-gdl-scroll-target="#gdl-first-news-item" style="font-size:12px;color:#8f98a0;cursor:pointer;transition:color 0.15s;">${escapeHtml(gdlText('latest_news', loc('AppActivity_ViewLatestNews', 'View the latest updates')))}</span></div>`;
 	}
 	if (friendActivityHtml) feedHtml += friendActivityHtml;
 
@@ -322,7 +447,7 @@ export function setupPostDeleteHandlers(
 			const next = Math.min(current + ACTIVITY_NEWS_PAGE_SIZE, availableNews);
 			if (next > current) visibleActivityNewsCount.set(steamAppId, next);
 			if (availableNews <= current || next >= availableNews) activityEndReached.set(steamAppId, true);
-			feedContainer.innerHTML = renderUnifiedActivityFeed(steamAppId, shortcutAppId, sourceNews, fallbackImage);
+			applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, sourceNews, fallbackImage);
 			return;
 		}
 		const button = target.closest('.gdl-delete-post-btn') as HTMLElement | null;
@@ -332,7 +457,7 @@ export function setupPostDeleteHandlers(
 		const postId = button.getAttribute('data-post-id');
 		if (!postId) return;
 		deleteLocalActivityPost(steamAppId, postId, shortcutAppId);
-		feedContainer.innerHTML = renderUnifiedActivityFeed(steamAppId, shortcutAppId, newsItems, fallbackImage);
+		applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
 	};
 	feedContainer.addEventListener('click', handleClick);
 	let active = true;
@@ -348,6 +473,16 @@ export function setupPostDeleteHandlers(
 export function clearActivityFeedCaches(): void {
 	lastInjectedNews.clear();
 	lastInjectedFriendActivity.clear();
+	friendActivityFreshUntil.clear();
+	activityCacheAccessAt.clear();
 	visibleActivityNewsCount.clear();
 	activityEndReached.clear();
+}
+
+/** Forget route-local feed snapshots for relinked games so an empty or delayed
+ * fresh response cannot silently restore the previous news list. */
+export function invalidateActivityFeedCaches(appIds: Iterable<string | number>): void {
+	for (const appId of Array.from(appIds, value => String(value)).filter(Boolean)) {
+		deleteActivityCacheEntry(appId);
+	}
 }

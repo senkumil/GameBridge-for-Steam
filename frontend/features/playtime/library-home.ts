@@ -59,7 +59,7 @@ function persistDesktopPlaytimeSnapshots(): void {
 const desktopPlaytimeSnapshots = readDesktopPlaytimeSnapshots();
 const desktopPlaytimeHydratedApps = new WeakSet<object>();
 
-/** Distinguish a value supplied by GameBridge from playtime Steam already
+/** Distinguish a value supplied by NativeGameLink from playtime Steam already
  * provided. The detail fallback must not mistake our AppOverview hydration for
  * an independent native source and then remove its own synchronized widget. */
 export function isDesktopLibraryPlaytimeHydrated(app: unknown): boolean {
@@ -128,7 +128,7 @@ async function refreshDesktopShortcutPlaytime(
 		};
 		if (Number(fallback?.minutesForever || 0) > 0) desktopPlaytimeHydratedApps.add(app);
 
-		// Never reduce a value Steam already knows. The canonical GameBridge
+		// Never reduce a value Steam already knows. The canonical NativeGameLink
 		// sessions fill only the zero/older shortcut values that Steam leaves on
 		// desktop Library Home cards.
 		const forever = Math.max(
@@ -219,7 +219,7 @@ export async function patchDesktopLibraryHomePlaytime(doc: Document): Promise<vo
 	persistDesktopPlaytimeSnapshots();
 	syncDesktopLibraryHomePlaytimeDom(doc);
 
-	// The detail-page fallback is GameBridge-owned DOM. Keep it aligned with the
+	// The detail-page fallback is NativeGameLink-owned DOM. Keep it aligned with the
 	// same resolved value used by Library Home.
 	for (const result of results) {
 		if (result.minutesForever <= 0) continue;

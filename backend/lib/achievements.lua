@@ -10,7 +10,7 @@ local policy = deps.achievement_policy
 local sources = deps.achievement_sources
 local state_reader = deps.achievement_state
 local lru = deps.lru_cache
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
+local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
 local M = {}
 local html_unescape = util.html_unescape
 local local_achievement_meta_cache = {}
@@ -29,32 +29,12 @@ local function reset_local_caches()
     if sources and sources.clear_cache then sources.clear_cache() end
 end
 
-function M.get_achievement_base_path()
-    return settings.get_base_path()
-end
-
-function M.set_achievement_base_path(path)
-    reset_local_caches()
-    return settings.set_base_path(path)
-end
-
-function M.get_game_achievement_path(request_json)
-    return settings.get_game_path(request_json)
-end
-
-function M.set_game_achievement_path(request_json)
-    reset_local_caches()
-    return settings.set_game_path(request_json)
-end
-
-function M.get_game_achievement_options(request_json)
-    return settings.get_game_options(request_json)
-end
-
-function M.set_game_achievement_options(request_json)
-    reset_local_caches()
-    return settings.set_game_options(request_json)
-end
+function M.get_achievement_base_path() return settings.get_base_path() end
+function M.set_achievement_base_path(path) reset_local_caches(); return settings.set_base_path(path) end
+function M.get_game_achievement_path(request_json) return settings.get_game_path(request_json) end
+function M.set_game_achievement_path(request_json) reset_local_caches(); return settings.set_game_path(request_json) end
+function M.get_game_achievement_options(request_json) return settings.get_game_options(request_json) end
+function M.set_game_achievement_options(request_json) reset_local_caches(); return settings.set_game_options(request_json) end
 
 local decode_json_file = state_reader.decode
 
@@ -290,10 +270,11 @@ local function match_public_metadata(appid, lang, root_dir)
     local key = tostring(appid) .. "|" .. tostring(lang or "spanish")
     local now = os.time()
     local cached = local_achievement_meta_cache[key]
-    if cached and (now - (cached.time or 0)) < 1800 then
+    if cached and next(cached.by_name or {}) and (now - (cached.time or 0)) < 1800 then
         lru.touch(cached)
         return cached.by_name or {}, cached.source or "cache"
     end
+	if cached then local_achievement_meta_cache[key] = nil end
 
     local schema, schema_path = normalize_local_schema(appid, root_dir, lang)
     local global_by_name, global_ordered = fetch_global_achievement_percentages(appid)
@@ -384,7 +365,11 @@ local function match_public_metadata(appid, lang, root_dir)
         end
     end
 
-    set_metadata_cache(key, { time = now, by_name = result, source = "steam_public" })
+	-- An empty remote merge is usually a transient Community/API failure. Do
+	-- not turn it into a thirty-minute negative result in this Steam session.
+	if next(result) then
+		set_metadata_cache(key, { time = now, by_name = result, source = "steam_public" })
+	end
     return result, "steam_public"
 end
 
@@ -423,7 +408,6 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
     local allow_simulated = false
     local simulate_unlock_all = false
     local unlock_online = false
-    local zero_progress = false
 
     -- The Millennium Lua host iterates JSON object values in key order before
     -- invoking a function.  A single JSON-string argument avoids positional
@@ -436,7 +420,6 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             allow_simulated = request.allow_simulated == true
             simulate_unlock_all = request.simulate_unlock_all == true
             unlock_online = request.unlock_online == true
-            zero_progress = request.zero_progress == true
             state_app_id = request.state_app_id
                 or request.shortcut_app_id
                 or request.local_app_id
@@ -447,7 +430,6 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         allow_simulated = request_json.allow_simulated == true
         simulate_unlock_all = request_json.simulate_unlock_all == true
         unlock_online = request_json.unlock_online == true
-        zero_progress = request_json.zero_progress == true
         -- A non-Steam shortcut has its own unsigned Steam shortcut ID.  Some
         -- emulators/Achievement Watcher setups write their live achievement
         -- state under that ID, while the linked Steam AppID is still needed
@@ -471,15 +453,20 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         shortcut_app_id = state_appid,
         steam_app_id = metadata_appid,
     }, {
-        zero_progress = zero_progress,
         simulate = allow_simulated,
-        unlock_all = simulate_unlock_all,
+        simulate_count = nil,
+        simulate_online_count = nil,
+        simulate_percent = 25,
+        simulate_online_percent = 0,
         unlock_online = unlock_online,
     })
     allow_simulated = effective.simulate == true
-    simulate_unlock_all = effective.unlock_all == true
+    local simulate_count = tonumber(effective.simulate_count)
+    local simulate_online_count = tonumber(effective.simulate_online_count)
+    local simulate_percent = tonumber(effective.simulate_percent) or 25
+    local simulate_online_percent = tonumber(effective.simulate_online_percent) or 0
+    local unlocked_names = type(effective.unlocked_names) == "table" and effective.unlocked_names or nil
     unlock_online = effective.unlock_online == true
-    zero_progress = effective.zero_progress == true
 
     local root = settings.local_root()
     local metadata_dir = fs.join(root, metadata_appid)
@@ -503,7 +490,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
     -- A source configured in this shortcut's Properties is intentionally
     -- checked first when real progress is active. Simulation is a view policy:
     -- it must not read or mutate a progress file while producing its own state.
-    if not zero_progress and not allow_simulated then
+    if not allow_simulated then
         local explicit_path, explicit_key = settings.configured_path(state_appid, metadata_appid)
         if explicit_path and explicit_path ~= "" then
             if explicit_path:lower():match("%.json$") then
@@ -532,56 +519,29 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             localappdata = fs.join(userprofile, "AppData", "Local")
         end
 
-        -- 1. Modern Goldberg emulator paths:
-        -- %APPDATA%\Goldberg SteamEmu Saves\<AppID>\
-        if appdata ~= "" then
-            local g_modern = fs.join(appdata, "Goldberg SteamEmu Saves", tostring(appid))
-            add_state_path(fs.join(g_modern, "achievements.json"), appid, g_modern, "goldberg_modern")
-            add_state_path(fs.join(g_modern, "stats", "achievements.json"), appid, g_modern, "goldberg_modern")
-            add_state_path(fs.join(g_modern, "steam_settings", "achievements.json"), appid, g_modern, "goldberg_modern")
-            add_state_path(fs.join(g_modern, "achievements.ini"), appid, g_modern, "goldberg_modern")
-
-            -- Goldberg settings/<AppID>
-            local g_settings = fs.join(appdata, "Goldberg SteamEmu Saves", "settings", tostring(appid))
-            add_state_path(fs.join(g_settings, "achievements.json"), appid, g_settings, "goldberg_settings")
-            add_state_path(fs.join(g_settings, "stats", "achievements.json"), appid, g_settings, "goldberg_settings")
+        local function add_common(base_dir, tag, with_ini)
+            if base_dir and base_dir ~= "" then
+                add_state_path(fs.join(base_dir, "achievements.json"), appid, base_dir, tag)
+                add_state_path(fs.join(base_dir, "stats", "achievements.json"), appid, base_dir, tag)
+                add_state_path(fs.join(base_dir, "steam_settings", "achievements.json"), appid, base_dir, tag)
+                if with_ini then add_state_path(fs.join(base_dir, "achievements.ini"), appid, base_dir, tag) end
+            end
         end
-
-        -- 2. Legacy Goldberg / Steam emulator paths:
-        -- %APPDATA%\Steam\<AppID>\
         if appdata ~= "" then
-            local g_steam = fs.join(appdata, "Steam", tostring(appid))
-            add_state_path(fs.join(g_steam, "stats", "achievements.json"), appid, g_steam, "goldberg_legacy_steam")
-            add_state_path(fs.join(g_steam, "achievements.json"), appid, g_steam, "goldberg_legacy_steam")
-            add_state_path(fs.join(g_steam, "steam_settings", "achievements.json"), appid, g_steam, "goldberg_legacy_steam")
-        end
-
-        -- 3. LocalAppData Goldberg:
-        -- %LOCALAPPDATA%\Goldberg SteamEmu Saves\<AppID>\
-        if localappdata ~= "" then
-            local g_local = fs.join(localappdata, "Goldberg SteamEmu Saves", tostring(appid))
-            add_state_path(fs.join(g_local, "achievements.json"), appid, g_local, "goldberg_localappdata")
-            add_state_path(fs.join(g_local, "stats", "achievements.json"), appid, g_local, "goldberg_localappdata")
-            add_state_path(fs.join(g_local, "steam_settings", "achievements.json"), appid, g_local, "goldberg_localappdata")
-        end
-
-        -- 4. GSE Saves (%APPDATA% and %LOCALAPPDATA%):
-        if appdata ~= "" then
-            local gse = fs.join(appdata, "GSE Saves", tostring(appid))
-            add_state_path(fs.join(gse, "achievements.json"), appid, gse, "gse_saves")
-            add_state_path(fs.join(gse, "stats", "achievements.json"), appid, gse, "gse_saves")
-            add_state_path(fs.join(gse, "steam_settings", "achievements.json"), appid, gse, "gse_saves")
+            add_common(fs.join(appdata, "Goldberg SteamEmu Saves", tostring(appid)), "goldberg_modern", true)
+            add_common(fs.join(appdata, "Goldberg SteamEmu Saves", "settings", tostring(appid)), "goldberg_settings")
+            add_common(fs.join(appdata, "Steam", tostring(appid)), "goldberg_legacy_steam")
+            add_common(fs.join(appdata, "GSE Saves", tostring(appid)), "gse_saves")
         end
         if localappdata ~= "" then
-            local gse_local = fs.join(localappdata, "GSE Saves", tostring(appid))
-            add_state_path(fs.join(gse_local, "achievements.json"), appid, gse_local, "gse_saves_local")
-            add_state_path(fs.join(gse_local, "stats", "achievements.json"), appid, gse_local, "gse_saves_local")
+            add_common(fs.join(localappdata, "Goldberg SteamEmu Saves", tostring(appid)), "goldberg_localappdata")
+            add_common(fs.join(localappdata, "GSE Saves", tostring(appid)), "gse_saves_local")
         end
     end
     -- Automatic AppID/emulator progress is likewise ignored temporarily while
     -- simulation is enabled. The files remain untouched and become active again
     -- as soon as the user disables simulation.
-    if not zero_progress and not allow_simulated then
+    if not allow_simulated then
         -- Steam regenerates a non-Steam Shortcut AppID when its identity changes.
         -- Scan numeric siblings under the configured root and compare their
         -- complete achievement-name set with the official schema. Exact matches
@@ -649,25 +609,90 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             return tostring(a.name) < tostring(b.name)
         end)
 
+        local offline_total = 0
+        local online_total = 0
+        for _, item in ipairs(meta_list) do
+            if policy.is_online(item) then
+                online_total = online_total + 1
+            else
+                offline_total = offline_total + 1
+            end
+        end
+
         local total = #meta_list
         local appid_num = tonumber(metadata_appid) or 0
-        local pct_target = 0.20 + (((appid_num * 17) % 6) * 0.01)
-        local unlocked_target
-        if total <= 1 then
-            unlocked_target = total
+        local pct_num = math.max(0, math.min(100, tonumber(simulate_percent) or 25))
+        local pct_target = pct_num / 100.0
+        local offline_unlocked_target = 0
+        if simulate_count ~= nil and simulate_count >= 0 then
+            offline_unlocked_target = math.max(0, math.min(offline_total, math.floor(simulate_count)))
         else
-            unlocked_target = math.max(1, math.min(total - 1, math.floor(total * pct_target)))
+            offline_unlocked_target = math.floor(offline_total * pct_target + 0.5)
+            if pct_num > 0 and offline_unlocked_target < 1 and offline_total > 0 then
+                offline_unlocked_target = 1
+            end
+            if pct_num >= 100 then
+                offline_unlocked_target = offline_total
+            end
+            if pct_num <= 0 then
+                offline_unlocked_target = 0
+            end
         end
-        if total == 52 then
-            unlocked_target = 11
+
+        local online_pct_num = math.max(0, math.min(100, tonumber(simulate_online_percent) or (unlock_online and 100 or 0)))
+        local online_pct_target = online_pct_num / 100.0
+        local online_unlocked_target = 0
+        if simulate_online_count ~= nil and simulate_online_count >= 0 then
+            online_unlocked_target = math.max(0, math.min(online_total, math.floor(simulate_online_count)))
+        else
+            online_unlocked_target = math.floor(online_total * online_pct_target + 0.5)
+            if online_pct_num > 0 and online_unlocked_target < 1 and online_total > 0 then
+                online_unlocked_target = 1
+            end
+            if online_pct_num >= 100 then
+                online_unlocked_target = online_total
+            end
+            if online_pct_num <= 0 then
+                online_unlocked_target = 0
+            end
+        end
+
+        local unlocked_names_set = nil
+        if unlocked_names ~= nil then
+            unlocked_names_set = {}
+            for _, name in ipairs(unlocked_names) do
+                unlocked_names_set[tostring(name)] = true
+            end
+            offline_unlocked_target = 0
+            online_unlocked_target = 0
         end
 
         local base_now = 1771616040 -- Stable timestamp so the visual test set never reshuffles.
         local achievements = {}
         local simulated_unlocked = 0
+        local offline_idx = 0
+        local online_idx = 0
         for idx, item in ipairs(meta_list) do
             local is_online = policy.is_online(item)
-            local is_earned = simulate_unlock_all or idx <= unlocked_target or (unlock_online and is_online)
+            local is_earned = false
+            if unlocked_names_set ~= nil then
+                is_earned = (unlocked_names_set[item.name] == true)
+                if is_earned then
+                    if is_online then
+                        online_unlocked_target = online_unlocked_target + 1
+                    else
+                        offline_unlocked_target = offline_unlocked_target + 1
+                    end
+                end
+            else
+                if is_online then
+                    online_idx = online_idx + 1
+                    is_earned = (online_idx <= online_unlocked_target)
+                else
+                    offline_idx = offline_idx + 1
+                    is_earned = (offline_idx <= offline_unlocked_target)
+                end
+            end
             local earned_time = 0
             if is_earned then
                 simulated_unlocked = simulated_unlocked + 1
@@ -695,9 +720,12 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             metadata_appid = metadata_appid,
             state_appid = state_appid,
             simulation_enabled = true,
-            simulate_unlock_all = simulate_unlock_all,
-            unlock_online = unlock_online,
-            zero_progress = false,
+            simulate_count = offline_unlocked_target,
+            simulate_online_count = online_unlocked_target,
+            simulate_percent = offline_total > 0 and math.floor((offline_unlocked_target / offline_total) * 100 + 0.5) or 0,
+            simulate_online_percent = online_total > 0 and math.floor((online_unlocked_target / online_total) * 100 + 0.5) or 0,
+            unlock_online = online_unlocked_target > 0,
+            unlocked_names = unlocked_names,
             unlocked = simulated_unlocked,
             total = total,
             metadata_source = tostring(metadata_source or "public") .. ":simulated-test",
@@ -712,27 +740,42 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         -- unlock changes 2/50 to 0/50 instead of returning `found = false` and
         -- leaving the previous forced result mounted in Steam's Library.
         state = {}
-        state_source = zero_progress and "zero_progress_override" or "metadata_only"
+        state_source = "metadata_only"
         state_source_appid = state_appid
     end
 
     -- Never use the shortcut ID to look up Steam metadata: it is not a real
     -- Steam AppID and has no achievement schema on Steam's services.
     local metadata, metadata_source = match_public_metadata(metadata_appid, lang, metadata_dir)
-    local names, unlocked, total = {}, 0, 0
-    for name, st in pairs(state) do
-        if type(st) == "table" then
-            names[#names + 1] = tostring(name)
-            total = total + 1
+    local all_names = {}
+    local seen_names = {}
+    local function add_name(name)
+        name = tostring(name or "")
+        if name ~= "" and not seen_names[name] then
+            seen_names[name] = true
+            all_names[#all_names + 1] = name
         end
     end
-    table.sort(names)
+
+    local missing_online_names = {}
+    if next(metadata) then
+        for name, m in pairs(metadata) do
+            add_name(name)
+            if unlock_online and policy.is_online({ name = name, title = m.title, description = m.description }) then
+                missing_online_names[#missing_online_names + 1] = tostring(name)
+            end
+        end
+    end
+    for name, st in pairs(state) do
+        if type(st) == "table" then add_name(name) end
+    end
+    table.sort(all_names)
 
     local achievements = {}
-    local included_names = {}
-    for _, name in ipairs(names) do
-        local st = state[name] or {}
-        local m = metadata[name] or {}
+    local unlocked, total = 0, 0
+    for _, name in ipairs(all_names) do
+        local st = type(state[name]) == "table" and state[name] or {}
+        local m = type(metadata[name]) == "table" and metadata[name] or {}
         local is_online = policy.is_online({ name = name, title = m.title, description = m.description })
         local is_earned = st.earned == true or tonumber(st.earned) == 1 or (unlock_online and is_online)
         local earned_time = tonumber(st.earned_time) or 0
@@ -745,7 +788,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             display_name = tostring(m.title or name),
             description = tostring(m.description or ""),
             icon = tostring(m.icon or ""),
-            icon_gray = tostring(m.icongray or ""),
+            icon_gray = tostring(m.icongray or m.icon or ""),
             hidden = m.hidden == true,
             global_percent = tonumber(m.global_percent) or 0,
             earned = is_earned,
@@ -754,66 +797,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             max_progress = tonumber(st.max_progress) or 0,
             is_online = is_online,
         }
-        included_names[name] = true
-    end
-
-    -- Older emulator progress files may omit achievements that have never
-    -- written local state. When online unlock is enabled, merge any missing
-    -- online entries from Steam's real schema so they are represented in the
-    -- Library and in the launch-notification replay.
-    if total > 0 and unlock_online and next(metadata) then
-        local missing_online_names = {}
-        for name, m in pairs(metadata) do
-            if not included_names[name]
-                and policy.is_online({ name = name, title = m.title, description = m.description }) then
-                missing_online_names[#missing_online_names + 1] = tostring(name)
-            end
-        end
-        table.sort(missing_online_names)
-        for _, name in ipairs(missing_online_names) do
-            local m = metadata[name] or {}
-            achievements[#achievements + 1] = {
-                name = name,
-                display_name = tostring(m.title or name),
-                description = tostring(m.description or ""),
-                icon = tostring(m.icon or ""),
-                icon_gray = tostring(m.icongray or m.icon or ""),
-                hidden = m.hidden == true,
-                global_percent = tonumber(m.global_percent) or 0,
-                earned = true,
-                earned_time = os.time() - 86400,
-                progress = 0,
-                max_progress = 0,
-                is_online = true,
-            }
-            included_names[name] = true
-            unlocked = unlocked + 1
-            total = total + 1
-        end
-    end
-
-    if total == 0 and next(metadata) then
-        for name, m in pairs(metadata) do
-            local is_online = policy.is_online({ name = name, title = m.title, description = m.description })
-            local is_earned = unlock_online and is_online
-            if is_earned then unlocked = unlocked + 1 end
-            achievements[#achievements + 1] = {
-                name = name,
-                display_name = tostring(m.title or name),
-                description = tostring(m.description or ""),
-                icon = tostring(m.icon or ""),
-                icon_gray = tostring(m.icongray or ""),
-                hidden = m.hidden == true,
-                global_percent = tonumber(m.global_percent) or 0,
-                earned = is_earned,
-                earned_time = is_earned and (os.time() - 86400) or 0,
-                progress = 0,
-                max_progress = 0,
-                is_online = is_online,
-            }
-            total = total + 1
-        end
-        table.sort(achievements, function(a, b) return tostring(a.name) < tostring(b.name) end)
+        total = total + 1
     end
 
     local resolution_key = metadata_appid .. "|" .. state_appid

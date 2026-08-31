@@ -37,11 +37,6 @@ function readState(): SuppressedAutoPrompt[] {
 	} catch { return []; }
 }
 
-function writeState(items: SuppressedAutoPrompt[]): void {
-	try { storage()?.setItem(STORAGE_KEY, JSON.stringify(items.slice(-500))); }
-	catch (error) { backendLog('Could not persist native-add auto-prompt suppression: ' + String(error)); }
-}
-
 function shortcutExecutableById(shortcutAppId: number): string {
 	const app = getShortcutAppById(shortcutAppId);
 	return shortcutExecutableIdentity(readShortcutOverviewField(
@@ -49,26 +44,13 @@ function shortcutExecutableById(shortcutAppId: number): string {
 	));
 }
 
-/** Permanently suppress unsolicited native-add prompts for this logical game.
- * Manual Link buttons remain available and do not clear this decision. */
-export function suppressNativeAddAutoPrompt(shortcutAppId: number, executableHint = ''): void {
-	const identity = shortcutStableIdentityById(shortcutAppId);
-	const executable = shortcutExecutableIdentity(executableHint) || shortcutExecutableById(shortcutAppId);
-	if (!identity && !executable) return;
-	const items = readState();
-	const duplicate = items.some(item => (identity && item.identity === identity) || (executable && item.executable === executable));
-	if (!duplicate) {
-		items.push({ identity, executable, createdAt: Date.now() });
-		writeState(items);
-	}
-	backendLog(`Native-add auto-link prompt permanently suppressed for shortcut ${shortcutAppId}.`);
+/** Prompt suppression is disabled: games added via Steam will always show the auto-detection modal. */
+export function suppressNativeAddAutoPrompt(_shortcutAppId: number, _executableHint = ''): void {
+	// No-op: closing or rejecting the review no longer permanently blocks the game.
 }
 
-export function isNativeAddAutoPromptSuppressed(shortcutAppId: number): boolean {
-	const identity = shortcutStableIdentityById(shortcutAppId);
-	const executable = shortcutExecutableById(shortcutAppId);
-	if (!identity && !executable) return false;
-	return readState().some(item => (identity && item.identity === identity) || (executable && item.executable === executable));
+export function isNativeAddAutoPromptSuppressed(_shortcutAppId: number): boolean {
+	return false;
 }
 
 /** Number of permanent automatic-prompt suppressions currently stored. */

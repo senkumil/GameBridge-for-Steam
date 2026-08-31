@@ -1,18 +1,30 @@
-# ==============================================================================
-# GameBridge for Steam - .gitignore
-# ==============================================================================
+# NativeGameLink for Steam
+# Keep source, manifests, tests and documentation versioned; ignore only
+# machine-local state and generated tooling/build output.
 
-# ------------------------------------------------------------------------------
-# 1. Dependencias de Node.js y Gestores de Paquetes
-# ------------------------------------------------------------------------------
+# Dependencies and package-manager caches
 node_modules/
 .pnpm-store/
+.npm/
 jspm_packages/
 web_modules/
 
-# ------------------------------------------------------------------------------
-# 2. Registros y Logs
-# ------------------------------------------------------------------------------
+# Runtime data created on the user's Steam installation
+/mappings.json
+/mappings.json.tmp
+/mappings.json.bak
+/mappings.backup.json
+/achievement_base_path.txt
+/achievement_paths.json
+/playtime_sessions.json
+/sessions.json
+/steam_appid.txt
+
+# Generated manifests and local deployment metadata
+/plugin.json
+*.manifest.tmp
+
+# Logs, diagnostics and temporary files
 logs/
 *.log
 log.txt
@@ -21,64 +33,14 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
-
-# ------------------------------------------------------------------------------
-# 3. Datos de Usuario y Estado en Tiempo de Ejecución (¡Nunca subir datos personales!)
-# ------------------------------------------------------------------------------
-# Mapeos locales de accesos directos generados por el plugin
-mappings.json
-mappings.json.tmp
-mappings.json.bak
-*.bak
 *.tmp
+*.bak
+*.swp
+*.swo
 
-# Configuraciones locales de logros de usuario y sesiones de tiempo de juego
-achievement_base_path.txt
-achievement_paths.json
-playtime_sessions.json
-sessions.json
-steam_appid.txt
-
-# ------------------------------------------------------------------------------
-# 4. Carpetas y Archivos Locales / Descontinuados / Capturas
-# ------------------------------------------------------------------------------
-[g]ame-data-linker-DESCONTINUADO/
-non-steam-playtimes-2.0.3/
-*DESCONTINUADO*
-*descontinuado*
-capturas juegos nativos steam/
-capturas*/
-docs/
-# README screenshots are release documentation and must be versioned.
-!docs/
-!docs/screenshots/
-!docs/screenshots/*.png
-
-# Archivos y carpetas temporales de pruebas y scratch
-scratch/
-scratch_*.cjs
-test_*.cjs
-copy_def.cjs
-export_schema.cjs
-_*.py
-_*.ps1
-
-# Paquetes comprimidos de backups
-*.zip
-*.tar.gz
-*.rar
-*.7z
-
-# ------------------------------------------------------------------------------
-# 5. Salida de Compilación y Cachés de Herramientas
-# ------------------------------------------------------------------------------
-# Nota: .millennium/Dist/ contiene el bundle listo para Millennium en Steam
-# Si deseas ignorar Dist descomenta la siguiente línea:
-# .millennium/Dist/
-# Por defecto permitimos .millennium/Dist para que el plugin funcione recién clonado.
-!.millennium/Dist/
-
-*.tsbuildinfo
+# Build output and tool caches
+coverage/
+.nyc_output/
 .cache/
 .parcel-cache/
 .rpt2_cache/
@@ -87,21 +49,40 @@ _*.ps1
 .rts2_cache_umd/
 .eslintcache
 .stylelintcache
-.npm
+*.tsbuildinfo
 *.tgz
+/dist/
+build/
+out/
+backend/obj/
+backend/bin/*.pdb
+backend/bin/*.ilk
+backend/bin/*.xml
 
-# ------------------------------------------------------------------------------
-# 6. Variables de Entorno y Credenciales
-# ------------------------------------------------------------------------------
+# Scratch files and local exports
+scratch/
+scratch_*.cjs
+test_*.cjs
+copy_def.cjs
+export_schema.cjs
+_*.py
+_*.ps1
+capturas*/
+*DESCONTINUADO*/
+*descontinuado*/
+
+# Archives and local backups
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Environment files and credentials
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
 
-# ------------------------------------------------------------------------------
-# 7. Editores e IDEs
-# ------------------------------------------------------------------------------
+# Editors and operating-system files
 .vscode/
 !.vscode/extensions.json
 .idea/
@@ -109,18 +90,15 @@ _*.ps1
 *.user
 *.userosv
 *.sln.docstates
-
-# ------------------------------------------------------------------------------
-# 8. Archivos del Sistema Operativo
-# ------------------------------------------------------------------------------
-# Windows
 Thumbs.db
 ehthumbs.db
 desktop.ini
 $RECYCLE.BIN/
-
-# macOS
 .DS_Store
 .AppleDouble
 .LSOverride
 ._*
+
+# The production bundle is intentionally kept versioned because this plugin
+# can be installed directly from a clone and the README documents that flow.
+# .millennium/Dist/

@@ -44,11 +44,25 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 		if (closed) return;
 		closed = true;
 		doc.removeEventListener('keydown', onKeyDown, true);
+		overlay.removeEventListener('pointerup', onPreviewPointerUp, true);
 		overlay.remove();
 		tradingCardPreviewCleanup.delete(doc);
 	};
+	const onPreviewPointerUp = (event: PointerEvent): void => {
+		const target = event.target instanceof Element
+			? event.target.closest<HTMLButtonElement>('.gdl-trading-card-preview-close, .gdl-trading-card-preview-x')
+			: null;
+		if (!target || !overlay.contains(target)) return;
+		// Steam's CEF occasionally delivers the pointer event to a nested
+		// surface instead of the button's React target. Capture the whole button
+		// region here so its text, padding and icon all close the preview.
+		event.preventDefault();
+		event.stopPropagation();
+		dismiss();
+	};
 	tradingCardPreviewCleanup.set(doc, dismiss);
 	overlay.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.addEventListener('click', dismiss));
+	overlay.addEventListener('pointerup', onPreviewPointerUp, true);
 	overlay.addEventListener('click', event => {
 		if (event.target === overlay) dismiss();
 	});
@@ -405,7 +419,7 @@ export async function renderOfficialTradingCards(
 		sectionId: 'gdl-trading-cards-section',
 		headerText: loc('AppDetails_SectionTitle_TradingCards', gdlText('trading_cards', 'Trading Cards')),
 		innerId: 'gdl-trading-cards-content',
-		innerHtml: `<div class="${ACH_CLASSES().HighlightDiv} gdl-native-sidebar-panel" style="padding:0 !important;box-sizing:border-box;overflow:visible;"><div class="gdl-trading-cards-badge-header"><div class="gdl-trading-badge" title="${escapeHtml(badgeTitle)}"><img class="gdl-trading-badge-image" src="${escapeHtml(badgeSource)}" alt="${escapeHtml(badgeTitle)}" /></div><div style="min-width:0;"><div class="gdl-trading-badge-title" style="font-size:16px;line-height:1.25;color:#fff;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(badgeTitle)}</div><div style="font-size:13px;color:#8f98a0;margin-top:2px;">${escapeHtml(gdlText('experience_points', '100 XP'))}</div></div></div><div class="gdl-trading-cards-body" style="padding:12px 10px 14px;"><div class="gdl-trading-card-remaining" style="font-size:13px;color:#9da4ab;margin-bottom:10px;">${escapeHtml(gdlText('cards_remaining', '{count} cards remaining', { count: 0 }))}</div><div class="gdl-trading-card-grid">${cards}</div><a href="https://steamcommunity.com/my/gamecards/${steamAppId}/" data-gdl-open-url="https://steamcommunity.com/my/gamecards/${steamAppId}/" style="display:block;text-align:right;margin-top:14px;color:#9da4ab;text-decoration:none;font-size:13px;">${escapeHtml(gdlText('view_my_cards', 'View my cards'))}</a></div></div>`,
+		innerHtml: `<div class="${ACH_CLASSES().HighlightDiv} gdl-native-sidebar-panel" style="padding:0 !important;box-sizing:border-box;overflow:visible;"><div class="gdl-trading-cards-badge-header"><div class="gdl-trading-badge" title="${escapeHtml(badgeTitle)}"><img class="gdl-trading-badge-image" src="${escapeHtml(badgeSource)}" alt="${escapeHtml(badgeTitle)}" /></div><div style="min-width:0;"><div class="gdl-trading-badge-title" style="font-size:16px;line-height:1.25;color:#fff;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(badgeTitle)}</div><div class="gdl-trading-badge-xp" style="font-size:13px;color:#8f98a0;margin-top:2px;">${escapeHtml(gdlText('experience_points', '100 XP'))}</div></div></div><div class="gdl-trading-cards-body" style="padding:12px 10px 14px;"><div class="gdl-trading-card-remaining" style="font-size:13px;color:#9da4ab;margin-bottom:10px;">${escapeHtml(gdlText('cards_remaining', '{count} cards remaining', { count: 0 }))}</div><div class="gdl-trading-card-grid">${cards}</div><a class="gdl-trading-cards-view-link" href="https://steamcommunity.com/my/gamecards/${steamAppId}/" data-gdl-open-url="https://steamcommunity.com/my/gamecards/${steamAppId}/" style="display:block;text-align:right;margin-top:14px;color:#9da4ab;text-decoration:none;font-size:13px;">${escapeHtml(gdlText('view_my_cards', 'View my cards'))}</a></div></div>`,
 		cloneInnerClass: false,
 	});
 	if (!section) return;
@@ -430,16 +444,27 @@ export async function renderOfficialTradingCards(
 		}
 	}
 
-	const dlcNode = doc.getElementById('gdl-dlc-section');
-	const workshopNode = doc.getElementById('gdl-workshop-section');
-	const achievementsNode = doc.getElementById('gdl-achievements-section');
-	const friendsNode = doc.getElementById('gdl-friends-section');
-	if (dlcNode?.parentElement === sidebarColumn) sidebarColumn.insertBefore(section, dlcNode);
-	else if (workshopNode?.parentElement === sidebarColumn) sidebarColumn.insertBefore(section, workshopNode);
-	else {
-		const previous = achievementsNode || friendsNode;
-		if (previous?.parentElement === sidebarColumn) sidebarColumn.insertBefore(section, previous.nextSibling);
-		else sidebarColumn.insertBefore(section, sidebarColumn.firstChild);
+	// Steam's native right column places Notes above Trading Cards. `anchorRegion`
+	// resolves to the live Notes section whenever it exists (see layout discovery),
+	// so anchor the async cards render to that native node instead of to Achievements.
+	// This also prevents a late community-items response from changing the visual order.
+	const anchorOuter = anchorRegion.parentElement?.parentElement === sidebarColumn
+		? anchorRegion.parentElement
+		: anchorRegion;
+	if (anchorOuter?.parentElement === sidebarColumn) {
+		sidebarColumn.insertBefore(section, anchorOuter.nextSibling);
+	} else {
+		const dlcNode = doc.getElementById('gdl-dlc-section');
+		const workshopNode = doc.getElementById('gdl-workshop-section');
+		const achievementsNode = doc.getElementById('gdl-achievements-section');
+		const friendsNode = doc.getElementById('gdl-friends-section');
+		if (dlcNode?.parentElement === sidebarColumn) sidebarColumn.insertBefore(section, dlcNode);
+		else if (workshopNode?.parentElement === sidebarColumn) sidebarColumn.insertBefore(section, workshopNode);
+		else {
+			const previous = achievementsNode || friendsNode;
+			if (previous?.parentElement === sidebarColumn) sidebarColumn.insertBefore(section, previous.nextSibling);
+			else sidebarColumn.insertBefore(section, sidebarColumn.firstChild);
+		}
 	}
 
 	setupTradingCardTilt(section);

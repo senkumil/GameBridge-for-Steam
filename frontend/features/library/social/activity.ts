@@ -1,11 +1,16 @@
-import type { FriendPersona } from '../../../domain/types';
+import type { FriendPersona, NewsItem } from '../../../domain/types';
 import { backendLog, fetchFriendPersonasBackend, fetchFriendReviewBackend, fetchPublishedPreviewsBackend } from '../../../api/backend';
 import { escapeHtml } from '../../../core/text';
 import { ACH_CLASSES, EVENT_CLASSES } from '../../../steam/css';
 import { gdlText, loc, steamIntlLocale } from '../../../steam/localization';
 import { cachePersona, getCachedPersona, hasCachedPersona } from './personas';
 import { socialRuntimeHost } from './host';
-import { renderUnifiedActivityFeed } from './feed';
+import {
+	applyUnifiedActivityFeed,
+	hasFreshFriendActivitySnapshot,
+	markFriendActivitySnapshotChecked,
+	setupPostDeleteHandlers,
+} from './feed';
 
 const DEFAULT_AVATAR = 'https://avatars.cloudflare.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_medium.jpg';
 
@@ -78,6 +83,16 @@ function eventActorId(event: any): string {
 	try { return event.steamIDActor?.ConvertTo64BitString?.() || ''; } catch { return ''; }
 }
 
+function stableActivityDomId(event: any, values: string[]): string {
+	const source = [event?.unUniqueID, event?.eEventType, event?.rtEventTime, eventActorId(event), ...values].join('|');
+	let hash = 2166136261;
+	for (let index = 0; index < source.length; index += 1) {
+		hash ^= source.charCodeAt(index);
+		hash = Math.imul(hash, 16777619);
+	}
+	return `gdlss${(hash >>> 0).toString(16)}`;
+}
+
 /** Substitute %1$s with the game name wrapped in the native white game-name span */
 function verbWithGameName(template: string, gameName: string): string {
 	const parts = template.split('%1$s');
@@ -133,7 +148,7 @@ function renderScreenshotEvent(event: any, previews: Map<string, string>, isVide
 			? loc('AppActivity_PostedScreenshot', ' shared a screenshot')
 			: loc('AppActivity_PostedScreenshot_Plural', ' shared %1$s screenshots').replace('%1$s', String(count)));
 
-	const uid = 'gdlss' + String(event.unUniqueID || Math.floor(Math.random() * 1e9));
+	const uid = stableActivityDomId(event, ids);
 	const fileUrl = (id: string) => `https://steamcommunity.com/sharedfiles/filedetails/?id=${id}`;
 	const main = imgs[0];
 	const thumbs = imgs.slice(1, 5);
@@ -181,6 +196,11 @@ interface FriendReview {
 	url: string;
 }
 
+export interface ActivityHydrationGuard {
+	isCurrent: () => boolean;
+	shortcutAppId: string | null;
+}
+
 /** "reviewed a este juego" event with the scraped review content */
 function renderReviewEvent(event: any, review: FriendReview | undefined, appid: string): string {
 	const verb = escapeHtml(loc('AppActivity_RecommendedGame', ' reviewed this game'));
@@ -205,9 +225,31 @@ function renderReviewEvent(event: any, review: FriendReview | undefined, appid: 
 }
 
 /** Fetch real activity and render all supported friend events into the feed */
-export async function populateActivityFeed(doc: Document, steamAppId: string, gameName: string, headerImage: string): Promise<void> {
-	const activity = await getRealActivity(parseInt(steamAppId));
-	if (!activity || socialRuntimeHost().getCurrentInjectedAppId() !== steamAppId) return;
+export async function populateActivityFeed(
+	doc: Document,
+	steamAppId: string,
+	gameName: string,
+	headerImage: string,
+	newsItems: NewsItem[] = [],
+	guard?: ActivityHydrationGuard,
+): Promise<void> {
+	if (!doc || !steamAppId) return;
+	const isCurrent = (): boolean => guard
+		? guard.isCurrent()
+		: socialRuntimeHost().getCurrentInjectedAppId() === steamAppId;
+	const shortcutAppId = guard?.shortcutAppId ?? socialRuntimeHost().getCurrentInjectedShortcutAppId();
+	const numericAppId = Number.parseInt(steamAppId, 10);
+	if (!Number.isFinite(numericAppId) || numericAppId <= 0) return;
+	// The initial route paint already reused this snapshot. Re-querying Steam's
+	// activity store here would wait up to 4.8 seconds and then replace identical
+	// feed DOM on every visit.
+	if (hasFreshFriendActivitySnapshot(steamAppId)) return;
+	const activity = await getRealActivity(numericAppId);
+	if (!isCurrent()) return;
+	if (!activity) {
+		markFriendActivitySnapshotChecked(steamAppId, 15_000);
+		return;
+	}
 
 	// Collect days (native store groups events per day)
 	const days: any[] = [];
@@ -215,6 +257,9 @@ export async function populateActivityFeed(doc: Document, steamAppId: string, ga
 		activity.m_mapActivityByDay?.forEach?.((d: any) => days.push(d));
 	} catch {}
 	if (days.length === 0) {
+		// Steam can expose the activity object before its day map has restored.
+		// Back off briefly, then allow a background retry.
+		markFriendActivitySnapshotChecked(steamAppId, 30_000);
 		backendLog('Activity: no day groups for ' + steamAppId);
 		return;
 	}
@@ -249,6 +294,7 @@ export async function populateActivityFeed(doc: Document, steamAppId: string, ga
 		if (dayEvents.length >= 8) break;
 	}
 	if (dayEvents.length === 0) {
+		markFriendActivitySnapshotChecked(steamAppId, 30_000);
 		backendLog('Activity: no renderable events for ' + steamAppId);
 		return;
 	}
@@ -274,7 +320,7 @@ export async function populateActivityFeed(doc: Document, steamAppId: string, ga
 				.catch(e => backendLog('Review fetch error: ' + e))
 		),
 	]);
-	if (socialRuntimeHost().getCurrentInjectedAppId() !== steamAppId) return;
+	if (!isCurrent()) return;
 
 	const renderEvent = (e: any): string => {
 		switch (e.eEventType) {
@@ -330,13 +376,25 @@ export async function populateActivityFeed(doc: Document, steamAppId: string, ga
 	}
 
 	const feedEl = doc.getElementById('gdl-activity-feed');
-	if (feedEl) {
-		feedEl.innerHTML = renderUnifiedActivityFeed(
+	const root = feedEl?.closest('#gdl-library-injected') as HTMLElement | null;
+	if (feedEl && root?.dataset.gdlSteamAppId === steamAppId
+		&& (!shortcutAppId || root.dataset.gdlShortcutAppId === shortcutAppId)
+		&& isCurrent()) {
+		applyUnifiedActivityFeed(
+			feedEl,
 			steamAppId,
-			socialRuntimeHost().getCurrentInjectedShortcutAppId(),
-			[],
+			shortcutAppId,
+			newsItems,
 			headerImage,
 			html
+		);
+		markFriendActivitySnapshotChecked(steamAppId);
+		setupPostDeleteHandlers(
+			doc,
+			steamAppId,
+			shortcutAppId,
+			newsItems,
+			headerImage
 		);
 		backendLog('Activity feed rendered with friends & news: ' + dayEvents.length + ' day group(s)');
 	}

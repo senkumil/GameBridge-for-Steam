@@ -276,6 +276,15 @@ export function setNextLaunchAchievementReplayEnabled(metadataAppId: string | nu
 	notifyAchievementReplayPreferencesChanged();
 }
 
+export function resetLocalAchievementToastBaseline(metadataAppId: string | number, stateAppId?: string | number): void {
+	const metadata = String(metadataAppId || '');
+	const state = String(stateAppId || metadata);
+	const stateKey = `${LOCAL_ACHIEVEMENT_TOAST_STATE_PREFIX}${metadata}:${state}`;
+	localAchievementToastBaselines.delete(stateKey);
+	localAchievementSessionToastedNames.delete(state);
+	try { localStorage.removeItem(stateKey); } catch {}
+}
+
 export function isEveryLaunchAchievementReplayEnabled(metadataAppId: string | number, stateAppId: string | number): boolean {
 	try { return localStorage.getItem(replayStorageKey(EVERY_LAUNCH_REPLAY_PREFIX, metadataAppId, stateAppId)) === '1'; }
 	catch { return false; }
@@ -574,7 +583,7 @@ export function enqueueLocalAchievementToasts(
 }
 
 /**
- * Replay the achievements already earned when GameBridge observes this linked
+ * Replay the achievements already earned when NativeGameLink observes this linked
  * shortcut running for the first time. The persistent marker is separate from
  * the normal transition baseline: merely browsing the Library may create that
  * baseline, but must never consume the one-time launch replay.
@@ -592,12 +601,8 @@ export function enqueueFirstLaunchAchievementToasts(
 	// same stable metadata+shortcut pair.
 	const preferenceStateAppId = String(replayStateAppId || data.state_appid || metadataAppId);
 	const replayKey = replayStorageKey(FIRST_LAUNCH_REPLAY_PREFIX, metadataAppId, preferenceStateAppId);
-	const replayEveryLaunch = isEveryLaunchAchievementReplayEnabled(
-		metadataAppId,
-		preferenceStateAppId,
-	);
 	try {
-		if (!replayEveryLaunch && localStorage.getItem(replayKey) === '1') return 0;
+		if (localStorage.getItem(replayKey) === '1') return 0;
 	} catch {}
 
 	const earned = data.achievements
@@ -633,7 +638,7 @@ export function enqueueFirstLaunchAchievementToasts(
 		});
 	}
 	const onlineEarned = earned.filter(achievement => achievement.is_online === true).length;
-	backendLog(`${replayEveryLaunch ? 'Every-launch' : 'First-launch'} achievement replay queued for ${data.appid}: ${earned.length} notification(s), ${onlineEarned} online`);
+	backendLog(`First-launch achievement replay queued for ${data.appid}: ${earned.length} notification(s), ${onlineEarned} online`);
 	drainLocalAchievementToastQueue();
 	return earned.length;
 }

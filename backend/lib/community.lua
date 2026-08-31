@@ -7,7 +7,7 @@ local fs = deps.fs
 local util = deps.util
 local config = deps.config
 local lru = deps.lru_cache
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
+local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
 local M = {}
 local detection_url_encode = util.url_encode
 local html_unescape = util.html_unescape
@@ -158,6 +158,7 @@ function M.fetch_community_content(steam_app_id, language)
     end
     local safe_language = requested_language:match("^[%w_-]+$") or "english"
     local items = {}
+	local successful_pages = 0
 
     -- One page per native subsection already supplies up to 48 cards. Loading
     -- additional pages multiplied network/HTML parsing cost for content that is
@@ -172,6 +173,7 @@ function M.fetch_community_content(steam_app_id, language)
                 timeout = 12
             })
             if ok and response and response.status == 200 and response.body then
+				successful_pages = successful_pages + 1
                 parse_hub_cards(response.body, fallback_type, items)
                 logger:info(label .. " page " .. page .. " parsed; total: " .. tostring(#items))
             else
@@ -185,7 +187,12 @@ function M.fetch_community_content(steam_app_id, language)
     fetch_pages(9, "guide", "Community guides")
 
     logger:info("Total community content items: " .. tostring(#items))
-    return cjson.encode({ items = items })
+    return cjson.encode({
+        items = items,
+        available = #items > 0,
+		transient_error = successful_pages == 0,
+        source = "steam_community_app_hub",
+    })
 end
 
 -- ── Official Steam community items (trading cards + badges) ───────────
@@ -195,6 +202,8 @@ end
 -- lifetime of the backend so navigating between games does not repeat work.
 local community_items_catalog_cache = {}
 local COMMUNITY_ITEMS_CACHE_LIMIT = 32
+local COMMUNITY_ITEMS_SUCCESS_CACHE_SECONDS = 60 * 60
+local COMMUNITY_ITEMS_FAILURE_CACHE_SECONDS = 10
 
 local function community_items_clean(value)
     local text = html_unescape(tostring(value or ""))
@@ -332,8 +341,13 @@ function M.fetch_community_items_catalog(steam_app_id, language)
 
     local cache_key = appid .. "|" .. requested_language
     if community_items_catalog_cache[cache_key] then
-        lru.touch(community_items_catalog_cache[cache_key])
-        return community_items_catalog_cache[cache_key].value
+		local cached = community_items_catalog_cache[cache_key]
+		local ttl = cached.complete and COMMUNITY_ITEMS_SUCCESS_CACHE_SECONDS or COMMUNITY_ITEMS_FAILURE_CACHE_SECONDS
+		if os.time() - tonumber(cached.time or 0) < ttl then
+			lru.touch(cached)
+			return cached.value
+		end
+		community_items_catalog_cache[cache_key] = nil
     end
 
     local market_url = "https://steamcommunity.com/market/search/render/"
@@ -352,8 +366,9 @@ function M.fetch_community_items_catalog(steam_app_id, language)
     })
 
     local result = { appid = tonumber(appid) or 0, cards = {}, badges = {}, source = "unavailable" }
-    if market_ok and market_response and market_response.status == 200
-        and type(market_response.body) == "string" then
+    local market_complete = market_ok and market_response and market_response.status == 200
+        and type(market_response.body) == "string"
+    if market_complete then
         result.cards = community_items_parse_market_catalog(market_response.body, appid)
         if #result.cards > 0 then
             result.source = "steam-community-market"
@@ -378,7 +393,10 @@ function M.fetch_community_items_catalog(steam_app_id, language)
         timeout = 18,
     })
 
-    if ok and response and response.status == 200 and type(response.body) == "string" then
+    local badge_complete = ok and response and response.status == 200 and type(response.body) == "string"
+    local badge_confirmed_empty = ok and response
+        and (tonumber(response.status) == 404 or tonumber(response.status) == 410)
+    if badge_complete then
         local indexed = community_items_parse_catalog(response.body, appid)
         result.badges = indexed.badges
         result.foil_badge = indexed.foil_badge
@@ -389,8 +407,13 @@ function M.fetch_community_items_catalog(steam_app_id, language)
             .. " (HTTP " .. tostring(response and response.status or "request_failed") .. ")")
     end
 
+    result.transient_error = not market_complete or not (badge_complete or badge_confirmed_empty)
+
     local encoded = cjson.encode(result)
-    lru.put(community_items_catalog_cache, cache_key, { value = encoded }, COMMUNITY_ITEMS_CACHE_LIMIT)
+	local complete = result.transient_error ~= true
+	lru.put(community_items_catalog_cache, cache_key, {
+		value = encoded, time = os.time(), complete = complete,
+	}, COMMUNITY_ITEMS_CACHE_LIMIT)
     return encoded
 end
 

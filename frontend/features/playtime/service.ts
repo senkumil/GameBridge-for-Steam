@@ -7,8 +7,14 @@ export interface PlaytimeStats {
 }
 
 const PLAYTIME_STATS_CACHE_MS = 5000;
-const playtimeStatsRequests = new Map<string, { expiresAt: number; request: Promise<PlaytimeStats | null> }>();
+interface PlaytimeRequestEntry {
+	expiresAt: number;
+	request: Promise<PlaytimeStats | null>;
+}
+
+const playtimeStatsRequests = new Map<string, PlaytimeRequestEntry>();
 const MAX_PLAYTIME_CACHE_ENTRIES = 96;
+let playtimeRequestGeneration = 0;
 
 export interface PlaytimeLookup {
 	shortcutAppId: number;
@@ -68,6 +74,7 @@ export async function fetchPlaytimeStatsBatch(lookups: PlaytimeLookup[]): Promis
 	});
 
 	if (missing.length > 0) {
+		const generation = playtimeRequestGeneration;
 		const batch = (async (): Promise<Map<string, PlaytimeStats | null>> => {
 			const resolved = new Map<string, PlaytimeStats | null>();
 			try {
@@ -94,8 +101,15 @@ export async function fetchPlaytimeStatsBatch(lookups: PlaytimeLookup[]): Promis
 		})();
 		for (const item of missing) {
 			const key = requestKey(item.shortcutAppId, item.title, item.steamAppId);
-			const request = batch.then(values => values.get(key) ?? null);
-			playtimeStatsRequests.set(key, { expiresAt: now + PLAYTIME_STATS_CACHE_MS, request });
+			const entry: PlaytimeRequestEntry = {
+				expiresAt: now + PLAYTIME_STATS_CACHE_MS,
+				request: Promise.resolve(null),
+			};
+			entry.request = batch.then(values => generation === playtimeRequestGeneration
+				&& playtimeStatsRequests.get(key) === entry
+				? values.get(key) ?? null
+				: null);
+			playtimeStatsRequests.set(key, entry);
 		}
 		trimPlaytimeCache();
 	}
@@ -109,7 +123,7 @@ export async function fetchPlaytimeStatsBatch(lookups: PlaytimeLookup[]): Promis
 	return result;
 }
 
-/** Read GameBridge's canonical session store. The short cache prevents Big
+/** Read NativeGameLink's canonical session store. The short cache prevents Big
  * Picture's mutation-driven refreshes from repeatedly reopening the same file,
  * while remaining below the tracker's ten-second heartbeat interval. */
 export function fetchPlaytimeStats(shortcutAppId: number, title: string, steamAppId?: string): Promise<PlaytimeStats | null> {
@@ -120,5 +134,20 @@ export function fetchPlaytimeStats(shortcutAppId: number, title: string, steamAp
 }
 
 export function clearPlaytimeStatsCache(): void {
+	playtimeRequestGeneration += 1;
 	playtimeStatsRequests.clear();
+}
+
+/** Drop only playtime lookups whose shortcut or linked Steam identity changed. */
+export function invalidatePlaytimeStatsCache(
+	steamAppIds: Iterable<string | number>,
+	shortcutAppIds: Iterable<string | number> = [],
+): void {
+	const steamIds = new Set(Array.from(steamAppIds, value => String(value)).filter(Boolean));
+	const shortcutIds = new Set(Array.from(shortcutAppIds, value => String(value)).filter(Boolean));
+	if (steamIds.size === 0 && shortcutIds.size === 0) return;
+	for (const key of Array.from(playtimeStatsRequests.keys())) {
+		const [shortcutAppId, steamAppId] = key.split('|', 3);
+		if (shortcutIds.has(shortcutAppId) || steamIds.has(steamAppId)) playtimeStatsRequests.delete(key);
+	}
 }

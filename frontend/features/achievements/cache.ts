@@ -1,9 +1,9 @@
 import type { LocalAchievementData } from '../../domain/types';
 
 const localAchievementMemoryCache = new Map<string, LocalAchievementData>();
-const MAX_LOCAL_ACHIEVEMENT_ALIASES = 64;
-const LOCAL_ACHIEVEMENT_SNAPSHOT_STORAGE_KEY = 'gdl_local_achievement_snapshots_v1';
-const MAX_PERSISTED_ACHIEVEMENT_SNAPSHOTS = 18;
+const MAX_LOCAL_ACHIEVEMENT_ALIASES = 192;
+const LOCAL_ACHIEVEMENT_SNAPSHOT_STORAGE_KEY = 'gdl_local_achievement_snapshots_v2';
+const MAX_PERSISTED_ACHIEVEMENT_SNAPSHOTS = 64;
 const PERSISTED_ACHIEVEMENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 interface PersistedAchievementSnapshot {
@@ -20,8 +20,8 @@ let persistedSnapshots: PersistedAchievementSnapshot[] = [];
 export function localAchievementDataSignature(data: LocalAchievementData): string {
 	const source = [
 		data.appid, data.state_appid || '', data.unlocked, data.total,
-		data.simulation_enabled ? 1 : 0, data.simulate_unlock_all ? 1 : 0,
-		data.unlock_online ? 1 : 0, data.zero_progress ? 1 : 0,
+		data.simulation_enabled ? 1 : 0, Number(data.simulate_count ?? data.simulate_percent ?? 0),
+		Number(data.simulate_online_count ?? data.simulate_online_percent ?? 0), data.unlock_online ? 1 : 0, data.zero_progress ? 1 : 0,
 		...data.achievements.map(item => [
 			item.name, item.display_name, item.description, item.icon, item.icon_gray,
 			item.earned ? 1 : 0, item.earned_time, item.progress, item.max_progress,
@@ -110,6 +110,37 @@ export function getCachedLocalAchievements(...keys: Array<string | null | undefi
 	return null;
 }
 
+/** Resolve a snapshot for one linked Steam game without trusting a shortcut
+ * alias by itself. A shortcut can keep the same local ID after it is relinked,
+ * so an alias left by the previous Steam AppID must never seed the new page. */
+export function getCachedLocalAchievementsForGame(
+	steamAppId: string | number | null | undefined,
+	...aliases: Array<string | number | null | undefined>
+): LocalAchievementData | null {
+	const expectedAppId = String(steamAppId || '');
+	if (!/^\d+$/.test(expectedAppId)) return null;
+	const keys = Array.from(new Set([expectedAppId, ...aliases.map(value => String(value || ''))].filter(Boolean)));
+	const belongsToGame = (data: LocalAchievementData): boolean =>
+		String(data.metadata_appid || data.appid || '') === expectedAppId;
+	for (const key of keys) {
+		const value = localAchievementMemoryCache.get(key);
+		if (!value || !belongsToGame(value)) continue;
+		localAchievementMemoryCache.delete(key);
+		localAchievementMemoryCache.set(key, value);
+		return value;
+	}
+	loadPersistedSnapshots();
+	for (const key of keys) {
+		const snapshot = persistedSnapshots.find(entry =>
+			entry.aliases.includes(key) && belongsToGame(entry.data));
+		if (!snapshot) continue;
+		snapshot.updatedAt = Date.now();
+		memoryCache(snapshot.data, snapshot.aliases);
+		return snapshot.data;
+	}
+	return null;
+}
+
 export function hasCachedLocalAchievements(key: string): boolean {
 	return Boolean(getCachedLocalAchievements(key));
 }
@@ -145,4 +176,24 @@ export function clearLocalAchievementCache(clearPersistent = true): void {
 	persistedSnapshotsLoaded = true;
 	persistedSnapshots = [];
 	try { localStorage.removeItem(LOCAL_ACHIEVEMENT_SNAPSHOT_STORAGE_KEY); } catch {}
+}
+
+/** Remove shortcut-scoped aliases after relinking while preserving the same
+ * achievement data under its real Steam AppID for future offline use. */
+export function invalidateLocalAchievementAliases(aliases: Iterable<string | number>): void {
+	const targets = new Set(Array.from(aliases, value => String(value)).filter(Boolean));
+	if (targets.size === 0) return;
+	for (const alias of targets) localAchievementMemoryCache.delete(alias);
+	loadPersistedSnapshots();
+	let changed = false;
+	for (const snapshot of persistedSnapshots) {
+		const nextAliases = snapshot.aliases.filter(alias => !targets.has(alias));
+		if (nextAliases.length === snapshot.aliases.length) continue;
+		snapshot.aliases = nextAliases;
+		changed = true;
+	}
+	if (changed) {
+		persistedSnapshots = persistedSnapshots.filter(snapshot => snapshot.aliases.length > 0);
+		persistSnapshots();
+	}
 }

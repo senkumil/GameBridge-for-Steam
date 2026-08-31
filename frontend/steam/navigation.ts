@@ -138,3 +138,65 @@ export function installSteamNavigation(doc: Document): () => void {
 export function disposeSteamNavigation(doc: Document): void {
 	installedDocuments.get(doc)?.();
 }
+
+/** Safely navigate Steam's library to a Non-Steam shortcut without triggering browser reloads. */
+export function navigateToLibraryShortcut(doc: Document, shortcutAppId: string | number): boolean {
+	const id = Number(shortcutAppId);
+	if (!Number.isFinite(id) || id <= 0) return false;
+	const signedId = id < 0 ? id : (id > 2147483647 ? (id - 4294967296) : id);
+	const unsignedId = id < 0 ? (id >>> 0) : id;
+
+	// 1. Dispatch click on the matching row in the library sidebar
+	const rows = doc.querySelectorAll<HTMLElement>(
+		`[data-appid="${unsignedId}"], [data-appid="${signedId}"], a[href*="/app/${unsignedId}"], a[href*="/details/${unsignedId}"], a[href*="/app/${signedId}"], a[href*="/details/${signedId}"]`
+	);
+	for (const row of Array.from(rows)) {
+		const target = row.tagName === 'A' ? row : (row.querySelector<HTMLElement>('a') || row);
+		target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: doc.defaultView || window }));
+		return true;
+	}
+
+	// 2. React fiber traversal across sidebar entries
+	const allRows = doc.querySelectorAll<HTMLElement>(
+		'[class*="gamelistentry_"], [class*="gamelistsection_"], [class*="gameListRow"], [class*="GameListRow"], [class*="gameListEntry"], [class*="GameListEntry"], [role="treeitem"], [role="listitem"]'
+	);
+	for (const row of Array.from(allRows)) {
+		for (const key of Object.keys(row)) {
+			if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
+				let fiber = (row as any)[key];
+				for (let depth = 0; fiber && depth < 10; depth += 1, fiber = fiber.return) {
+					const props = fiber.memoizedProps || fiber.pendingProps;
+					const item = props?.item || props?.overview || props?.app;
+					const rowId = Number(item?.appid ?? item?.m_unAppID ?? props?.appid);
+					if (rowId === unsignedId || rowId === signedId) {
+						const target = row.querySelector<HTMLElement>('a') || row;
+						target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: doc.defaultView || window }));
+						return true;
+					}
+				}
+			}
+		}
+	}
+
+	// 3. React Router History (g_AppHistory / g_History)
+	const view = (doc.defaultView as any) || (window as any);
+	const history = view?.g_History || view?.g_AppHistory || (window as any).g_History || (window as any).g_AppHistory;
+	if (typeof history?.push === 'function') {
+		try {
+			history.push(`/library/app/${unsignedId}`);
+			return true;
+		} catch {}
+	}
+
+	// 4. Steam Client Apps
+	const steamClient = view?.SteamClient || (window as any).SteamClient;
+	if (typeof steamClient?.Apps?.ShowApp === 'function') {
+		try {
+			steamClient.Apps.ShowApp(unsignedId);
+			return true;
+		} catch {}
+	}
+
+	return false;
+}
+

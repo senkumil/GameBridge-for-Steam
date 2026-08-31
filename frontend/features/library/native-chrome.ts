@@ -50,7 +50,7 @@ export function removeNativeGameChrome(doc: Document, clearModel = false): void 
 	if (clearModel) clearNativeGameChromeState();
 }
 
-/** Clear only GameBridge's in-memory linked-game model. No Steam DOM or React
+/** Clear only NativeGameLink's in-memory linked-game model. No Steam DOM or React
  * state is inspected or modified. */
 export function clearNativeGameChromeState(): void {
 	currentNativeGameInfo = null;

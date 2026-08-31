@@ -3,6 +3,8 @@ import { gdlText, loc, steamLanguageSync } from './localization';
 
 export const NATIVE_UI_BLUEPRINT_KEYS = {
 	playbarAchievements: 'playbar-achievements',
+	playbarLastPlayed: 'playbar-last-played',
+	playbarPlaytime: 'playbar-playtime',
 	cloudStatus: 'cloud-status',
 	infoButton: 'info-button',
 	primaryLinks: 'primary-links',
@@ -12,6 +14,19 @@ export type NativeUiBlueprintKey = typeof NATIVE_UI_BLUEPRINT_KEYS[keyof typeof 
 
 /** Session-scoped only. Persisting private Steam DOM across client updates is unsafe. */
 const nativeUiBlueprints = new Map<string, string>();
+const nativeUiBlueprintTypography = new Map<string, NativePlaybarTypography>();
+const nativePlaybarPairLanguages = new Set<string>();
+
+type NativeTypographyValues = Record<string, string>;
+interface NativePlaybarTypography {
+	label?: NativeTypographyValues;
+	detail?: NativeTypographyValues;
+}
+
+const NATIVE_TYPOGRAPHY_PROPERTIES = [
+	'font-family', 'font-size', 'font-style', 'font-weight', 'line-height',
+	'letter-spacing', 'text-transform', 'color', 'opacity',
+] as const;
 
 function blueprintKey(key: NativeUiBlueprintKey): string {
 	return `${steamLanguageSync() || 'english'}:${key}`;
@@ -23,11 +38,71 @@ function hasNativeUiBlueprint(key: NativeUiBlueprintKey): boolean {
 
 export function clearNativeUiBlueprints(): void {
 	nativeUiBlueprints.clear();
+	nativeUiBlueprintTypography.clear();
+	nativePlaybarPairLanguages.clear();
+}
+
+function computedTypography(element: HTMLElement): NativeTypographyValues | undefined {
+	const view = element.ownerDocument.defaultView;
+	if (!view) return undefined;
+	try {
+		const computed = view.getComputedStyle(element);
+		const values: NativeTypographyValues = {};
+		for (const property of NATIVE_TYPOGRAPHY_PROPERTIES) {
+			const value = computed.getPropertyValue(property).trim();
+			if (value) values[property] = value;
+		}
+		return Object.keys(values).length > 0 ? values : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function captureNativePlaybarTypography(element: HTMLElement): NativePlaybarTypography | undefined {
+	const ps = PLAYBAR_CLASSES();
+	const label = elementsWithCssModuleClass(element, ps.PlayBarLabel)[0];
+	const detail = elementsWithCssModuleClass(element, ps.PlayBarDetailLabel)[0];
+	const profile = {
+		label: label ? computedTypography(label) : undefined,
+		detail: detail ? computedTypography(detail) : undefined,
+	};
+	return profile.label || profile.detail ? profile : undefined;
+}
+
+function applyTypographyValues(element: HTMLElement, values?: NativeTypographyValues): void {
+	if (!values) return;
+	for (const [property, value] of Object.entries(values)) {
+		element.style.setProperty(property, value, 'important');
+	}
+}
+
+/** Apply the current Steam client's own computed play-bar typography. Exact
+ * per-control profiles win; session/playtime is the semantic fallback for a
+ * control that Steam has not mounted yet in this session. */
+export function applyNativePlaybarTypography(
+	root: HTMLElement,
+	preferredKey: NativeUiBlueprintKey,
+): void {
+	const ps = PLAYBAR_CLASSES();
+	const profile = nativeUiBlueprintTypography.get(blueprintKey(preferredKey))
+		|| nativeUiBlueprintTypography.get(blueprintKey(NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime))
+		|| nativeUiBlueprintTypography.get(blueprintKey(NATIVE_UI_BLUEPRINT_KEYS.playbarLastPlayed));
+	if (!profile) return;
+	for (const label of elementsWithCssModuleClass(root, ps.PlayBarLabel)) {
+		applyTypographyValues(label, profile.label);
+	}
+	for (const detail of elementsWithCssModuleClass(root, ps.PlayBarDetailLabel)) {
+		applyTypographyValues(detail, profile.detail);
+	}
 }
 
 export function saveNativeUiBlueprint(key: NativeUiBlueprintKey, element: HTMLElement): void {
 	const html = element.outerHTML;
-	if (html) nativeUiBlueprints.set(blueprintKey(key), html);
+	if (!html) return;
+	const keyName = blueprintKey(key);
+	nativeUiBlueprints.set(keyName, html);
+	const typography = captureNativePlaybarTypography(element);
+	if (typography) nativeUiBlueprintTypography.set(keyName, typography);
 }
 
 export function loadNativeUiBlueprint(doc: Document, key: NativeUiBlueprintKey): HTMLElement | null {
@@ -36,7 +111,9 @@ export function loadNativeUiBlueprint(doc: Document, key: NativeUiBlueprintKey):
 	try {
 		const template = doc.createElement('template');
 		template.innerHTML = html.trim();
-		return template.content.firstElementChild as HTMLElement | null;
+		const element = template.content.firstElementChild as HTMLElement | null;
+		if (element) applyNativePlaybarTypography(element, key);
+		return element;
 	} catch {
 		return null;
 	}
@@ -128,8 +205,10 @@ export function findNativeInfoButton(doc: Document): HTMLElement | null {
  */
 export function captureNativeUiBlueprints(doc: Document, options: CaptureNativeUiBlueprintOptions = {}): void {
 	if (!doc.body || options.skip?.()) return;
-	if (Object.values(NATIVE_UI_BLUEPRINT_KEYS).every(hasNativeUiBlueprint)) return;
 	const ps = PLAYBAR_CLASSES();
+	const language = steamLanguageSync() || 'english';
+	const playbarPairReady = nativePlaybarPairLanguages.has(language);
+	if (Object.values(NATIVE_UI_BLUEPRINT_KEYS).every(hasNativeUiBlueprint) && playbarPairReady) return;
 
 	if (!hasNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements)) try {
 		const nativeAchStat = elementsWithCssModuleClass(doc, ps.GameStatsSection)
@@ -137,6 +216,32 @@ export function captureNativeUiBlueprints(doc: Document, options: CaptureNativeU
 			.find(stat => hasCssModuleClass(stat, ps.MiniAchievements)
 				&& !stat.closest('[data-gdl-playbar-achievements]') && isRenderedElement(doc, stat));
 		if (nativeAchStat) saveNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements, nativeAchStat);
+	} catch {}
+
+	// Capture both native statistics from the same game and same row. Capturing
+	// them independently allowed route transitions to mix two Steam layouts;
+	// worse, our cloud fallback shares LastPlayed's geometry class and could be
+	// mistaken for the session statistic. Labels provide the semantic identity.
+	if (!playbarPairReady) try {
+		const lastPlayedLabel = normalizedUiText(loc('AppDetails_SectionTitle_LastPlayed', 'Last played'));
+		const playtimeLabel = normalizedUiText(loc('AppDetails_SectionTitle_PlayTime', 'Playtime'));
+		for (const section of elementsWithCssModuleClass(doc, ps.GameStatsSection)) {
+			const nativeStats = elementsWithCssModuleClass(section, ps.GameStat).filter(item =>
+				!item.closest('[data-gdl-playtime], [data-gdl-cloud-status], [data-gdl-playbar-achievements]')
+				&& !closestWithCssModuleClass(item, ps.PlayBarCloudStatusContainer)
+				&& isRenderedElement(doc, item));
+			const statLabel = (item: HTMLElement): string => normalizedUiText(
+				elementsWithCssModuleClass(item, ps.PlayBarLabel)[0]?.textContent || '');
+			const lastPlayed = nativeStats.find(item => hasCssModuleClass(item, ps.LastPlayed)
+				&& statLabel(item) === lastPlayedLabel);
+			const playtime = nativeStats.find(item => hasCssModuleClass(item, ps.Playtime)
+				&& statLabel(item) === playtimeLabel);
+			if (!lastPlayed || !playtime) continue;
+			saveNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.playbarLastPlayed, lastPlayed);
+			saveNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime, playtime);
+			nativePlaybarPairLanguages.add(language);
+			break;
+		}
 	} catch {}
 
 	if (!hasNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.cloudStatus)) try {
@@ -173,6 +278,7 @@ export function buildNativeAchievementPlaybarBlueprint(
 	stat.removeAttribute('id');
 	stat.id = 'gdl-playbar-achievements';
 	stat.dataset.gdlPlaybarAchievements = '1';
+	stat.dataset.gdlNativeBlueprint = '1';
 	stat.classList.add('gdl-local-playbar');
 	stat.style.cursor = 'pointer';
 	stat.title = gdlText('view_linked_achievements', 'View achievements for this linked game');
@@ -189,6 +295,38 @@ export function buildNativeAchievementPlaybarBlueprint(
 	return stat;
 }
 
+/** Clone Steam's own session/playtime stat, captured from a native game such
+ * as Sparking! ZERO, so shortcut fallback stats use identical markup and CSS. */
+export function buildNativePlaybarStatBlueprint(
+	doc: Document,
+	type: 'lastPlayed' | 'playtime',
+	labelText: string,
+	detailText: string,
+): HTMLElement | null {
+	const key = type === 'lastPlayed' ? NATIVE_UI_BLUEPRINT_KEYS.playbarLastPlayed : NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime;
+	const stat = loadNativeUiBlueprint(doc, key);
+	const ps = PLAYBAR_CLASSES();
+	if (!stat || (ps.GameStat && !hasCssModuleClass(stat, ps.GameStat))) return null;
+	if (type === 'lastPlayed') {
+		// Native Last Played has no leading icon. Reject any stale blueprint that
+		// came from Cloud Status instead of ever reproducing a second cloud icon.
+		if (!hasCssModuleClass(stat, ps.LastPlayed)
+			|| elementsWithCssModuleClass(stat, ps.GameStatIconForced).length > 0
+			|| elementsWithCssModuleClass(stat, ps.CloudStatusIcon).length > 0
+			|| elementsWithCssModuleClass(stat, ps.CloudIconSVG).length > 0
+			|| Boolean(stat.querySelector('.gdl-cloud-icon, .SVGIcon_Cloud'))) return null;
+	} else if (!hasCssModuleClass(stat, ps.Playtime)
+		|| elementsWithCssModuleClass(stat, ps.GameStatIconForced).length === 0) return null;
+	stat.removeAttribute('id');
+	for (const attribute of Array.from(stat.attributes)) if (attribute.name.startsWith('data-')) stat.removeAttribute(attribute.name);
+	const label = elementsWithCssModuleClass(stat, ps.PlayBarLabel)[0];
+	const detail = elementsWithCssModuleClass(stat, ps.PlayBarDetailLabel)[0];
+	if (!label || !detail) return null;
+	label.textContent = labelText;
+	detail.textContent = detailText;
+	return stat;
+}
+
 export function buildNativeCloudBlueprint(doc: Document): HTMLElement | null {
 	const wrapper = loadNativeUiBlueprint(doc, NATIVE_UI_BLUEPRINT_KEYS.cloudStatus);
 	if (!wrapper) return null;
@@ -196,6 +334,7 @@ export function buildNativeCloudBlueprint(doc: Document): HTMLElement | null {
 	if (ps.PlayBarCloudStatusContainer && !hasCssModuleClass(wrapper, ps.PlayBarCloudStatusContainer)) return null;
 	wrapper.removeAttribute('id');
 	wrapper.dataset.gdlCloudStatus = '1';
+	wrapper.dataset.gdlNativeBlueprint = '1';
 	wrapper.title = loc('AppDetails_CloudStatus_Tooltip_Synchronized', 'Your Steam Cloud files are synchronized for this app.');
 	const label = elementsWithCssModuleClass(wrapper, ps.PlayBarLabel)[0];
 	const detail = elementsWithCssModuleClass(wrapper, ps.PlayBarDetailLabel)[0];

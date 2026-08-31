@@ -10,7 +10,12 @@ import {
 	shortcutPathDirectory,
 } from '../../steam/shortcuts';
 
-const detectionCache = new RetryingRequestCache<ShortcutDetectionResult>({ ttlMs: 5 * 60 * 1000, retries: 1, baseDelayMs: 180 });
+const detectionCache = new RetryingRequestCache<ShortcutDetectionResult>({
+	ttlMs: 5 * 60 * 1000,
+	retries: 1,
+	baseDelayMs: 180,
+	isCacheable: (value): value is ShortcutDetectionResult => Boolean(value && !value.error && value.transient_error !== true),
+});
 
 /**
  * Windows assigns display names such as "tlou-i.exe - Acceso directo" when a
@@ -137,15 +142,19 @@ export async function buildShortcutDetectionContext(
 export async function detectShortcutCandidates(context: ShortcutDetectionContext): Promise<ShortcutDetectionResult | null> {
 	const language = await getSteamLanguage().catch((): string => 'english');
 	const titleHint = detectionTitleHint(context.title);
-	const cacheKey = [context.shortcutAppId, titleHint, context.exePath, context.launchOptions, language].join('|');
+	const matchingExePath = context.recommendedExePath || context.exePath;
+	const matchingStartDir = context.recommendedStartDir || context.startDir;
+	const cacheKey = [context.shortcutAppId, titleHint, context.exePath, context.startDir, matchingExePath, matchingStartDir, context.launchOptions, language].join('|');
 	try {
 		return await detectionCache.get(cacheKey, async (): Promise<ShortcutDetectionResult | null> => {
 		try {
 			const raw = await detectGameCandidatesBackend({
 				request_json: JSON.stringify({
-				title: titleHint,
+					title: titleHint,
 					exe_path: context.exePath,
 					start_dir: context.startDir,
+					game_exe_path: matchingExePath,
+					game_start_dir: matchingStartDir,
 					launch_options: context.launchOptions,
 					shortcut_app_id: String(context.shortcutAppId),
 					language,
@@ -167,14 +176,16 @@ export async function detectShortcutCandidates(context: ShortcutDetectionContext
 						direct: !!candidate.direct,
 					}))
 				: [];
-			return {
+			const result: ShortcutDetectionResult = {
 				candidates,
 				launcher_detected: !!(parsed as any).launcher_detected,
 				generic_launcher: !!(parsed as any).generic_launcher,
 				executable: String((parsed as any).executable || ''),
 				source: String((parsed as any).source || ''),
 				error: (parsed as any).error ? String((parsed as any).error) : undefined,
+				transient_error: (parsed as any).transient_error === true,
 			};
+			return result.transient_error && result.candidates.length === 0 ? null : result;
 		} catch (error) {
 			backendLog(`Automatic AppID detection failed for ${context.title}: ${error}`);
 			return null;

@@ -104,11 +104,22 @@ local function read_options()
     local result = {}
     for key, value in pairs(type(data) == "table" and data or {}) do
         if type(key) == "string" and type(value) == "table" then
+            local count = tonumber(value.simulate_count)
+            local online_count = tonumber(value.simulate_online_count)
+            local online_pct = tonumber(value.simulate_online_percent)
+            if not online_pct then
+                online_pct = (online_count and online_count > 0) or value.unlock_online == true and 100 or 0
+            end
+            local unlocked_names = type(value.unlocked_names) == "table" and value.unlocked_names or nil
+            local has_unlocked_names = unlocked_names ~= nil and #unlocked_names > 0
             result[key] = {
-                zero_progress = value.zero_progress == true,
-                simulate = value.simulate == true,
-                unlock_all = value.unlock_all == true,
-                unlock_online = value.unlock_online == true,
+                simulate = value.simulate == true or (count and count > 0) or (online_count and online_count > 0) or has_unlocked_names,
+                simulate_count = count,
+                simulate_online_count = online_count,
+                simulate_percent = tonumber(value.simulate_percent) or 25,
+                simulate_online_percent = online_pct,
+                unlock_online = (online_count and online_count > 0) or online_pct > 0 or value.unlock_online == true,
+                unlocked_names = unlocked_names,
             }
         end
     end
@@ -192,7 +203,7 @@ function M.set_game_path(request_json)
     end
     if path ~= "" then
         local options = read_options()
-        local record = { zero_progress = false, simulate = false, unlock_all = false, unlock_online = request.unlock_online == true }
+        local record = { simulate = false, simulate_percent = 25, unlock_online = request.unlock_online == true }
         for _, key in ipairs(keys) do options[key] = record end
         if not write_json("achievement_options.json", options, "per-game achievement options") then
             return cjson.encode({ ok = false, error = "write_failed" })
@@ -210,31 +221,25 @@ function M.resolve_options(request, defaults)
     end
     local resolved = { configured = record ~= nil, key = key }
     if record then
-        -- Do not use Lua's `a and b or fallback` idiom here: false is a valid
-        -- explicit per-game override for simulation and full completion.
-        resolved.zero_progress = record.zero_progress == true
         resolved.simulate = record.simulate == true
-        resolved.unlock_all = record.unlock_all == true
-        -- Global values are defaults, not master locks. A saved false is a
-        -- meaningful per-game override and must remain able to disable online
-        -- unlocks even while the global default is enabled.
+        resolved.simulate_count = tonumber(record.simulate_count)
+        resolved.simulate_online_count = tonumber(record.simulate_online_count)
+        resolved.simulate_percent = tonumber(record.simulate_percent) or 25
+        resolved.simulate_online_percent = tonumber(record.simulate_online_percent) or (record.unlock_online == true and 100 or 0)
         resolved.unlock_online = record.unlock_online == true
+        resolved.unlocked_names = record.unlocked_names
     else
-        resolved.zero_progress = defaults.zero_progress == true
         resolved.simulate = defaults.simulate == true
-        resolved.unlock_all = defaults.unlock_all == true
+        resolved.simulate_count = tonumber(defaults.simulate_count)
+        resolved.simulate_online_count = tonumber(defaults.simulate_online_count)
+        resolved.simulate_percent = tonumber(defaults.simulate_percent) or 25
+        resolved.simulate_online_percent = tonumber(defaults.simulate_online_percent) or (defaults.unlock_online == true and 100 or 0)
         resolved.unlock_online = defaults.unlock_online == true
-    end
-    if resolved.zero_progress then
-        resolved.simulate = false
-        resolved.unlock_all = false
-        resolved.unlock_online = false
+        resolved.unlocked_names = defaults.unlocked_names
     end
     if M.configured_path(request.shortcut_app_id or request.state_app_id, request.steam_app_id or request.appid) then
         resolved.simulate = false
-        resolved.unlock_all = false
     end
-    if not resolved.simulate then resolved.unlock_all = false end
     return resolved
 end
 
@@ -242,9 +247,11 @@ function M.get_game_options(request_json)
     local request = M.parse_request(request_json)
     if #M.game_keys(request) == 0 then return cjson.encode({ ok = false, error = "missing_game_id" }) end
     local effective = M.resolve_options(request, {
-        zero_progress = false,
         simulate = request.global_simulate == true,
-        unlock_all = request.global_unlock_all == true,
+        simulate_count = tonumber(request.global_simulate_count),
+        simulate_online_count = tonumber(request.global_simulate_online_count),
+        simulate_percent = tonumber(request.global_simulate_percent) or 25,
+        simulate_online_percent = tonumber(request.global_simulate_online_percent) or (request.global_unlock_online == true and 100 or 0),
         unlock_online = request.global_unlock_online == true,
     })
     effective.ok = true
@@ -259,13 +266,33 @@ function M.set_game_options(request_json)
     if request.reset == true then
         for _, key in ipairs(keys) do options[key] = nil end
     else
-        local zero_progress = request.zero_progress == true
-        local simulate = not zero_progress and request.simulate == true
+        local count = tonumber(request.simulate_count)
+        local online_count = tonumber(request.simulate_online_count)
+        local unlocked_names = type(request.unlocked_names) == "table" and request.unlocked_names or nil
+        local has_unlocked_names = unlocked_names ~= nil and #unlocked_names > 0
+        local simulate = request.simulate
+        if simulate == nil then
+            simulate = (count and count > 0) or (online_count and online_count > 0) or has_unlocked_names
+        end
+        if simulate == false then
+            count = 0
+            online_count = 0
+            unlocked_names = nil
+        end
+        local pct = tonumber(request.simulate_percent)
+        if not pct or pct < 0 or pct > 100 then pct = 25 end
+        local online_pct = tonumber(request.simulate_online_percent)
+        if not online_pct or online_pct < 0 or online_pct > 100 then
+            online_pct = (online_count and online_count > 0) or request.unlock_online == true and 100 or 0
+        end
         local record = {
-            zero_progress = zero_progress,
-            simulate = simulate,
-            unlock_all = simulate and request.unlock_all == true,
-            unlock_online = not zero_progress and request.unlock_online == true,
+            simulate = simulate == true,
+            simulate_count = count or 0,
+            simulate_online_count = online_count or 0,
+            simulate_percent = pct,
+            simulate_online_percent = online_pct,
+            unlock_online = (online_count and online_count > 0) or online_pct > 0,
+            unlocked_names = unlocked_names,
         }
         for _, key in ipairs(keys) do options[key] = record end
         if simulate then
@@ -280,9 +307,11 @@ function M.set_game_options(request_json)
         return cjson.encode({ ok = false, error = "write_failed" })
     end
     local effective = M.resolve_options(request, {
-        zero_progress = false,
         simulate = request.global_simulate == true,
-        unlock_all = request.global_unlock_all == true,
+        simulate_count = tonumber(request.global_simulate_count),
+        simulate_online_count = tonumber(request.global_simulate_online_count),
+        simulate_percent = tonumber(request.global_simulate_percent) or 25,
+        simulate_online_percent = tonumber(request.global_simulate_online_percent) or (request.global_unlock_online == true and 100 or 0),
         unlock_online = request.global_unlock_online == true,
     })
     effective.ok = true

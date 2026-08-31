@@ -6,7 +6,7 @@ import { gdlText } from '../../../steam/localization';
 import { postStatusUpdate } from '../../../steam/social';
 import {
 	getCurrentSteamUser,
-	renderUnifiedActivityFeed,
+	applyUnifiedActivityFeed,
 	saveLocalActivityPost,
 	setupPostDeleteHandlers,
 	STEAM_EMOTICONS,
@@ -33,6 +33,7 @@ export function setupStatusPostBox(
 	const statusRow = wrapper.querySelector('#gdl-status-controls') as HTMLElement | null;
 	const postButton = wrapper.querySelector('#gdl-status-post') as HTMLButtonElement | null;
 	const emoticonButton = wrapper.querySelector('.gdl-emoticon-btn') as HTMLButtonElement | null;
+	const latestNewsButton = wrapper.querySelector('.gdl-latest-news-button') as HTMLButtonElement | null;
 	if (!statusArea || !statusRow || !postButton) return;
 
 	const lifecycle = new DisposableRegistry(() => {
@@ -44,24 +45,67 @@ export function setupStatusPostBox(
 	const activeClass = POST_CLASSES().Active;
 	const enabledClass = POST_CLASSES().Enabled;
 	const container = (wrapper.querySelector('.gdl-status-box-container') as HTMLElement | null) || wrapper;
+	const syncPostButtonState = (): void => {
+		const enabled = statusArea.value.trim().length > 0;
+		postButton.classList.toggle(enabledClass, enabled);
+		postButton.classList.toggle('is-enabled', enabled);
+		postButton.toggleAttribute('data-gdl-enabled', enabled);
+		postButton.disabled = false;
+	};
+
+	const autoResizeTextarea = (): void => {
+		if (typeof CSS !== 'undefined' && CSS.supports && CSS.supports('field-sizing', 'content')) {
+			statusArea.style.removeProperty('height');
+			return;
+		}
+		const hasContent = statusArea.value.length > 0;
+		const isActive = container.classList.contains('gdl-composer-active') || doc.activeElement === statusArea || hasContent;
+		if (!isActive && !hasContent) {
+			statusArea.style.setProperty('height', '40px', 'important');
+			return;
+		}
+		statusArea.style.setProperty('height', 'auto', 'important');
+		const contentH = statusArea.scrollHeight;
+		const nextH = Math.max(64, contentH);
+		statusArea.style.setProperty('height', `${nextH}px`, 'important');
+	};
+
 	const setActive = (active: boolean): void => {
 		statusRow.classList.toggle(activeClass, active);
 		container.classList.toggle('gdl-composer-active', active);
+		autoResizeTextarea();
 	};
 
 	lifecycle.listen(statusArea, 'input', () => {
-		postButton.classList.toggle(enabledClass, statusArea.value.trim().length > 0);
+		syncPostButtonState();
+		autoResizeTextarea();
 	});
-	lifecycle.listen(statusArea, 'focus', () => setActive(true));
+	lifecycle.listen(statusArea, 'focus', () => {
+		setActive(true);
+		autoResizeTextarea();
+	});
 	lifecycle.listen(statusArea, 'blur', () => {
 		lifecycle.timeout(() => {
-			if (!statusArea.value.trim() && doc.activeElement !== statusArea && !doc.getElementById('gdl-emoticon-picker')) setActive(false);
-		}, 200);
+			if (!statusArea.value.trim() && doc.activeElement !== statusArea && !doc.getElementById('gdl-emoticon-picker')) {
+				setActive(false);
+			}
+			autoResizeTextarea();
+		}, 60);
 	});
 	lifecycle.listen(statusArea, 'keydown', rawEvent => {
 		const event = rawEvent as KeyboardEvent;
 		if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) postButton.click();
 	});
+
+	syncPostButtonState();
+	autoResizeTextarea();
+
+	// Keep the expanded composer from collapsing between pointer down and click.
+	// Its height change moves the news button out from under the pointer, causing
+	// the browser to cancel the first click instead of following the link.
+	if (latestNewsButton) {
+		lifecycle.listen(latestNewsButton, 'mousedown', event => event.preventDefault());
+	}
 
 	if (emoticonButton) {
 		const togglePicker = (event: MouseEvent): void => {
@@ -83,8 +127,8 @@ export function setupStatusPostBox(
 					<div class="gdl-ep-item" data-emo="🎮">🎮</div>
 					<div class="gdl-ep-item" data-emo="🔥">🔥</div>
 				</div>
-				<div class="gdl-ep-heading" style="margin-top:12px;">${escapeHtml(gdlText('all_emoticons', 'ALL EMOTICONS'))}</div>
-				<div class="gdl-ep-grid gdl-ep-all" style="max-height:150px;overflow-y:auto;">
+				<div class="gdl-ep-heading" style="margin-top:8px;">${escapeHtml(gdlText('all_emoticons', 'ALL EMOTICONS'))}</div>
+				<div class="gdl-ep-grid gdl-ep-all" style="max-height:120px;overflow-y:auto;">
 					${STEAM_EMOTICONS.map(emoticon => `<div class="gdl-ep-item" data-emo="${emoticon.char}" title="${emoticon.name}">${emoticon.char}</div>`).join('')}
 				</div>
 				<input class="gdl-ep-search" type="text" placeholder="${escapeHtml(gdlText('search', 'Search'))}..." />`;
@@ -92,6 +136,19 @@ export function setupStatusPostBox(
 			boxContainer.style.position = 'relative';
 			boxContainer.style.zIndex = '500';
 			boxContainer.appendChild(picker);
+
+			// Anchor the popup to the actual emoticon button instead of the top of
+			// the whole composer. Steam opens this surface directly above the
+			// button, so it should stay floating above it.
+			const containerRect = boxContainer.getBoundingClientRect();
+			const buttonRect = emoticonButton.getBoundingClientRect();
+			const pickerHeight = picker.offsetHeight;
+			const buttonTop = buttonRect.top - containerRect.top;
+			const buttonRightInset = Math.max(0, containerRect.right - buttonRect.right);
+			const preferredTop = buttonTop - pickerHeight - 10;
+			picker.style.top = `${preferredTop}px`;
+			picker.style.right = `${buttonRightInset}px`;
+			picker.style.bottom = 'auto';
 
 			const searchInput = picker.querySelector('.gdl-ep-search') as HTMLInputElement | null;
 			if (searchInput) {
@@ -121,7 +178,8 @@ export function setupStatusPostBox(
 					statusArea.value = value.substring(0, start) + emoticon + value.substring(end);
 					statusArea.selectionStart = statusArea.selectionEnd = start + emoticon.length;
 					statusArea.focus();
-					postButton.classList.toggle(enabledClass, statusArea.value.trim().length > 0);
+					syncPostButtonState();
+					autoResizeTextarea();
 					picker.remove();
 				});
 			});
@@ -149,8 +207,9 @@ export function setupStatusPostBox(
 			user_avatar: user.avatar,
 		}, shortcutAppId);
 		statusArea.value = '';
-		postButton.classList.remove(enabledClass);
+		syncPostButtonState();
 		setActive(false);
+		autoResizeTextarea();
 		doc.getElementById('gdl-emoticon-picker')?.remove();
 
 		const numericAppId = Number.parseInt(steamAppId, 10);
@@ -158,7 +217,7 @@ export function setupStatusPostBox(
 
 		const feedContainer = doc.getElementById('gdl-activity-feed');
 		if (feedContainer) {
-			feedContainer.innerHTML = renderUnifiedActivityFeed(steamAppId, shortcutAppId, newsItems, fallbackImage);
+			applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
 			setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
 		}
 	});

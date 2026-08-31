@@ -2,7 +2,7 @@ import { backendLog } from '../api/backend';
 import { findMappingForTitle } from '../core/mappings';
 import { normalizeTitle } from '../core/text';
 
-const SHORTCUT_THRESHOLD = 2147483648;
+export const SHORTCUT_THRESHOLD = 2147483648;
 const shortcutPlaytimeRequests = new Map<number, Promise<number | null>>();
 
 
@@ -105,6 +105,10 @@ export function looseMatchTitle(a: string, b: string): boolean {
 
 export function getSteamAppStore(): any | null {
 	if ((window as any).appStore?.m_mapApps) return (window as any).appStore;
+	if ((window as any).AppStore?.m_mapApps) return (window as any).AppStore;
+	if (typeof document !== 'undefined' && (document.defaultView as any)?.appStore?.m_mapApps) {
+		return (document.defaultView as any).appStore;
+	}
 	const pm = (window as any).g_PopupManager;
 	if (pm) {
 		try {
@@ -113,11 +117,12 @@ export function getSteamAppStore(): any | null {
 				const win = p?.m_popup?.window || p?.window || p?.m_popup || p;
 				if (win?.appStore?.m_mapApps) return win.appStore;
 			}
-			if (pm.m_mapPopups) {
-				for (const [_, p] of pm.m_mapPopups) {
-					const win = p?.m_popup?.window || p?.window;
-					if (win?.appStore?.m_mapApps) return win.appStore;
-				}
+			const popups = pm.m_mapPopups instanceof Map
+				? Array.from(pm.m_mapPopups.values())
+				: Object.values(pm.m_mapPopups || {});
+			for (const p of popups as any[]) {
+				const win = p?.m_popup?.window || p?.window;
+				if (win?.appStore?.m_mapApps) return win.appStore;
 			}
 		} catch {}
 	}
@@ -144,9 +149,9 @@ export function findShortcutAppIdByName(title: string): number | null {
 		if (normalizedTarget && normalizeTitle(name) === normalizedTarget) exact.push(numId);
 		else if (canonicalTarget && canonicalizeGameTitle(name) === canonicalTarget) canonical.push(numId);
 	}
-	if (exact.length === 1) return exact[0];
-	if (exact.length > 1) return null;
-	return canonical.length === 1 ? canonical[0] : null;
+	if (exact.length > 0) return exact[0];
+	if (canonical.length > 0) return canonical[0];
+	return null;
 }
 
 /** Resolve the shortcut ID represented by a Steam library document. */
@@ -156,20 +161,51 @@ export function findActiveShortcutAppId(doc: Document, title: string): string | 
 		String(doc.defaultView?.location?.href || ''),
 		String(doc.location?.href || ''),
 	];
-	if (typeof document !== 'undefined' && doc === document) urls.push(String((window as any).location?.href || ''));
+	if (typeof document !== 'undefined') {
+		urls.push(String((window as any).location?.href || ''));
+		urls.push(String(document.location?.href || ''));
+	}
 	for (const url of urls) {
 		const match = url.match(/(?:games\/details|library\/app|app)\/(\d+)/i);
 		if (match && Number(match[1]) >= SHORTCUT_THRESHOLD) {
 			const candidateId = Number(match[1]);
-			// The route is the strongest identity signal Steam exposes. Do not
-			// override a concrete shortcut route with fuzzy/title-based matching.
 			if (getShortcutAppById(candidateId)) return String(candidateId);
 			if (trimmedTitle) {
-				const byName = findShortcutAppIdByName(trimmedTitle);
-				if (byName && byName === candidateId) return String(byName);
+				const ids = findShortcutAppIdsByName(trimmedTitle);
+				if (ids.includes(candidateId)) return String(candidateId);
 			}
 			return match[1];
 		}
+	}
+	const docsToInspect: Document[] = [doc];
+	if (typeof document !== 'undefined' && !docsToInspect.includes(document)) docsToInspect.push(document);
+	try {
+		const idPattern = /(?:^|[^0-9])(\d{7,})(?:$|[^0-9])/g;
+		for (const targetDoc of docsToInspect) {
+			const selected = Array.from(targetDoc.querySelectorAll<HTMLElement>(
+				'[aria-current="page"], [aria-selected="true"], [class*="selected"], [class*="Selected"], [class*="active"], [class*="Active"], [class*="focused"], [class*="Focused"], [class*="gameListRow"]',
+			));
+			for (const element of selected) {
+				const values = [
+					element.getAttribute('data-appid'), element.getAttribute('data-app-id'),
+					element.getAttribute('data-ds-appid'), element.getAttribute('data-panel'),
+					element.getAttribute('href'), element.id,
+				].filter(Boolean).join(' ');
+				for (const match of values.matchAll(idPattern)) {
+					const candidateId = Number(match[1]);
+					if (candidateId < SHORTCUT_THRESHOLD || !getShortcutAppById(candidateId)) continue;
+					const app = getShortcutAppById(candidateId);
+					const name = String(app?.display_name || app?.m_strDisplayName || '').trim();
+					if (!trimmedTitle || !name || looseMatchTitle(name, trimmedTitle) || normalizeTitle(name) === normalizeTitle(trimmedTitle)) {
+						return String(candidateId);
+					}
+				}
+			}
+		}
+	} catch {}
+	if (trimmedTitle) {
+		const byName = findShortcutAppIdByName(trimmedTitle);
+		if (byName) return String(byName);
 	}
 	return null;
 }
@@ -190,15 +226,48 @@ export function findShortcutAppIdsByName(title: string): number[] {
 	return result;
 }
 
-export function getShortcutAppById(shortcutAppId: number): any | null {
+/** Find native Steam AppID by game display name from Steam's loaded app store. */
+export function findNativeSteamAppIdByName(title: string): string | null {
 	const appStore = getSteamAppStore();
 	if (!appStore?.m_mapApps) return null;
+	const normalized = normalizeTitle(title);
+	for (const [id, app] of appStore.m_mapApps) {
+		const rawId = Number(id);
+		const numId = rawId < 0 ? (rawId >>> 0) : rawId;
+		if (!Number.isFinite(numId) || numId >= SHORTCUT_THRESHOLD || numId === 0) continue;
+		const name = app?.display_name || app?.m_strDisplayName || app?.name || '';
+		if (name && (normalizeTitle(name) === normalized || looseMatchTitle(name, title))) {
+			return String(numId);
+		}
+	}
+	return null;
+}
+
+export function getShortcutAppById(shortcutAppId: number): any | null {
+	const appStore = getSteamAppStore();
+	if (!appStore) return null;
+	if (typeof appStore.GetAppOverviewByAppID === 'function') {
+		try {
+			const app = appStore.GetAppOverviewByAppID(shortcutAppId)
+				|| appStore.GetAppOverviewByAppID(toSignedShortcutAppId(shortcutAppId));
+			if (app) return app;
+		} catch {}
+	}
+	if (!appStore.m_mapApps) return null;
 	const ids = new Set([shortcutAppId, toSignedShortcutAppId(shortcutAppId)]);
 	try {
-		for (const [id, app] of appStore.m_mapApps) {
-			const rawId = Number(id);
-			const normalizedId = rawId < 0 ? (rawId >>> 0) : rawId;
-			if (ids.has(rawId) || ids.has(normalizedId) || ids.has(Number(app?.appid))) return app;
+		if (appStore.m_mapApps instanceof Map || typeof appStore.m_mapApps?.[Symbol.iterator] === 'function') {
+			for (const [id, app] of appStore.m_mapApps) {
+				const rawId = Number(id);
+				const normalizedId = rawId < 0 ? (rawId >>> 0) : rawId;
+				if (ids.has(rawId) || ids.has(normalizedId) || ids.has(Number(app?.appid))) return app;
+			}
+		} else if (typeof appStore.m_mapApps === 'object') {
+			for (const [id, app] of Object.entries(appStore.m_mapApps)) {
+				const rawId = Number(id);
+				const normalizedId = rawId < 0 ? (rawId >>> 0) : rawId;
+				if (ids.has(rawId) || ids.has(normalizedId) || ids.has(Number((app as any)?.appid))) return app;
+			}
 		}
 	} catch {}
 	try {
@@ -297,10 +366,12 @@ export function isSteamLibraryActive(doc?: Document | null): boolean {
 		if (activeNav) {
 			const text = (activeNav.textContent || '').toLowerCase();
 			const href = (activeNav.getAttribute('href') || '').toLowerCase();
-			if (/store|tienda|magasin|shop|comunidad|community|chat|amigos/i.test(text) || /store|community/i.test(href)) {
+			if (/store|tienda|loja|magasin|boutique|shop|магазин|магазине|商店|商店|스토어|comunidad|comunidade|community|communauté|сообщество|社区|chat|amigos|friends|друзья/i.test(text)
+				|| /store|community|comunidade|сообще|社区/i.test(href)) {
 				return false;
 			}
-			if (/biblioteca|library|games|jeux|spiele|kolekcja/i.test(text) || /games|library/i.test(href)) {
+			if (/biblioteca|library|bibliothèque|bibliothek|biblioteka|bibliotheek|biblioteka|games|jeux|spiele|gioco|игр|библиотек|kolekcja|图书馆|游戏|ライブラリ|라이브러리/i.test(text)
+				|| /games|library|bibliot|игр|библиотек|游戏/i.test(href)) {
 				return true;
 			}
 		}

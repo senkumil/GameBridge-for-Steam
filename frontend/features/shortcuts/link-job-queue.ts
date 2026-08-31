@@ -2,11 +2,18 @@ import type { ShortcutLinkResult } from '../../domain/types';
 import { backendLog } from '../../api/backend';
 import { linkShortcutToSteam } from './linking';
 import { shortcutRuntimeHost } from './host';
+import { findMappingForShortcut } from './registry';
 
 const STORAGE_KEY = 'gdl-pending-link-jobs-v1';
-const RETRY_BASE_DELAY_MS = 15_000;
+const JOBS_CHANGED_EVENT = 'gdl:pending-link-jobs-changed';
+// The foreground link is deliberately bounded; retry the remaining assets soon
+// after a slow Steam/HTTP operation settles instead of leaving the user waiting
+// fifteen seconds before the first reconciliation attempt.
+const RETRY_BASE_DELAY_MS = 5_000;
 const RETRY_MAX_DELAY_MS = 5 * 60_000;
 let processing: Promise<void> | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let processingPauseDepth = 0;
 
 export interface PendingLinkJob {
 	id: string;
@@ -18,6 +25,7 @@ export interface PendingLinkJob {
 	trackingExecutable: string;
 	trackingStartDir: string;
 	shortcutExecutable: string;
+	repairResources?: boolean;
 	attempts: number;
 	status: 'queued' | 'running' | 'failed';
 	createdAt: number;
@@ -41,6 +49,7 @@ function readJobs(): PendingLinkJob[] {
 			.map(job => ({
 				...job,
 				shortcutExecutable: String(job.shortcutExecutable || ''),
+				repairResources: Boolean(job.repairResources),
 				status: job.status === 'failed' ? 'failed' : 'queued',
 				attempts: Number(job.attempts) || 0,
 				nextAttemptAt: Number(job.nextAttemptAt) || 0,
@@ -49,23 +58,99 @@ function readJobs(): PendingLinkJob[] {
 }
 
 function writeJobs(jobs: PendingLinkJob[]): void {
-	try { storage()?.setItem(STORAGE_KEY, JSON.stringify(jobs)); }
+	try {
+		storage()?.setItem(STORAGE_KEY, JSON.stringify(jobs));
+		window.dispatchEvent(new CustomEvent(JOBS_CHANGED_EVENT));
+	}
 	catch (error) { backendLog('Could not persist background link queue: ' + String(error)); }
+}
+
+function normalizedExecutable(value: unknown): string {
+	return String(value || '').trim().replace(/^"|"$/g, '').replace(/\//g, '\\').toLocaleLowerCase();
+}
+
+/** Match one physical shortcut without conflating duplicate game titles. The
+ * executable identity bridges Steam's temporary AppID regeneration window. */
+function sameLogicalShortcut(left: Pick<PendingLinkJob, 'shortcutAppId' | 'shortcutExecutable' | 'title'>,
+	right: Pick<PendingLinkJob, 'shortcutAppId' | 'shortcutExecutable' | 'title'>): boolean {
+	const leftId = Number(left.shortcutAppId || 0);
+	const rightId = Number(right.shortcutAppId || 0);
+	const leftHasId = Number.isFinite(leftId) && leftId >= 2147483648;
+	const rightHasId = Number.isFinite(rightId) && rightId >= 2147483648;
+	if (leftHasId && rightHasId && leftId === rightId) return true;
+	const leftExe = normalizedExecutable(left.shortcutExecutable);
+	const rightExe = normalizedExecutable(right.shortcutExecutable);
+	if (leftExe && rightExe) return leftExe === rightExe;
+	if (leftHasId && rightHasId) return false;
+	if (leftExe || rightExe) return false;
+	return String(left.title || '').trim().toLocaleLowerCase() === String(right.title || '').trim().toLocaleLowerCase();
+}
+
+/** Wake the durable queue at the earliest backoff deadline. Persisting a job
+ * alone is insufficient: without this timer retries only happened after a
+ * plugin reload or another unrelated user action. */
+function scheduleNextRetry(jobs = readJobs()): void {
+	if (retryTimer) clearTimeout(retryTimer);
+	retryTimer = null;
+	if (processingPauseDepth > 0) return;
+	const now = Date.now();
+	const next = jobs
+		.filter(job => job.status === 'queued')
+		.map(job => Math.max(now, Number(job.nextAttemptAt) || 0))
+		.sort((a, b) => a - b)[0];
+	if (!Number.isFinite(next)) return;
+	retryTimer = setTimeout(() => {
+		retryTimer = null;
+		void processPendingLinkJobs(shortcutRuntimeHost().getMainWindowDoc());
+	}, Math.max(50, next - now));
+}
+
+/** Keep durable repairs from competing with a bulk Steam bridge transaction. */
+export async function pausePendingLinkJobs(): Promise<void> {
+	processingPauseDepth += 1;
+	scheduleNextRetry();
+	const active = processing;
+	if (active) await active.catch(() => {});
+}
+
+export function resumePendingLinkJobs(): void {
+	processingPauseDepth = Math.max(0, processingPauseDepth - 1);
+	if (processingPauseDepth > 0) return;
+	scheduleNextRetry();
+	void processPendingLinkJobs(shortcutRuntimeHost().getMainWindowDoc());
 }
 
 /** Persist first, then notify the long-lived desktop runtime to process it. */
 export function enqueueLinkJob(input: Omit<PendingLinkJob, 'id' | 'attempts' | 'status' | 'createdAt'>): PendingLinkJob {
-	const jobs = readJobs();
+	let jobs = readJobs();
 	const id = `${input.shortcutAppId || input.title}|${input.steamAppId}`;
-	const existing = jobs.find(job => job.id === id);
+	// A newer AppID choice supersedes every queued repair for this same physical
+	// shortcut. Otherwise an old repair can silently relink the previous game
+	// after the user has already saved the new target.
+	const obsoleteIds = new Set(jobs
+		.filter(job => job.steamAppId !== input.steamAppId && sameLogicalShortcut(job, input))
+		.map(job => job.id));
+	if (obsoleteIds.size > 0) jobs = jobs.filter(job => !obsoleteIds.has(job.id));
+	const existing = jobs.find(job => job.id === id
+		|| (job.steamAppId === input.steamAppId && sameLogicalShortcut(job, input)));
 	if (existing) {
-		if (existing.status !== 'failed') return existing;
+		if (existing.status !== 'failed') {
+			const upgradeRepair = Boolean(input.repairResources && !existing.repairResources);
+			Object.assign(existing, input, { repairResources: Boolean(existing.repairResources || input.repairResources) });
+			if (upgradeRepair) {
+				existing.nextAttemptAt = 0;
+			}
+			writeJobs(jobs);
+			scheduleNextRetry(jobs);
+			return existing;
+		}
 		// Explicitly pressing Save again is a new attempt. Re-arm the existing
 		// logical job instead of leaving a permanent failed record with the same
 		// identity in localStorage.
 		Object.assign(existing, input, { attempts: 0, status: 'queued' as const, createdAt: Date.now(), nextAttemptAt: 0 });
 		delete existing.lastError;
 		writeJobs(jobs);
+		scheduleNextRetry(jobs);
 		try { shortcutRuntimeHost().runPendingLinkJobs?.(); } catch {}
 		return existing;
 	}
@@ -79,8 +164,15 @@ export function enqueueLinkJob(input: Omit<PendingLinkJob, 'id' | 'attempts' | '
 	};
 	jobs.push(job);
 	writeJobs(jobs);
+	scheduleNextRetry(jobs);
 	try { shortcutRuntimeHost().runPendingLinkJobs?.(); } catch {}
 	return job;
+}
+
+/** Read a durable job so an open confirmation dialog can show the result of
+ * its background retry instead of remaining on a stale queued message. */
+export function getPendingLinkJob(id: string): PendingLinkJob | null {
+	return readJobs().find(job => job.id === id) || null;
 }
 
 /** A user who pressed Link has already made a decision; the detector must not
@@ -102,23 +194,33 @@ export function cancelPendingLinkJobs(shortcutAppId?: number | null, title = '')
 		|| (!!normalizedTitle && job.title.trim().toLowerCase() === normalizedTitle)
 	));
 	const removed = jobs.length - kept.length;
-	if (removed > 0) writeJobs(kept);
+	if (removed > 0) { writeJobs(kept); scheduleNextRetry(kept); }
 	return removed;
 }
 
 /** Cancel every queued/retrying bulk link operation. */
 export function cancelAllPendingLinkJobs(): number {
 	const jobs = readJobs();
-	if (jobs.length > 0) writeJobs([]);
+	if (jobs.length > 0) { writeJobs([]); scheduleNextRetry([]); }
 	return jobs.length;
 }
 
 export async function processPendingLinkJobs(targetDoc?: Document | null): Promise<void> {
+	if (processingPauseDepth > 0) return;
 	if (processing) return processing;
 	processing = (async () => {
 		let jobs = readJobs();
 		for (const job of jobs) {
+			if (processingPauseDepth > 0) break;
 			if (job.status === 'failed') continue;
+			// A previous attempt may have committed the mapping before its UI
+			// request was interrupted. Retire that stale queue entry immediately
+			// instead of waiting for its exponential backoff to elapse.
+			if (!job.repairResources && findMappingForShortcut(job.shortcutAppId, job.title, job.shortcutExecutable) === job.steamAppId) {
+				jobs = jobs.filter(candidate => candidate.id !== job.id);
+				writeJobs(jobs);
+				continue;
+			}
 			if ((job.nextAttemptAt || 0) > Date.now()) continue;
 			job.status = 'running';
 			writeJobs(jobs);
@@ -130,6 +232,8 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 					skipLauncher: job.skipLauncher, existingLaunchOptions: job.existingLaunchOptions,
 					trackingExecutable: job.trackingExecutable, trackingStartDir: job.trackingStartDir,
 					shortcutExecutable: job.shortcutExecutable,
+					repairResources: Boolean(job.repairResources),
+					assetTimeoutMs: 30_000,
 					onStatus: message => backendLog(`Background link ${job.steamAppId}: ${message}`),
 				});
 			} catch (error) {
@@ -141,13 +245,14 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 			if (result?.shortcutAppId && result.shortcutAppId !== current.shortcutAppId) {
 				current.shortcutAppId = result.shortcutAppId;
 			}
-			if (result?.ok) {
+			const resourcesComplete = Boolean(result?.setup?.artworkComplete && result?.setup?.iconApplied);
+			if (result?.ok && (!current.repairResources || resourcesComplete)) {
 				jobs = jobs.filter(candidate => candidate.id !== job.id);
 				writeJobs(jobs);
 				continue;
 			}
 			current.attempts += 1;
-			current.lastError = String(result?.error || 'link_failed');
+			current.lastError = resourcesComplete ? String(result?.error || 'link_failed') : 'resource_sync_incomplete';
 			const hardFailure = new Set(['invalid_appid', 'refusing_to_modify_native_steam_app']).has(current.lastError);
 			if (hardFailure) {
 				current.status = 'failed';
@@ -163,6 +268,6 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 			}
 			writeJobs(jobs);
 		}
-	})().finally(() => { processing = null; });
+	})().finally(() => { processing = null; scheduleNextRetry(); });
 	return processing;
 }

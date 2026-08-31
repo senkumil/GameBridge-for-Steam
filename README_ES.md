@@ -1,14 +1,14 @@
-# GameBridge for Steam
+# NativeGameLink for Steam
 
 [English](README.md) · **Español**
 
 **Lleva la experiencia completa de la Biblioteca de Steam a tus juegos que no son de Steam.**
 
-GameBridge for Steam es un complemento para [Millennium](https://steambrew.app/) que vincula un acceso directo externo con su AppID real de Steam y reconstruye su página de Biblioteca con metadatos oficiales, ilustraciones, actividad, logros, comunidad, tiempo de juego y controles de estilo nativo.
+NativeGameLink for Steam es un complemento para [Millennium](https://steambrew.app/) que vincula un acceso directo externo con su AppID real de Steam y reconstruye su página de Biblioteca con metadatos oficiales, ilustraciones, actividad, logros, comunidad, tiempo de juego y controles de estilo nativo.
 
 Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: recibe la identidad y presentación de su versión de Steam sin dejar de ejecutar el archivo que añadiste originalmente.
 
-> GameBridge modifica la presentación local de los accesos directos vinculados. No concede licencias, propiedad de juegos, objetos de inventario, almacenamiento de Steam Cloud ni logros oficiales para el perfil de Steam.
+> NativeGameLink modifica la presentación local de los accesos directos vinculados. No concede licencias, propiedad de juegos, objetos de inventario, almacenamiento de Steam Cloud ni logros oficiales para el perfil de Steam.
 
 ---
 
@@ -28,7 +28,7 @@ Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: reci
 
 ## 🎮 Una experiencia de Biblioteca de estilo nativo
 
-GameBridge reconstruye las superficies que normalmente faltan en un acceso directo externo:
+NativeGameLink reconstruye las superficies que normalmente faltan en un acceso directo externo:
 
 - **Barra superior estilo Steam** con Jugar, presentación del estado de Cloud, última sesión, tiempo total, progreso de logros, información del juego, mando y favoritos.
 - **Enlaces oficiales** a la tienda, DLC, punto de encuentro, tienda de puntos, discusiones, guías, Workshop y soporte cuando existen.
@@ -72,7 +72,7 @@ Estas capturas muestran la diferencia visual entre un acceso directo sin vincula
 
 ## 🔍 Detección automática y vinculación inteligente
 
-Al abrir un acceso directo externo recién añadido, GameBridge puede sugerir automáticamente la versión de Steam más probable.
+Al abrir un acceso directo externo recién añadido, NativeGameLink puede sugerir automáticamente la versión de Steam más probable.
 
 El detector combina distintas evidencias en lugar de confiar únicamente en el nombre:
 
@@ -86,7 +86,7 @@ El detector combina distintas evidencias en lugar de confiar únicamente en el n
 
 La ventana de confirmación muestra nombres, AppID, confianza y carátulas antes de realizar cambios. Puedes elegir otro candidato, rechazar la sugerencia o introducir manualmente un AppID desde **Propiedades**.
 
-Después de confirmar, GameBridge:
+Después de confirmar, NativeGameLink:
 
 1. Guarda una asociación estable para el acceso directo.
 2. Lo renombra con el título oficial.
@@ -99,7 +99,7 @@ Después de confirmar, GameBridge:
 
 ## 🖼️ Ilustraciones automáticas y colocación nativa
 
-GameBridge da prioridad a los recursos publicados por Steam y los coloca en sus espacios y proporciones esperados:
+NativeGameLink da prioridad a los recursos publicados por Steam y los coloca en sus espacios y proporciones esperados:
 
 - **Portada vertical** (`600 × 900`) para colecciones y estanterías.
 - **Fondo hero** (`1920 × 620`) para la cabecera de detalles.
@@ -111,15 +111,21 @@ Al terminar, el proceso informa si todos los recursos fueron aplicados y cuáles
 
 ### Respaldo con SteamGridDB
 
-Si Steam no publicó una portada, fondo, logo o cápsula concreta, GameBridge puede pedir únicamente ese recurso faltante a [SteamGridDB](https://www.steamgriddb.com/). La selección prioriza AppID, tipo, dimensiones, transparencia, idioma y estilo apropiados, y rechaza dominios no autorizados.
+Si Steam no publicó una portada, fondo, logo o cápsula concreta, NativeGameLink puede pedir únicamente ese recurso faltante a [SteamGridDB](https://www.steamgriddb.com/). La selección prioriza AppID, tipo, dimensiones, transparencia, idioma y estilo apropiados, y rechaza dominios no autorizados.
 
-Introduce tu propia API key de SteamGridDB en los ajustes de GameBridge y activa el respaldo automático. La clave se guarda solo en el contexto local de Steam/Millennium; no viene incluida con el complemento ni se envía a servidores de GameBridge. Otro código inyectado en el mismo contexto podría acceder al almacenamiento local, por lo que nunca debes publicar una clave compartida.
+Introduce tu propia API key de SteamGridDB en los ajustes de NativeGameLink y activa el respaldo automático. La clave se guarda solo en el contexto local de Steam/Millennium; no viene incluida con el complemento ni se envía a servidores de NativeGameLink. Otro código inyectado en el mismo contexto podría acceder al almacenamiento local, por lo que nunca debes publicar una clave compartida.
+
+Para juegos cuya ficha haya sido retirada, abre **Propiedades** del acceso
+directo y usa **Artwork de la biblioteca → Elegir artwork** para previsualizar
+y escoger carátula vertical, fondo hero, logo y cápsula horizontal. La elección
+queda guardada únicamente para ese acceso directo y se mantiene en futuras
+sincronizaciones.
 
 ---
 
 ## 🖥️ Integración con Big Picture
 
-GameBridge adapta localmente el modelo de datos de Big Picture para que los accesos vinculados se presenten como entradas normales de la Biblioteca:
+NativeGameLink adapta localmente el modelo de datos de Big Picture para que los accesos vinculados se presenten como entradas normales de la Biblioteca:
 
 - Ya no quedan separados dentro de **Fuera de Steam**, **No de Steam**, **Non-Steam** o su equivalente localizado.
 - La categoría redundante se oculta cuando queda vacía.
@@ -132,7 +138,7 @@ Es una integración visual local: no convierte el acceso en una licencia adquiri
 
 ## 🏆 Logros locales y notificaciones
 
-GameBridge combina los metadatos e iconos de logros de Steam con un archivo local `achievements.json`. Cuando el archivo cambia mientras juegas, actualiza la Biblioteca y puede mostrar una notificación de desbloqueo estilo Steam con sonido.
+NativeGameLink combina los metadatos e iconos de logros de Steam con un archivo local `achievements.json`. Cuando el archivo cambia mientras juegas, actualiza la Biblioteca y puede mostrar una notificación de desbloqueo estilo Steam con sonido.
 
 Incluye:
 
@@ -146,7 +152,7 @@ Incluye:
 
 ### Configurar el archivo de logros
 
-GameBridge solo lee el archivo y no lo modifica. La estructura predeterminada de GSE Saves es:
+NativeGameLink solo lee el archivo y no lo modifica. La estructura predeterminada de GSE Saves es:
 
 ```text
 %APPDATA%\GSE Saves\<AppID>\achievements.json
@@ -154,33 +160,33 @@ GameBridge solo lee el archivo y no lo modifica. La estructura predeterminada de
 
 Puedes configurar la fuente de tres formas:
 
-1. **Carpeta global:** En los ajustes de GameBridge, elige una carpeta base con una subcarpeta por AppID.
+1. **Carpeta global:** En los ajustes de NativeGameLink, elige una carpeta base con una subcarpeta por AppID.
 2. **Ruta por juego:** Abre el acceso directo → **Propiedades** → **Juego vinculado** y selecciona el archivo `achievements.json` o una carpeta que lo contenga.
 3. **Búsqueda automática:** Deja la ruta individual en automático para buscar el AppID en GSE Saves, ubicaciones compatibles de Goldberg y las carpetas globales configuradas.
 
 ### Usar SteamAutoCrack / Goldberg
 
-Los juegos que no generan un archivo local compatible necesitan un emulador o generador externo. GameBridge incluye orientación para [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases), que puede configurar Goldberg Emulator y crear las carpetas de AppID y el archivo `achievements.json` a medida que consigues logros.
+Los juegos que no generan un archivo local compatible necesitan un emulador o generador externo. NativeGameLink incluye orientación para [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases), que puede configurar Goldberg Emulator y crear las carpetas de AppID y el archivo `achievements.json` a medida que consigues logros.
 
 Configuración habitual:
 
 1. Configura el juego con SteamAutoCrack/Goldberg siguiendo la documentación de ese proyecto.
 2. Comprueba que genere `achievements.json` en una carpeta asociada con el AppID correcto.
-3. Apunta la carpeta global o la ruta individual de GameBridge a esa ubicación.
+3. Apunta la carpeta global o la ruta individual de NativeGameLink a esa ubicación.
 4. Inicia el juego mediante el acceso directo vinculado de Steam.
 5. Usa **Probar notificación de logro** para comprobar el toast y el sonido por separado.
 
-SteamAutoCrack y Goldberg Emulator son proyectos externos; no vienen incluidos ni son mantenidos por GameBridge. Úsalos únicamente con software que tengas permiso legal para configurar. Los desbloqueos locales se muestran en GameBridge, pero no desbloquean logros oficiales del perfil de Steam.
+SteamAutoCrack y Goldberg Emulator son proyectos externos; no vienen incluidos ni son mantenidos por NativeGameLink. Úsalos únicamente con software que tengas permiso legal para configurar. Los desbloqueos locales se muestran en NativeGameLink, pero no desbloquean logros oficiales del perfil de Steam.
 
 ---
 
 ## ⏱️ Tiempo de juego y sesiones
 
-### ¿Steam Beta o el seguimiento de GameBridge?
+### ¿Steam Beta o el seguimiento de NativeGameLink?
 
 Las versiones de Steam Beta que incluyen medición nativa para juegos externos son la opción recomendada si quieres que el propio cliente mida y muestre el tiempo local del acceso directo. Puedes activarla desde **Steam → Parámetros → Interfaz → Participación en la beta del cliente → Steam Beta Update**.
 
-GameBridge comprueba si el cliente actual ya expone tiempo de juego nativo para cada acceso vinculado. Cuando existe, utiliza el valor de Steam y no crea un contador duplicado. Cuando no existe, GameBridge activa automáticamente su propio seguimiento local alternativo. Este fallback viene activado por defecto y puede deshabilitarse desde los ajustes del complemento.
+NativeGameLink comprueba si el cliente actual ya expone tiempo de juego nativo para cada acceso vinculado. Cuando existe, utiliza el valor de Steam y no crea un contador duplicado. Cuando no existe, NativeGameLink activa automáticamente su propio seguimiento local alternativo. Este fallback viene activado por defecto y puede deshabilitarse desde los ajustes del complemento.
 
 El seguimiento alternativo puede:
 
@@ -194,18 +200,18 @@ El seguimiento alternativo puede:
 
 > [!IMPORTANT]
 > **Apunta directamente al `.exe` original del juego:**
-> Para que el registro y la detección del tiempo de juego funcionen correctamente (tanto mediante la medición nativa de Steam como con el seguimiento alternativo de GameBridge), el acceso directo en Steam debe apuntar al **ejecutable principal/original del juego** —es decir, al archivo ejecutable que permanece abierto y en memoria durante toda la partida—.
+> Para que el registro y la detección del tiempo de juego funcionen correctamente (tanto mediante la medición nativa de Steam como con el seguimiento alternativo de NativeGameLink), el acceso directo en Steam debe apuntar al **ejecutable principal/original del juego** —es decir, al archivo ejecutable que permanece abierto y en memoria durante toda la partida—.
 > 
 > **¿Por qué no funciona con launchers o ejecutables intermediarios?**
 > Si agregas a Steam un launcher externo, script, instalador o ejecutable intermediario/wrapper que únicamente se encarga de abrir el juego real y luego se cierra de inmediato, Steam y el monitor de procesos detectarán que la aplicación ha finalizado en cuestión de segundos, deteniendo el contador y provocando que el tiempo jugado no se registre.
 > 
-> Si el juego incluye un launcher de este tipo, localiza en su carpeta de instalación el ejecutable real de larga duración (por ejemplo, en juegos de Unreal Engine suele estar en `Binaries/Win64/...-Shipping.exe`) y configúralo como destino en las propiedades del acceso directo en Steam. Durante el flujo de vinculación, GameBridge también intentará detectar y sugerirte dicho ejecutable real de forma automática.
+> Si el juego incluye un launcher de este tipo, localiza en su carpeta de instalación el ejecutable real de larga duración (por ejemplo, en juegos de Unreal Engine suele estar en `Binaries/Win64/...-Shipping.exe`) y configúralo como destino en las propiedades del acceso directo en Steam. Durante el flujo de vinculación, NativeGameLink también intentará detectar y sugerirte dicho ejecutable real de forma automática.
 
 ---
 
 ## 🎴 Cromos, insignias, DLC y Workshop
 
-Cuando la versión de Steam ofrece los datos necesarios, GameBridge añade secciones laterales de estilo nativo:
+Cuando la versión de Steam ofrece los datos necesarios, NativeGameLink añade secciones laterales de estilo nativo:
 
 - Ilustraciones oficiales de cromos obtenidas desde Steam Community y el Mercado.
 - Insignia, experiencia, cantidades obtenidas/restantes y cuadrícula adaptable.
@@ -213,30 +219,30 @@ Cuando la versión de Steam ofrece los datos necesarios, GameBridge añade secci
 - Portadas de DLC validadas y enlaces a la tienda.
 - Vista previa y acceso a Workshop cuando el título lo admite.
 
-Estas secciones reproducen la presentación de la Biblioteca. GameBridge no entrega cromos, insignias, EXP, propiedad de DLC ni objetos de inventario.
+Estas secciones reproducen la presentación de la Biblioteca. NativeGameLink no entrega cromos, insignias, EXP, propiedad de DLC ni objetos de inventario.
 
 ---
 
 ## 🌐 Interfaz multilenguaje
 
-GameBridge detecta automáticamente el idioma activo del cliente Steam y traduce la interfaz inyectada para que coincida con él. Los encabezados de Biblioteca, enlaces de navegación, logros, etiquetas del feed, secciones de comunidad, información del juego, tooltips y controles nativos reutilizan las traducciones oficiales de Steam siempre que están disponibles.
+NativeGameLink detecta automáticamente el idioma activo del cliente Steam y traduce la interfaz inyectada para que coincida con él. Los encabezados de Biblioteca, enlaces de navegación, logros, etiquetas del feed, secciones de comunidad, información del juego, tooltips y controles nativos reutilizan las traducciones oficiales de Steam siempre que están disponibles.
 
-Las ventanas propias del complemento, mensajes de detección, ajustes y resultados de vinculación utilizan el catálogo de localización de GameBridge. El español está incluido directamente y el inglés actúa como fallback seguro para los textos que Steam no traduzca. Al cambiar el idioma del cliente, los datos y la interfaz localizados se actualizan sin necesitar una edición separada del complemento.
+Las ventanas propias del complemento, mensajes de detección, ajustes y resultados de vinculación utilizan el catálogo de localización de NativeGameLink. El español está incluido directamente y el inglés actúa como fallback seguro para los textos que Steam no traduzca. Al cambiar el idioma del cliente, los datos y la interfaz localizados se actualizan sin necesitar una edición separada del complemento.
 
 ---
 
 ## 📥 Instalación
 
 1. Instala [Millennium](https://steambrew.app/) para Steam.
-2. Descarga la versión más reciente de GameBridge for Steam.
+2. Descarga la versión más reciente de NativeGameLink for Steam.
 3. Coloca la carpeta del complemento en:
 
    ```text
-   <Steam>\millennium\plugins\GameBridge for Steam
+   <Steam>\millennium\plugins\NativeGameLinkForSteam
    ```
 
 4. Reinicia Steam.
-5. Activa **GameBridge for Steam** en la sección de complementos de Millennium.
+5. Activa **NativeGameLink for Steam** en la sección de complementos de Millennium.
 
 ---
 
@@ -280,12 +286,10 @@ Los cambios dentro de `backend/` se aplican después de reiniciar Steam.
 
 ## ☕ Apoya el proyecto
 
-Si GameBridge for Steam ha mejorado tu Biblioteca, puedes apoyar su desarrollo, pruebas, traducción y mantenimiento en [Ko-fi](https://ko-fi.com/senkumil). Cada contribución ayuda a que el proyecto siga avanzando.
+Si NativeGameLink for Steam ha mejorado tu Biblioteca, puedes apoyar su desarrollo, pruebas, traducción y mantenimiento en [Ko-fi](https://ko-fi.com/senkumil). Cada contribución ayuda a que el proyecto siga avanzando.
 
 ---
 
 ## 📄 Licencia
 
 Licencia MIT — consulta [LICENSE](LICENSE) para más información.
-
-

@@ -7,9 +7,9 @@ local fs = deps.fs
 local util = deps.util
 local config = deps.config
 local lru = deps.lru_cache
-local USER_AGENT = deps.user_agent or "GameBridge-for-Steam/2.0.0"
-local M = {}
-
+local icon_files = deps.artwork_icon
+local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
+    local M = {}
 local function get_active_account_id()
     local steam_path = millennium.steam_path()
     local vdf_path = fs.join(steam_path, "config", "loginusers.vdf")
@@ -23,7 +23,6 @@ local function get_active_account_id()
         end
         return tostring(math.floor(result))
     end
-
     local users = {}
     if fs.exists(vdf_path) then
         local f = io.open(vdf_path, "r")
@@ -47,7 +46,6 @@ local function get_active_account_id()
     else
         logger:warn("loginusers.vdf not found at " .. vdf_path)
     end
-
     -- Current Steam builds may omit MostRecent entirely. Prefer it when
     -- present, then AutoLogin, then the newest login timestamp.
     table.sort(users, function(a, b)
@@ -63,7 +61,6 @@ local function get_active_account_id()
             return account_id
         end
     end
-
     -- Last-resort fallback for portable/trimmed Steam installs: choose the
     -- most recently modified numeric userdata directory.
     local best_id = nil
@@ -85,22 +82,17 @@ local function get_active_account_id()
         logger:info("Active Steam account ID fallback: " .. best_id)
         return best_id
     end
-
     logger:warn("Could not determine an active Steam userdata account")
     return nil
 end
-
 -- ── Artwork saving to Steam grid folder ────────────────────────────────
-
 -- Newer Steam releases frequently publish library artwork only through
 -- common.library_assets_full.  Those files live below a content-hash folder,
 -- so the old /steam/apps/<appid>/logo.png convention returns 404 even though
 -- the game has a proper transparent logo.  steamcmd.net exposes Steam's
 -- appinfo structure without authentication; return the resolved URLs and let
 -- the frontend keep using SteamClient.Apps.SetCustomArtworkForApp.
-local library_assets_cache = {}
-local LIBRARY_ASSETS_CACHE_LIMIT = 48
-
+local library_assets_cache, LIBRARY_ASSETS_CACHE_LIMIT, LIBRARY_ASSETS_CACHE_SECONDS = {}, 48, 10 * 60
 -- Steam can publish localized library assets without a variant for every
 -- client language. Never fall back to an arbitrary table entry: Lua's pairs()
 -- order is intentionally undefined and could therefore select an Arabic,
@@ -114,7 +106,6 @@ local LIBRARY_LANGUAGE_ALIASES = {
     portuguese = { "brazilian" },
     brazilian = { "portuguese" },
 }
-
 local function localized_library_asset(bucket, language)
     if type(bucket) == "string" then
         return bucket ~= "" and bucket or ""
@@ -165,6 +156,23 @@ local function library_asset_url(appid, relative)
     end
     return "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/"
         .. tostring(appid) .. "/" .. value
+end
+local function legacy_store_asset_url(appid, value)
+    local relative = ""
+    if type(value) == "string" then
+        relative = value
+    elseif type(value) == "table" then
+        relative = tostring(value.english or "")
+        if relative == "" then
+            for _, candidate in pairs(value) do
+                if type(candidate) == "string" and candidate ~= "" then
+                    relative = candidate
+                    break
+                end
+            end
+        end
+    end
+    return library_asset_url(appid, relative)
 end
 
 local function community_asset_url(appid, asset_hash, extension)
@@ -259,20 +267,20 @@ function M.fetch_library_assets(request_json)
         request = { steam_app_id = request_json }
     end
     local appid = tostring(request.steam_app_id or request.appid or "")
-    local language = tostring(request.language or "english"):lower()
+    local language, force_refresh = tostring(request.language or "english"):lower(), request.force_refresh == true
     if not appid:match("^%d+$") then return cjson.encode({ error = "invalid_appid" }) end
-
     local cache_key = appid .. "|" .. language
     local cached_entry = library_assets_cache[cache_key]
-    if cached_entry then
+    if cached_entry and not force_refresh
+        and os.time() - tonumber(cached_entry.time or 0) < LIBRARY_ASSETS_CACHE_SECONDS then
         lru.touch(cached_entry)
-        -- Invalidate entries created by older plugin builds that did not yet
-        -- include Steam's official depot install size.
         local cached_ok, cached_value = pcall(cjson.decode, cached_entry.value)
         if cached_ok and type(cached_value) == "table" and cached_value.install_size ~= nil
             and tonumber(cached_value.install_size_algorithm) == 3
             and tonumber(cached_value.shortcut_icon_algorithm) == 2
-            and tonumber(cached_value.library_asset_language_algorithm) == 2 then
+            and tonumber(cached_value.library_asset_language_algorithm) == 2
+            and tonumber(cached_value.library_metadata_algorithm) == 1
+            and tonumber(cached_value.historical_metadata_algorithm) == 1 then
             return cached_entry.value
         end
         library_assets_cache[cache_key] = nil
@@ -304,38 +312,69 @@ function M.fetch_library_assets(request_json)
     end
 
     local franchise = ""
+    local developers, publishers = {}, {}
+    local genre_ids = {}
     if type(common.associations) == "table" then
         for _, association in pairs(common.associations) do
-            if type(association) == "table" and tostring(association.type or ""):lower() == "franchise" then
-                franchise = tostring(association.name or "")
-                if franchise ~= "" then break end
+            if type(association) == "table" then
+                local association_type = tostring(association.type or ""):lower()
+                local association_name = tostring(association.name or "")
+                if association_name ~= "" and association_type == "developer" then
+                    table.insert(developers, association_name)
+                elseif association_name ~= "" and association_type == "publisher" then
+                    table.insert(publishers, association_name)
+                elseif association_name ~= "" and association_type == "franchise" and franchise == "" then
+                    franchise = association_name
+                end
             end
         end
     end
+    if type(common.genres) == "table" then
+        for _, genre_id in pairs(common.genres) do
+            local value = tostring(genre_id or ""); if value:match("^%d+$") then table.insert(genre_ids, value) end
+        end
+        table.sort(genre_ids)
+    end
+
+    local category_ids = {}
+    if type(common.category) == "table" then
+        for key, enabled in pairs(common.category) do
+            local category_id = tostring(key or ""):match("^category_(%d+)$")
+            if category_id and (enabled == 1 or enabled == true or tostring(enabled) == "1") then
+                table.insert(category_ids, tonumber(category_id))
+            end
+        end
+        table.sort(category_ids)
+    end
+    local release_timestamp = tonumber(common.steam_release_date)
+    local release_date = release_timestamp and release_timestamp > 0
+        and os.date("!%Y-%m-%d", release_timestamp) or ""
 
     local shortcut_icons = {}
+    local legacy_header = legacy_store_asset_url(appid, common.header_image)
+    local legacy_logo = community_asset_url(appid, common.logo, "jpg")
     local client_tga = community_asset_url(appid, common.clienttga, "tga")
-    local client_ico = community_icon_asset_url(appid, common.clienticon, "ico")
-    local client_jpg = community_icon_asset_url(appid, common.clienticon or common.icon, "jpg")
+    local client_ico_legacy = community_asset_url(appid, common.clienticon, "ico")
+    local client_ico_modern = community_icon_asset_url(appid, common.clienticon, "ico")
+    local client_jpg_legacy = community_asset_url(appid, common.clienticon or common.icon, "jpg")
+    local client_jpg_modern = community_icon_asset_url(appid, common.clienticon or common.icon, "jpg")
     local community_icon = community_icon_url(appid, common.icon)
+
+    if client_ico_legacy ~= "" then table.insert(shortcut_icons, { url = client_ico_legacy, extension = "ico" }) end
+    if client_ico_modern ~= "" and client_ico_modern ~= client_ico_legacy then table.insert(shortcut_icons, { url = client_ico_modern, extension = "ico" }) end
     if client_tga ~= "" then table.insert(shortcut_icons, { url = client_tga, extension = "tga" }) end
-    -- Recent appinfos may omit clienttga but still expose clienticon.  ICO
-    -- is the native shortcut icon format used by Steam's Properties dialog.
-    if client_ico ~= "" then table.insert(shortcut_icons, { url = client_ico, extension = "ico" }) end
-    -- Keep a readable image fallback for CDN/ICO clients; Steam accepts this
-    -- on builds that do not expose ICO through SetShortcutIcon.
-    if client_jpg ~= "" then table.insert(shortcut_icons, { url = client_jpg, extension = "jpg" }) end
+    if client_jpg_legacy ~= "" then table.insert(shortcut_icons, { url = client_jpg_legacy, extension = "jpg" }) end
+    if client_jpg_modern ~= "" and client_jpg_modern ~= client_jpg_legacy then table.insert(shortcut_icons, { url = client_jpg_modern, extension = "jpg" }) end
 
     local result = {
-        found = has_library_assets or #shortcut_icons > 0 or community_icon ~= "",
+        found = has_library_assets or #shortcut_icons > 0 or community_icon ~= "" or legacy_header ~= "" or legacy_logo ~= "",
         appid = appid,
         source = "steamcmd_appinfo",
-        -- Prefer the 2x variants for tiles/logos, while the normal hero is
-        -- already 1920x620 and avoids an unnecessary 4K download.
         portrait = library_asset_url(appid, pick_library_asset(assets.library_capsule, language, true)),
         hero = library_asset_url(appid, pick_library_asset(assets.library_hero, language, false)),
         logo = library_asset_url(appid, pick_library_asset(assets.library_logo, language, true)),
         wide = library_asset_url(appid, pick_library_asset(assets.library_header, language, true)),
+        legacy_header = legacy_header, legacy_logo = legacy_logo,
         icon = community_icon,
         shortcut_icon = shortcut_icons[1] and shortcut_icons[1].url or "",
         shortcut_icon_extension = shortcut_icons[1] and shortcut_icons[1].extension or "",
@@ -343,14 +382,22 @@ function M.fetch_library_assets(request_json)
         shortcut_icon_algorithm = 2,
         library_asset_language_algorithm = 2,
         franchise = franchise,
+        developers = developers,
+        publishers = publishers,
+        genre_ids = genre_ids,
+        controller_support = tostring(common.controller_support or ""),
+        category_ids = category_ids,
+        release_date = release_date,
+        library_metadata_algorithm = 1,
+        historical_metadata_algorithm = 1,
         logo_position = type(assets.library_logo) == "table" and assets.library_logo.logo_position or nil,
-        -- Fixed official install footprint from Steam depot manifests.  This
-        -- intentionally does not measure the shortcut's start directory.
         install_size = official_install_size_bytes(type(body.data[appid]) == "table" and body.data[appid].depots or nil),
         install_size_algorithm = 3,
     }
+    if result.logo == "" then result.logo = legacy_logo end
+    if result.wide == "" then result.wide = legacy_header end
     local encoded = cjson.encode(result)
-    lru.put(library_assets_cache, cache_key, { value = encoded }, LIBRARY_ASSETS_CACHE_LIMIT)
+    lru.put(library_assets_cache, cache_key, { value = encoded, time = os.time() }, LIBRARY_ASSETS_CACHE_LIMIT)
     logger:info("Library assets resolved for " .. appid .. ": logo="
         .. (result.logo ~= "" and "yes" or "no") .. ", hero="
         .. (result.hero ~= "" and "yes" or "no"))
@@ -378,25 +425,66 @@ local function steamgriddb_request(path, api_key)
         },
         timeout = 10,
     })
-    if not ok_http or not res or res.status ~= 200 or not res.body then return nil end
+    if not ok_http or not res then return nil, "transient" end
+    local status = tonumber(res.status) or 0
+    if status ~= 200 or not res.body then
+        return nil, status == 404 and "missing" or "transient"
+    end
     local ok_body, body = pcall(cjson.decode, res.body)
-    return ok_body and type(body) == "table" and body or nil
+    if not ok_body or type(body) ~= "table" then return nil, "transient" end
+    return body, "ok"
+end
+
+function M.validate_steamgriddb_api_key(request_json)
+    local ok_request, request = pcall(cjson.decode, tostring(request_json or ""))
+    if not ok_request or type(request) ~= "table" then return cjson.encode({ ok = false, error = "invalid_request" }) end
+    local api_key = tostring(request.api_key or ""):match("^%s*(.-)%s*$") or ""
+    if #api_key < 16 or #api_key > 160 then return cjson.encode({ ok = false, error = "invalid_key_format" }) end
+
+    -- A stable Steam mapping verifies authentication without downloading any
+    -- artwork. Never return or log the credential.
+    local ok_http, response = pcall(http.get, "https://www.steamgriddb.com/api/v2/games/steam/10", {
+        headers = {
+            ["Accept"] = "application/json",
+            ["Authorization"] = "Bearer " .. api_key,
+            ["User-Agent"] = USER_AGENT,
+        },
+        timeout = 10,
+    })
+    if not ok_http or not response then return cjson.encode({ ok = false, error = "service_unavailable" }) end
+    local status = tonumber(response.status) or 0
+    if status == 401 or status == 403 then return cjson.encode({ ok = false, error = "invalid_key" }) end
+    if status ~= 200 then return cjson.encode({ ok = false, error = "service_unavailable", status = status }) end
+    return cjson.encode({ ok = true })
 end
 
 local function steamgriddb_asset_is_safe(item)
-    if type(item) ~= "table" or item.nsfw == true then return false end
+    if type(item) ~= "table" or item.nsfw == true or item.humor == true
+        or item.epilepsy == true or item.animated == true then return false end
+    local asset_type = tostring(item.type or ""):lower()
+    if asset_type == "animated" then return false end
     local fields = { item.style, item.tags, item.name }
     for _, value in ipairs(fields) do
         local text
         if type(value) == "table" then
             local parts = {}
-            for _, tag in pairs(value) do parts[#parts + 1] = tostring(tag or "") end
+            for _, tag in pairs(value) do
+                local tag_val = type(tag) == "table" and (tag.name or tag.tag or tag.slug or "") or tag
+                parts[#parts + 1] = tostring(tag_val or "")
+            end
             text = table.concat(parts, " ")
         else
             text = tostring(value or "")
         end
         text = text:lower()
-        if text:find("nsfw", 1, true) or text:find("meme", 1, true) or text:find("humor", 1, true) or text:find("joke", 1, true) then
+        if text:find("nsfw", 1, true) or text:find("meme", 1, true)
+            or text:find("humor", 1, true) or text:find("joke", 1, true)
+            or text:find("epilepsy", 1, true)
+            or text:find("nintendo switch", 1, true) or text:find("switch banner", 1, true)
+            or text:find("switch grid", 1, true) or text:find("switch cover", 1, true)
+            or text:find("playstation banner", 1, true) or text:find("ps5 banner", 1, true)
+            or text:find("ps4 banner", 1, true) or text:find("xbox banner", 1, true)
+            or text:find("console banner", 1, true) then
             return false
         end
     end
@@ -407,64 +495,161 @@ local function steamgriddb_first_asset(body, spec)
     local items = type(body) == "table" and body.data or nil
     if type(items) ~= "table" then return { url = "" } end
     if items.url then items = { items } end
-    local best = { url = "" }
-    local best_score = math.huge
-    for _, item in ipairs(items) do
+    local candidates = {}
+    for position, item in ipairs(items) do
         local url = type(item) == "table" and steamgriddb_image_url(item.url) or ""
         if url ~= "" and steamgriddb_asset_is_safe(item) then
-            local width = type(item) == "table" and tonumber(item.width) or nil
-            local height = type(item) == "table" and tonumber(item.height) or nil
-            local score = 0
-            if spec.ratio and width and height and width > 0 and height > 0 then
-                -- Prefer the image whose native ratio is closest to Steam's
-                -- slot. The frontend still normalizes the final canvas, but
-                -- choosing a suitable source avoids unnecessary cropping.
-                score = math.abs((width / height) - spec.ratio) * 100
-            elseif spec.ratio then
-                -- Keep candidates without metadata usable, but prefer any
-                -- candidate that includes dimensions when available.
-                score = 1000
-            end
-            if spec.width and width then score = score + math.abs(width - spec.width) / spec.width * 5 end
-            if spec.height and height then score = score + math.abs(height - spec.height) / spec.height * 5 end
-            local language = tostring(item.language or ""):lower()
-            if language == "english" or language == "en" then score = score - 2
-            elseif language ~= "" and language ~= "none" then score = score + 3 end
-            if spec.transparent then
-                if item.transparent == true then score = score - 8 else score = score + 8 end
-            end
-            if best.url == "" or score < best_score then
-                best = { url = url, id = item.id, provider = "steamgriddb", width = width, height = height,
-                    language = item.language, style = item.style, transparent = item.transparent == true }
-                best_score = score
+            local width = tonumber(item.width)
+            local height = tonumber(item.height)
+            local orientation_ok = spec.orientation ~= "portrait"
+                or not width or not height or height > width
+            local ratio = width and height and height > 0 and width / height or nil
+            local quality_ok = (not spec.min_width or (width and width >= spec.min_width))
+                and (not spec.min_height or (height and height >= spec.min_height))
+                and (not spec.min_ratio or (ratio and ratio >= spec.min_ratio))
+                and (not spec.max_ratio or (ratio and ratio <= spec.max_ratio))
+            if orientation_ok and quality_ok then
+                table.insert(candidates, { item = item, url = url, position = position })
             end
         end
     end
-    return best
+    if #candidates == 0 then return { url = "" } end
+
+    -- Some retired games need one human-reviewed selection because popularity
+    -- cannot know which edition/composition best matches the original Library.
+    -- Prefer a stable SteamGridDB asset id when one was reviewed; rank remains
+    -- available for older curated entries whose chosen candidate has no id.
+    local curated_id = tonumber(spec.id)
+    if curated_id then
+        for _, candidate in ipairs(candidates) do
+            local item = candidate.item
+            if tonumber(item.id) == curated_id then
+                return {
+                    url = candidate.url, id = item.id, provider = "steamgriddb",
+                    width = tonumber(item.width), height = tonumber(item.height),
+                    language = item.language, style = item.style,
+                    transparent = item.transparent == true,
+                    selection = "curated_id", rank = candidate.position,
+                }
+            end
+        end
+    end
+
+    -- The rank is applied after safety/orientation filters and is returned in
+    -- provenance so the decision remains auditable.
+    local curated_rank = tonumber(spec.rank)
+    if curated_rank and curated_rank >= 1 and candidates[curated_rank] then
+        local candidate = candidates[curated_rank]
+        local item = candidate.item
+        return {
+            url = candidate.url, id = item.id, provider = "steamgriddb",
+            width = tonumber(item.width), height = tonumber(item.height),
+            language = item.language, style = item.style,
+            transparent = item.transparent == true,
+            selection = "curated_rank", rank = curated_rank,
+        }
+    end
+
+    -- SteamGridDB already returns its Highest Score order. Preserve the first
+    -- safe candidate that passed the slot-quality filters above.
+    local candidate = candidates[1]
+    local item = candidate.item
+    return { url = candidate.url, id = item.id, provider = "steamgriddb",
+        width = tonumber(item.width), height = tonumber(item.height), language = item.language,
+        style = item.style, transparent = item.transparent == true,
+        selection = "highest_score", rank = candidate.position }
 end
+
+-- Rank within SteamGridDB's score-ordered, safety-filtered candidates. This is
+-- deliberately small and data-only: automatic selection remains the default.
+local STEAMGRIDDB_CURATED_RANKS = {
+    ["221430"] = {
+        portrait_rank = 2,
+        hero_id = 38076,
+        logo_id = 119351,
+        wide_rank = 1,
+    },
+    ["237110"] = { portrait_id = 46421 },
+}
 
 function M.fetch_community_artwork(request_json)
     local ok_request, request = pcall(cjson.decode, tostring(request_json or ""))
     if not ok_request or type(request) ~= "table" then return cjson.encode({ error = "invalid_request" }) end
     local appid = tostring(request.steam_app_id or request.appid or "")
-    local api_key = tostring(request.api_key or ""):match("^%s*(.-)%s*$") or ""
     if not appid:match("^%d+$") then return cjson.encode({ error = "invalid_appid" }) end
-    if #api_key < 16 or #api_key > 160 then return cjson.encode({ error = "api_key_missing" }) end
+
+    local api_keys, seen_keys = {}, {}
+    local function add_api_key(value)
+        local key = tostring(value or ""):match("^%s*(.-)%s*$") or ""
+        if #key >= 16 and #key <= 160 and not seen_keys[key] then
+            seen_keys[key] = true
+            api_keys[#api_keys + 1] = key
+        end
+    end
+    add_api_key(request.api_key)
+    if type(request.api_keys) == "table" then
+        for _, value in ipairs(request.api_keys) do add_api_key(value) end
+    end
+    if #api_keys == 0 then return cjson.encode({ error = "api_key_missing" }) end
 
     -- SteamGridDB maps its own game ids from Steam AppIDs, avoiding fuzzy title
     -- searches and accidental artwork from a different edition.
-    local game = steamgriddb_request("games/steam/" .. appid, api_key)
-    local game_id = type(game) == "table" and type(game.data) == "table" and tonumber(game.data.id) or nil
-    if not game_id then return cjson.encode({ found = false, source = "steamgriddb" }) end
+    local api_key, game_id, lookup_confirmed = nil, nil, false
+    for _, candidate_key in ipairs(api_keys) do
+        local game, status = steamgriddb_request("games/steam/" .. appid, candidate_key)
+        if status == "ok" or status == "missing" then lookup_confirmed = true end
+        game_id = type(game) == "table" and type(game.data) == "table" and tonumber(game.data.id) or nil
+        if game_id then api_key = candidate_key; break end
+    end
+    if not game_id then
+        if not lookup_confirmed then
+            return cjson.encode({ error = "service_unavailable", transient_error = true })
+        end
+        return cjson.encode({ found = false, source = "steamgriddb" })
+    end
 
     local id = tostring(math.floor(game_id))
-    local portrait = steamgriddb_first_asset(steamgriddb_request("grids/game/" .. id .. "?dimensions=600x900", api_key), { ratio = 600 / 900, width = 600, height = 900 })
-    local hero = steamgriddb_first_asset(steamgriddb_request("heroes/game/" .. id, api_key), { ratio = 1920 / 620, width = 1920, height = 620 })
-    local logo = steamgriddb_first_asset(steamgriddb_request("logos/game/" .. id, api_key), { ratio = 1280 / 720, transparent = true })
-    local wide = steamgriddb_first_asset(steamgriddb_request("grids/game/" .. id .. "?dimensions=920x430", api_key), { ratio = 920 / 430, width = 920, height = 430 })
+    local curated = STEAMGRIDDB_CURATED_RANKS[appid] or {}
+    local transient_error = false
+    local function resource_request(path)
+        local body, status = steamgriddb_request(path, api_key)
+        if status == "transient" then transient_error = true end
+        return body
+    end
+    -- Do not lock portraits to 600x900: SteamGridDB also has high-quality
+    -- 660x930 and 342x482 legacy/Galaxy covers that normalize cleanly to Steam's canvas.
+    local portrait_res = resource_request("grids/game/" .. id .. "?dimensions=600x900,342x482,660x930")
+    local portrait = steamgriddb_first_asset(portrait_res, {
+        ratio = 600 / 900, width = 600, height = 900, orientation = "portrait",
+        min_width = 300, min_height = 400, min_ratio = 0.50, max_ratio = 0.85,
+        id = curated.portrait_id, rank = curated.portrait_rank,
+    })
+    if not portrait.url or portrait.url == "" then
+        portrait = steamgriddb_first_asset(resource_request("grids/game/" .. id), {
+            ratio = 600 / 900, width = 600, height = 900, orientation = "portrait",
+            min_width = 300, min_height = 400, min_ratio = 0.50, max_ratio = 0.85,
+            id = curated.portrait_id, rank = curated.portrait_rank,
+        })
+    end
+    local hero = steamgriddb_first_asset(resource_request("heroes/game/" .. id), {
+        ratio = 1920 / 620, width = 1920, height = 620,
+        min_width = 1280, min_height = 400, min_ratio = 2.35, max_ratio = 3.65,
+        id = curated.hero_id, rank = curated.hero_rank,
+    })
+    -- Logos have intentionally variable aspect ratios; transparency and the
+    -- provider's score order are better signals than forcing a 16:9 ratio.
+    local logo = steamgriddb_first_asset(resource_request("logos/game/" .. id), {
+        transparent = true, id = curated.logo_id, rank = curated.logo_rank,
+    })
+    local wide = steamgriddb_first_asset(resource_request("grids/game/" .. id .. "?dimensions=920x430"), {
+        ratio = 920 / 430, width = 920, height = 430,
+        min_width = 800, min_height = 350, min_ratio = 1.8, max_ratio = 2.65, rank = curated.wide_rank,
+    })
     local result = {
         found = true,
         source = "steamgriddb",
+        transient_error = transient_error,
+        curated = next(curated) ~= nil,
         portrait = portrait.url, hero = hero.url, logo = logo.url, wide = wide.url,
         provenance = { portrait = portrait, hero = hero, logo = logo, wide = wide },
     }
@@ -474,118 +659,6 @@ function M.fetch_community_artwork(request_json)
         .. tostring((result.portrait ~= "" and 1 or 0) + (result.hero ~= "" and 1 or 0)
             + (result.logo ~= "" and 1 or 0) + (result.wide ~= "" and 1 or 0)))
     return cjson.encode(result)
-end
-
--- Persist Steam's official client icon for a non-Steam shortcut.  SetShortcutIcon
--- only accepts a local path, so the frontend asks this helper to download the
--- appinfo icon into Steam's stable per-user grid directory first.
-local base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-local base64_lookup = {}
-for index = 1, #base64_chars do
-    base64_lookup[base64_chars:sub(index, index)] = index - 1
-end
-
-local function decode_base64(data)
-    data = tostring(data or ""):gsub("%s", "")
-    if data == "" or #data % 4 ~= 0 or data:find("[^A-Za-z0-9%+/%=]") then return nil end
-
-    -- Decode four Base64 characters directly into at most three bytes.  This
-    -- avoids constructing an intermediate string of individual bits, which
-    -- caused excessive allocation and garbage collection for icon payloads.
-    local output = {}
-    for index = 1, #data, 4 do
-        local c1, c2 = data:sub(index, index), data:sub(index + 1, index + 1)
-        local c3, c4 = data:sub(index + 2, index + 2), data:sub(index + 3, index + 3)
-        local a, b = base64_lookup[c1], base64_lookup[c2]
-        if not a or not b then return nil end
-
-        local c = c3 == "=" and 0 or base64_lookup[c3]
-        local d = c4 == "=" and 0 or base64_lookup[c4]
-        if c == nil or d == nil then return nil end
-        -- Padding is legal only in the final quartet and must be well formed.
-        if (c3 == "=" and c4 ~= "=") or ((c3 == "=" or c4 == "=") and index + 3 ~= #data) then
-            return nil
-        end
-
-        local value = a * 262144 + b * 4096 + c * 64 + d
-        local first = math.floor(value / 65536) % 256
-        if c3 == "=" then
-            output[#output + 1] = string.char(first)
-        else
-            local second = math.floor(value / 256) % 256
-            if c4 == "=" then
-                output[#output + 1] = string.char(first, second)
-            else
-                output[#output + 1] = string.char(first, second, value % 256)
-            end
-        end
-    end
-    return table.concat(output)
-end
-
-local function validate_shortcut_icon_body(body, ext)
-    if type(body) ~= "string" or #body <= 100 then return false end
-    ext = tostring(ext or ""):lower()
-    if ext == "jpeg" then ext = "jpg" end
-    if ext == "png" then
-        return body:byte(1) == 137 and body:byte(2) == 80 and body:byte(3) == 78 and body:byte(4) == 71
-            and body:byte(5) == 13 and body:byte(6) == 10 and body:byte(7) == 26 and body:byte(8) == 10
-    end
-    if ext == "jpg" then
-        return body:byte(1) == 255 and body:byte(2) == 216
-    end
-    if ext == "ico" then
-        return body:byte(1) == 0 and body:byte(2) == 0
-            and body:byte(3) == 1 and body:byte(4) == 0 and (body:byte(5) or 0) > 0
-    end
-    if ext == "tga" then
-        local image_type = body:byte(3) or 0
-        local width = (body:byte(13) or 0) + (body:byte(14) or 0) * 256
-        local height = (body:byte(15) or 0) + (body:byte(16) or 0) * 256
-        return (image_type == 1 or image_type == 2 or image_type == 3
-            or image_type == 9 or image_type == 10 or image_type == 11)
-            and width > 0 and height > 0 and width <= 4096 and height <= 4096
-    end
-    return false
-end
-
-local function write_shortcut_icon_file(grid_dir, shortcut_app_id, ext, body)
-    ext = tostring(ext or ""):lower()
-    if ext == "jpeg" then ext = "jpg" end
-    if ext ~= "tga" and ext ~= "png" and ext ~= "ico" and ext ~= "jpg" then
-        return nil, "invalid_extension"
-    end
-    if not validate_shortcut_icon_body(body, ext) then
-        return nil, "invalid_image"
-    end
-
-    local filepath = fs.join(grid_dir, shortcut_app_id .. "_icon." .. ext)
-    local temp_path = filepath .. ".tmp"
-    local backup_path = filepath .. ".bak"
-    local file = io.open(temp_path, "wb")
-    if not file then return nil, "open_failed" end
-    local wrote, write_error = file:write(body)
-    local closed, close_error = file:close()
-    if not wrote or not closed then
-        os.remove(temp_path)
-        return nil, tostring(write_error or close_error or "write_failed")
-    end
-
-    os.remove(backup_path)
-    local had_previous = fs.exists(filepath)
-    if had_previous then os.rename(filepath, backup_path) end
-    local renamed, rename_error = os.rename(temp_path, filepath)
-    if not renamed then
-        os.remove(temp_path)
-        if had_previous and fs.exists(backup_path) then os.rename(backup_path, filepath) end
-        return nil, tostring(rename_error or "rename_failed")
-    end
-    os.remove(backup_path)
-    for _, old_ext in ipairs({ "tga", "ico", "jpg", "jpeg", "png" }) do
-        local old_path = fs.join(grid_dir, shortcut_app_id .. "_icon." .. old_ext)
-        if old_path ~= filepath and fs.exists(old_path) then os.remove(old_path) end
-    end
-    return filepath, nil
 end
 
 function M.save_shortcut_icon(request_json)
@@ -600,6 +673,10 @@ function M.save_shortcut_icon(request_json)
     if not shortcut_app_id:match("^%d+$") or not steam_app_id:match("^%d+$") then
         return cjson.encode({ error = "invalid_appid" })
     end
+	local icon_epoch = icon_files.begin(shortcut_app_id)
+	local function icon_write_is_current()
+		return icon_files.is_current(shortcut_app_id, icon_epoch)
+	end
 
     local account_id = get_active_account_id()
     if not account_id then
@@ -614,8 +691,9 @@ function M.save_shortcut_icon(request_json)
     local icon_base64 = tostring(request.icon_base64 or request.data_base64 or "")
     if icon_base64 ~= "" then
         local ext = tostring(request.extension or request.icon_extension or "png"):lower()
-        local body = decode_base64(icon_base64)
-        local filepath, write_error = write_shortcut_icon_file(grid_dir, shortcut_app_id, ext, body)
+        local body = icon_files.decode_base64(icon_base64)
+		if not icon_write_is_current() then return cjson.encode({ error = "superseded" }) end
+        local filepath, write_error = icon_files.write(grid_dir, shortcut_app_id, ext, body)
         if filepath then
             logger:info("Official shortcut icon saved from frontend payload: " .. filepath)
             return cjson.encode({ saved = true, path = filepath, extension = ext, source = tostring(request.source or "frontend") })
@@ -642,7 +720,7 @@ function M.save_shortcut_icon(request_json)
             and (ext == "tga" or ext == "png" or ext == "ico" or ext == "jpg") then
             local ok_http, res = pcall(http.get, url, { timeout = 20 })
             if ok_http and res and res.status == 200 and res.body and #res.body > 100 then
-                if not validate_shortcut_icon_body(res.body, ext) then
+                if not icon_files.validate(res.body, ext) then
                     -- Steam publishes several icon candidates for the same app. Some
                     -- endpoints answer successfully but contain a format Millennium
                     -- cannot use. This is an expected candidate miss, not a plugin
@@ -650,7 +728,8 @@ function M.save_shortcut_icon(request_json)
                     logger:info("Skipped unusable official icon candidate for " .. steam_app_id
                         .. " ext=" .. ext)
                 else
-                    local filepath, write_error = write_shortcut_icon_file(grid_dir, shortcut_app_id, ext, res.body)
+					if not icon_write_is_current() then return cjson.encode({ error = "superseded" }) end
+                    local filepath, write_error = icon_files.write(grid_dir, shortcut_app_id, ext, res.body)
                     if filepath then
                         logger:info("Official shortcut icon saved: " .. filepath)
                         return cjson.encode({ saved = true, path = filepath, extension = ext, source = url })
@@ -670,51 +749,66 @@ function M.save_shortcut_icon(request_json)
     return cjson.encode({ error = "icon_download_failed" })
 end
 
-function M.clear_artwork_except_icon(shortcut_app_id)
-    local account_id = get_active_account_id()
-    if not account_id then
-        return cjson.encode({ error = "Could not determine active Steam user" })
-    end
-
-    local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
-    local sid = tostring(shortcut_app_id)
+local function remove_grid_files(grid_dir, sid, suffixes)
     local removed = 0
-    for _, suffix in ipairs({ "p", "_hero", "_logo", "" }) do
+    for _, suffix in ipairs(suffixes) do
         for _, ext in ipairs({ "jpg", "jpeg", "png", "tga", "ico" }) do
             local filepath = fs.join(grid_dir, sid .. suffix .. "." .. ext)
             if fs.exists(filepath) then
                 os.remove(filepath)
                 removed = removed + 1
-                logger:info("Removed grid artwork file: " .. filepath)
             end
         end
     end
+    return removed
+end
+
+function M.clear_artwork_except_icon(shortcut_app_id)
+	icon_files.invalidate(shortcut_app_id)
+    local account_id = get_active_account_id()
+    if not account_id then return cjson.encode({ error = "Could not determine active Steam user" }) end
+    local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
+    local removed = remove_grid_files(grid_dir, tostring(shortcut_app_id), { "p", "_hero", "_logo", "" })
     return cjson.encode({ removed = removed, icon_preserved = true })
 end
 
 function M.clear_artwork(shortcut_app_id)
+	icon_files.invalidate(shortcut_app_id)
     local account_id = get_active_account_id()
-    if not account_id then
-        return cjson.encode({ error = "Could not determine active Steam user" })
-    end
+    if not account_id then return cjson.encode({ error = "Could not determine active Steam user" }) end
+    local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
+    local removed = remove_grid_files(grid_dir, tostring(shortcut_app_id), { "p", "_hero", "_logo", "_icon", "" })
+    return cjson.encode({ removed = removed })
+end
 
-    local steam_path = millennium.steam_path()
-    local grid_dir = fs.join(steam_path, "userdata", account_id, "config", "grid")
-    local sid = tostring(shortcut_app_id)
-
+function M.clear_all_linked_artworks()
+    local account_id = get_active_account_id()
+    if not account_id then return cjson.encode({ error = "Could not determine active Steam user" }) end
+    local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
+    if not fs.exists(grid_dir) then return cjson.encode({ removed = 0, ok = true }) end
+    local mappings_path = config.mappings_file_path()
     local removed = 0
-    for _, suffix in ipairs({ "p", "_hero", "_logo", "_icon", "" }) do
-        for _, ext in ipairs({ "jpg", "jpeg", "png", "tga", "ico" }) do
-            local filepath = fs.join(grid_dir, sid .. suffix .. "." .. ext)
-            if fs.exists(filepath) then
-                os.remove(filepath)
-                removed = removed + 1
-                logger:info("Removed grid file: " .. filepath)
+    if fs.exists(mappings_path) then
+        local f = io.open(mappings_path, "r")
+        if f then
+            local raw = f:read("*a")
+            f:close()
+            local ok, parsed = pcall(cjson.decode, raw)
+            if ok and type(parsed) == "table" then
+                for shortcut_id, _ in pairs(parsed) do
+                    local sid = tostring(shortcut_id):match("(%d+)$")
+                    if sid then
+						icon_files.invalidate(sid)
+                        removed = removed + remove_grid_files(grid_dir, sid, { "p", "_hero", "_logo", "_icon", "" })
+                        local json_path = fs.join(grid_dir, sid .. ".json")
+                        if fs.exists(json_path) then os.remove(json_path) end
+                    end
+                end
             end
         end
     end
-
-    return cjson.encode({ removed = removed })
+    logger:info("Dismount cleanup: removed " .. tostring(removed) .. " grid files for linked shortcuts.")
+    return cjson.encode({ ok = true, removed = removed })
 end
 
 return M

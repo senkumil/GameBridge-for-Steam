@@ -1,4 +1,3 @@
-import { backendLog } from '../../api/backend';
 import { loc } from '../../steam/localization';
 
 export interface NativeLibraryLayout {
@@ -62,18 +61,25 @@ function applyNativeSurfaceTokens(target: HTMLElement, samples: Array<HTMLElemen
 /** Restore every native inline style GDL changed in this document. */
 export function restoreNativeLibraryStyles(doc: Document): void {
 	const elements = managedNativeElements.get(doc);
-	if (!elements) return;
-	for (const element of elements) {
-		const snapshot = nativeStyleSnapshots.get(element);
-		if (!snapshot) continue;
-		for (const property of Object.keys(snapshot) as ManagedStyleProperty[]) {
-			element.style[property] = snapshot[property] || '';
+	if (elements) {
+		for (const element of elements) {
+			const snapshot = nativeStyleSnapshots.get(element);
+			if (!snapshot) continue;
+			for (const property of Object.keys(snapshot) as ManagedStyleProperty[]) {
+				element.style[property] = snapshot[property] || '';
+			}
+			element.removeAttribute('data-gdl-hidden');
+			nativeStyleSnapshots.delete(element);
 		}
-		element.removeAttribute('data-gdl-hidden');
-		nativeStyleSnapshots.delete(element);
+		elements.clear();
+		managedNativeElements.delete(doc);
 	}
-	elements.clear();
-	managedNativeElements.delete(doc);
+	try {
+		doc.querySelectorAll<HTMLElement>('[data-gdl-hidden]').forEach(el => {
+			el.removeAttribute('data-gdl-hidden');
+			el.style.display = '';
+		});
+	} catch {}
 }
 
 function ancestorChain(element: Element): HTMLElement[] {
@@ -181,11 +187,6 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 			cur = parent;
 		}
 	}
-
-	backendLog(
-		`Layout: sidebar=${String(!!sidebarColumn)} twoCol=${String(!!twoColumnRow)} `
-		+ `content=${String(!!contentColumn)} region=${String(!!anchorRegion)}`,
-	);
 
 	return {
 		anchorRegion,

@@ -1,23 +1,38 @@
 import type { ShortcutLinkResult, SteamGameData } from '../../domain/types';
-import { backendLog } from '../../api/backend';
+import { backendLog, neutralizeSteamAppIdFileBackend } from '../../api/backend';
 import { getCanonicalGameData, getGameData } from '../../core/game-data';
 import { shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { gdlText } from '../../steam/localization';
 import { findActiveShortcutAppId, findShortcutAppIdByName, getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
-import { applyOfficialShortcutIcon, clearLibraryAssetCaches, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult } from '../library/artwork';
-import { saveLinkedGameNote } from './linked-notes';
+import { applyOfficialShortcutIcon, getModernLibraryAssets, invalidateLibraryAssetCaches, refreshModernLibraryAssets, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult } from '../library/artwork';
+import { clearShortcutArtworkForAppIdChange } from '../library/artwork-relink-cleanup';
+import { isLegacyGame } from '../library/legacy-games';
+import { invalidateLinkedGameResourceCaches } from '../library/resource-cache';
+import { clearLinkedGameNote } from './linked-notes';
 import { shortcutRuntimeHost } from './host';
 import { isShortcutDismissed, undismissShortcut } from './dismissed';
-import { getAllShortcutRecords } from './registry';
-import { rememberShortcutSteamAppId } from './link-history';
+import { findMappingForShortcut, getAllShortcutRecords } from './registry';
+import { rememberOriginalShortcutTitle, rememberShortcutSteamAppId } from './link-history';
+import { runShortcutMutations, shortcutMutationKeys } from './operation-lock';
 
 let shortcutIdentityMutationDepth = 0;
+
+/** Steam's SetShortcutName can occasionally return a never-settling promise
+ * even after the rename was applied. Keep the UI responsive and let the
+ * durable retry queue reconcile the identity on the next attempt. */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorCode: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(errorCode)), timeoutMs);
+		promise.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
+	});
+}
 
 export function isShortcutIdentityMutationInProgress(): boolean {
 	return shortcutIdentityMutationDepth > 0;
 }
 
 export type ShortcutLinkStatus = (message: string, color?: string) => void;
+export type ShortcutLinkPhase = 'identity' | 'assets';
 
 /**
  * Steam adds shortcuts picked from its "Add a Non-Steam Game" list
@@ -30,6 +45,7 @@ async function resolveShortcutForLink(
 	title: string,
 	initialId?: number | null,
 	executableHint = '',
+	canonicalName = '',
 ): Promise<number | null> {
 	const waits = [0, 100, 250, 500, 900, 1500, 2500];
 	const expectedExecutable = shortcutExecutableIdentity(executableHint);
@@ -41,25 +57,105 @@ async function resolveShortcutForLink(
 		}
 		const routed = doc ? Number(findActiveShortcutAppId(doc, title) || 0) : 0;
 		if (routed >= 2147483648 && getShortcutAppById(routed)) return routed;
-		const byName = findShortcutAppIdByName(title);
-		if (byName && getShortcutAppById(byName)) return byName;
 		if (expectedExecutable) {
 			const executableMatches = getAllShortcutRecords().filter(record => shortcutExecutableIdentity(readShortcutOverviewField(
 				record.app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
 			)) === expectedExecutable);
 			if (executableMatches.length === 1) return executableMatches[0].id;
+			// During a rename Steam can briefly expose the old and regenerated rows
+			// together. Prefer the regenerated ID only when it also carries the exact
+			// canonical title; never let the queued retry fall back to the stale ID.
+			const regenerated = executableMatches.find(record => record.id !== Number(initialId || 0)
+				&& String(record.title || '').trim() === canonicalName);
+			if (regenerated) return regenerated.id;
+			if (executableMatches.length > 0) return executableMatches[0].id;
 		}
+		const byName = findShortcutAppIdByName(title);
+		if (byName && getShortcutAppById(byName)) return byName;
 	}
+	if (initialId) {
+		const exact = Number(initialId);
+		if (Number.isFinite(exact) && exact >= 2147483648) return exact;
+	}
+	const routedFallback = doc ? Number(findActiveShortcutAppId(doc, title) || 0) : 0;
+	if (routedFallback >= 2147483648) return routedFallback;
+	const byNameFallback = findShortcutAppIdByName(title);
+	if (byNameFallback && byNameFallback >= 2147483648) return byNameFallback;
 	return null;
 }
 
-// Compatibility helpers retained for callers from older builds. Linking may
-// update the display name, but it never alters executable, start directory or
-// launch options.
-export function mergeNoLauncherOption(existing: string): string { return String(existing || '').trim(); }
-export function hasNoLauncherOption(value: string): boolean { return /(^|\s)-nolauncher(?=\s|$)/i.test(String(value || '').trim()); }
-export function shouldAutoApplyNoLauncher(_steamAppId: string): boolean { return false; }
-export function applyNoLauncherOption(_shortcutAppId: number, _fallbackOptions = '', _automatic = false): boolean { return false; }
+const LAUNCHER_BYPASS_APP_IDS = new Set<string>([
+	'1817070', '1817190', '2651280', '1895840', '2215430', '2420110', '1151640',
+	'1088850', '391220', '750920', '203160', '337000', '238010', '1086940',
+	'435150', '1091500', '292030', '49520', '261640', '397540', '1286680',
+	'409710', '409720', '8870', '1030840', '1055820', '360430', '268500',
+	'368260', '1158310', '394360', '281990', '236850', '255710', '1142710',
+	'594570', '364360', '779340',
+]);
+
+export function getOptimalLauncherSkipArg(steamAppId: string): string | null {
+	const id = String(steamAppId || '').trim();
+	if (!id) return null;
+	if (id === '1091500' || id === '292030') return '--launcher-skip';
+	if (id === '1086940' || id === '435150') return '--skip-launcher';
+	if (LAUNCHER_BYPASS_APP_IDS.has(id)) return '-nolauncher';
+	return null;
+}
+
+export function removeIncompatibleLauncherBypass(existing: string, steamAppId: string): string {
+	if (shouldAutoApplyNoLauncher(steamAppId)) return existing;
+	return String(existing || '')
+		.replace(/(^|\s)-nolauncher(?=\s|$)/gi, ' ')
+		.replace(/(^|\s)--launcher-skip(?=\s|$)/gi, ' ')
+		.replace(/(^|\s)--skip-launcher(?=\s|$)/gi, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
+export function mergeNoLauncherOption(existing: string, steamAppId = ''): string {
+	const current = String(existing || '').trim();
+	const arg = getOptimalLauncherSkipArg(steamAppId);
+	if (!arg) return current;
+	if (current.includes(arg)) return current;
+	return current ? `${current} ${arg}` : arg;
+}
+
+export function hasNoLauncherOption(value: string): boolean {
+	const text = String(value || '').trim();
+	return /(^|\s)(-nolauncher|--launcher-skip|--skip-launcher)(?=\s|$)/i.test(text);
+}
+
+export function shouldAutoApplyNoLauncher(steamAppId: string): boolean {
+	return Boolean(getOptimalLauncherSkipArg(steamAppId));
+}
+
+/** Warm every read-only dependency while bulk detection continues. Identity
+ * mutations remain serialized, but they no longer pay the network latency of
+ * the next game's metadata and artwork lookup. */
+export async function warmShortcutLinkResources(steamAppId: string): Promise<void> {
+	const appId = String(steamAppId || '').trim();
+	if (!/^\d+$/.test(appId)) return;
+	await Promise.allSettled([
+		getGameData(appId),
+		getCanonicalGameData(appId),
+		getModernLibraryAssets(appId),
+	]);
+}
+
+export function applyNoLauncherOption(shortcutAppId: number, fallbackOptions = '', _automatic = false): boolean {
+	const apps = (window as any).SteamClient?.Apps;
+	if (typeof apps?.SetShortcutLaunchOptions !== 'function') return false;
+	const current = String(fallbackOptions || '').trim();
+	const arg = '-nolauncher';
+	if (current.includes(arg)) return true;
+	const updated = current ? `${current} ${arg}` : arg;
+	try {
+		void apps.SetShortcutLaunchOptions(shortcutAppId, updated);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 export interface ShortcutIdentitySyncResult {
 	shortcutAppId: number;
@@ -91,7 +187,11 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 	skipLauncher?: boolean;
 	existingLaunchOptions?: string;
 	onIdentityResolved?: (shortcutAppId: number, officialName: string, relatedShortcutAppIds: number[]) => void;
+	onPhase?: (phase: ShortcutLinkPhase) => void;
 	refreshLibrary?: boolean;
+	clearStaleArtwork?: boolean;
+	assetTimeoutMs?: number;
+	deferAssetSync?: boolean;
 }): Promise<ShortcutIdentitySyncResult> {
 	const originalShortcutId = options.shortcutAppId;
 	if (!Number.isFinite(originalShortcutId) || originalShortcutId < 2147483648) {
@@ -103,10 +203,44 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 	shortcutIdentityMutationDepth += 1;
 	try {
 		const staleIds = new Set<number>([originalShortcutId]);
-		const trackingApplied = false;
-		const noLauncherConfigured = false;
+		let trackingApplied = false;
+		let noLauncherConfigured = false;
 		let nameApplied = false;
 		let nameReady = false;
+
+		const apps = (window as any).SteamClient?.Apps;
+		if (options.trackingExecutable && typeof apps?.SetShortcutExe === 'function') {
+			try {
+				await withTimeout(Promise.resolve(apps.SetShortcutExe(shortcutAppId, options.trackingExecutable)), 5000, 'shortcut_exe_timeout');
+				trackingApplied = true;
+				backendLog(`Tracking executable applied to ${shortcutAppId}: ${options.trackingExecutable}`);
+			} catch (error) {
+				backendLog(`Applying tracking executable failed for ${shortcutAppId}: ${error}`);
+			}
+		}
+		if (options.trackingStartDir && typeof apps?.SetShortcutStartDir === 'function') {
+			try {
+				await withTimeout(Promise.resolve(apps.SetShortcutStartDir(shortcutAppId, options.trackingStartDir)), 5000, 'shortcut_startdir_timeout');
+			} catch {}
+		}
+		const skipArg = getOptimalLauncherSkipArg(options.steamAppId);
+		if (typeof apps?.SetShortcutLaunchOptions === 'function') {
+			try {
+				const currentLaunch = (options.existingLaunchOptions || '').trim();
+				if (skipArg) {
+					if (!currentLaunch.includes(skipArg)) {
+						const updatedLaunch = currentLaunch ? `${currentLaunch} ${skipArg}` : skipArg;
+						await withTimeout(Promise.resolve(apps.SetShortcutLaunchOptions(shortcutAppId, updatedLaunch)), 5000, 'shortcut_launch_timeout');
+						noLauncherConfigured = true;
+						backendLog(`Applied launcher bypass "${skipArg}" to shortcut ${shortcutAppId}`);
+					}
+				} else if (hasNoLauncherOption(currentLaunch)) {
+					const cleanedLaunch = removeIncompatibleLauncherBypass(currentLaunch, options.steamAppId);
+					await withTimeout(Promise.resolve(apps.SetShortcutLaunchOptions(shortcutAppId, cleanedLaunch)), 5000, 'shortcut_launch_timeout');
+					backendLog(`Removed incompatible launcher bypass from shortcut ${shortcutAppId}: "${cleanedLaunch}"`);
+				}
+			} catch {}
+		}
 
 		const shortcutBeforeRename = getShortcutAppById(shortcutAppId);
 		const currentName = String(shortcutBeforeRename?.display_name
@@ -114,6 +248,9 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 			|| shortcutBeforeRename?.strDisplayName
 			|| options.currentTitle
 			|| '').trim();
+		if (currentName) {
+			rememberOriginalShortcutTitle(originalShortcutId, currentName);
+		}
 		const expectedExecutable = readShortcutOverviewField(
 			shortcutBeforeRename, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
 		);
@@ -121,43 +258,101 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 		if (!nameNeedsUpdate) {
 			nameReady = Boolean(officialName);
 		} else {
-			const apps = (window as any).SteamClient?.Apps;
 			if (typeof apps?.SetShortcutName === 'function') {
 				const idsBeforeRename = new Set(getAllShortcutRecords().map(record => record.id));
 				try {
-					await Promise.resolve(apps.SetShortcutName(shortcutAppId, officialName));
+					await withTimeout(Promise.resolve(apps.SetShortcutName(shortcutAppId, officialName)), 6000, 'shortcut_rename_pending');
 					nameApplied = true;
 					shortcutAppId = await resolveShortcutIdAfterRename(
 						officialName, shortcutAppId, idsBeforeRename, expectedExecutable,
 					);
 					staleIds.add(shortcutAppId);
+					if (currentName) {
+						rememberOriginalShortcutTitle(shortcutAppId, currentName);
+					}
 					const renamedShortcut = getShortcutAppById(shortcutAppId);
 					const renamedTitle = String(renamedShortcut?.display_name
 						|| renamedShortcut?.m_strDisplayName
 						|| renamedShortcut?.strDisplayName
 						|| '').trim();
-					nameReady = renamedTitle === officialName;
+					// Steam can acknowledge SetShortcutName one render before appStore
+					// publishes the new display_name. A resolved concrete shortcut is
+					// sufficient to commit its AppID mapping; the durable resource pass
+					// will observe/reconcile the visible title moments later.
+					nameReady = renamedTitle === officialName
+						|| (nameApplied && Boolean(getShortcutAppById(shortcutAppId)));
 					backendLog(`Shortcut ${originalShortcutId} rename ${nameReady ? 'confirmed' : 'pending'} as "${officialName}" (resolved ID ${shortcutAppId}).`);
 				} catch (error) {
 					backendLog('Official shortcut rename failed: ' + error);
+					if (String(error).includes('shortcut_rename_pending')) {
+						// SetShortcutName may have been applied even though Steam's
+						// promise never settled. Keep the concrete shortcut identity and
+						// finish the link; the next library refresh will reconcile the
+						// title instead of trapping the modal/queue on step 2.
+						if (getShortcutAppById(shortcutAppId)) {
+							nameReady = true;
+							backendLog(`Continuing link for ${shortcutAppId} after a delayed Steam rename response.`);
+						} else {
+							throw error;
+						}
+					}
 				}
 			}
 		}
 
-		let artwork: ArtworkApplyResult = { complete: false, slots: [], missing: ['not_attempted'], communitySlots: [] };
-		let iconApplied = false;
-		for (let attempt = 0; attempt < 3; attempt++) {
-			if (attempt > 0) {
-				clearLibraryAssetCaches();
-				await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+		if (options.clearStaleArtwork) {
+			// Clear the original row before artwork work starts. If Steam regenerated
+			// the shortcut during rename, the final row is cleared below as well.
+			await clearShortcutArtworkForAppIdChange(originalShortcutId);
+			if (shortcutAppId !== originalShortcutId) {
+				await clearShortcutArtworkForAppIdChange(shortcutAppId);
 			}
-			artwork = await spoofArtwork(shortcutAppId, options.steamAppId, officialName || options.currentTitle, false);
-			iconApplied = await applyOfficialShortcutIcon(shortcutAppId, options.steamAppId, false);
-			if (artwork.complete && iconApplied) break;
-			backendLog(`Incomplete link resources for ${shortcutAppId}; retry ${attempt + 1}/3 (artwork=${artwork.complete}, icon=${iconApplied})`);
+			invalidateLibraryAssetCaches([options.steamAppId]);
 		}
 
-		const complete = Boolean(nameReady && iconApplied && artwork.complete);
+		let artwork: ArtworkApplyResult = { complete: false, slots: [], missing: ['not_attempted'], communitySlots: [] };
+		let iconApplied = false;
+		// Asset downloads are best-effort and retried by the durable queue. Doing
+		// several full foreground passes made the confirmation dialog appear stuck
+		// on step 2, especially for delisted AppIDs whose CDN assets return 404s.
+		const maxAssetAttempts = 1;
+		if (!options.deferAssetSync) options.onPhase?.('assets');
+		for (let attempt = 0; !options.deferAssetSync && attempt < maxAssetAttempts; attempt++) {
+			if (attempt > 0) {
+				invalidateLibraryAssetCaches([options.steamAppId]);
+				await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+			}
+			const assetTimeoutMs = Math.min(45_000, Math.max(8_000, Number(options.assetTimeoutMs) || 12_000));
+			const [artworkResult, iconResult] = await Promise.all([
+				withTimeout(
+					spoofArtwork(shortcutAppId, options.steamAppId, officialName || options.currentTitle, false,
+						isLegacyGame(options.steamAppId, data)),
+					assetTimeoutMs,
+					'artwork_timeout',
+				).catch(error => {
+					backendLog(`Artwork setup timed out for ${shortcutAppId}: ${String(error)}`);
+					return { complete: false, slots: [], missing: ['timeout'], communitySlots: [] } as ArtworkApplyResult;
+				}),
+				withTimeout(
+					applyOfficialShortcutIcon(shortcutAppId, options.steamAppId, false),
+					assetTimeoutMs,
+					'icon_timeout',
+				).catch(error => {
+					backendLog(`Icon setup timed out for ${shortcutAppId}: ${String(error)}`);
+					return false;
+				}),
+			]);
+			artwork = artworkResult;
+			iconApplied = iconResult;
+			if (artwork.complete && iconApplied) break;
+			backendLog(`Incomplete link resources for ${shortcutAppId}; retry ${attempt + 1}/${maxAssetAttempts} (artwork=${artwork.complete}, icon=${iconApplied})`);
+		}
+
+		// Delisted AppIDs often have authoritative identity/community data but no
+		// complete set of Steam CDN library assets. The link is still valid once
+		// Steam confirms the official name; missing visuals remain optional and
+		// can be selected later from SteamGridDB.
+		const complete = Boolean(nameReady || data?.is_delisted === true);
 		if (complete) {
 			// An explicit unlink wins over any link job that was already running.
 			// Manual link entry points clear the dismissal before starting; therefore
@@ -170,15 +365,35 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 			const mappingRemove = Array.from(staleIds)
 				.filter(staleId => staleId !== shortcutAppId)
 				.map(staleId => shortcutMappingKey(staleId));
-			if (!(await updateMappingsChecked({ set: mappingSet, remove: mappingRemove }))) {
+			const mappingUpdated = await withTimeout(
+				updateMappingsChecked({ set: mappingSet, remove: mappingRemove }),
+				12000,
+				'mapping_update_timeout',
+			).catch(error => {
+				backendLog(`Mapping update timed out for ${shortcutAppId}: ${String(error)}`);
+				return false;
+			});
+			if (!mappingUpdated) {
 				throw new Error('mapping_identity_update_failed');
 			}
 			rememberShortcutSteamAppId(shortcutAppId, options.steamAppId);
+			const shortcutObj = getShortcutAppById(shortcutAppId);
+			const shortcutExe = readShortcutOverviewField(shortcutObj, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || options.trackingExecutable || '';
+			const shortcutStartDir = readShortcutOverviewField(shortcutObj, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir') || options.trackingStartDir || '';
+			void neutralizeSteamAppIdFileBackend({
+				request_json: JSON.stringify({
+					exe_path: shortcutExe,
+					start_dir: shortcutStartDir,
+				}),
+			}).catch(error => backendLog('Neutralize steam_appid.txt skipped: ' + error));
 			try { options.onIdentityResolved?.(shortcutAppId, officialName, Array.from(staleIds)); }
 			catch (error) { backendLog('Post-link library handoff failed: ' + error); }
 		}
 
-		if (options.refreshLibrary !== false) shortcutRuntimeHost().refreshLibraryArtwork?.(shortcutAppId);
+		// A partial transaction must remain visually quiet. Refreshing while Steam
+		// still exposes both pre/post-rename identities is what promoted the stale
+		// row into a visible BUY-page ghost until the next client restart.
+		if (complete && options.refreshLibrary !== false) shortcutRuntimeHost().refreshLibraryArtwork?.(shortcutAppId);
 		return {
 			shortcutAppId, officialName, nameApplied, nameReady, iconApplied,
 			trackingApplied, noLauncherConfigured, artwork, complete,
@@ -188,7 +403,7 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 	}
 }
 
-export async function linkShortcutToSteam(options: {
+interface ShortcutLinkOptions {
 	doc?: Document | null;
 	title: string;
 	shortcutAppId?: number | null;
@@ -199,8 +414,16 @@ export async function linkShortcutToSteam(options: {
 	trackingStartDir?: string;
 	shortcutExecutable?: string;
 	onStatus?: ShortcutLinkStatus;
+	onPhase?: (phase: ShortcutLinkPhase) => void;
 	refreshLibrary?: boolean;
-}): Promise<ShortcutLinkResult> {
+	repairResources?: boolean;
+	assetTimeoutMs?: number;
+	deferAssetSync?: boolean;
+	metadataTimeoutMs?: number;
+	canonicalNameHint?: string;
+}
+
+async function linkShortcutToSteamUnlocked(options: ShortcutLinkOptions): Promise<ShortcutLinkResult> {
 	const steamAppId = String(options.steamAppId || '').trim();
 	const title = String(options.title || '').trim();
 	const onStatus = options.onStatus || (() => {});
@@ -208,42 +431,93 @@ export async function linkShortcutToSteam(options: {
 	shortcutIdentityMutationDepth += 1;
 	try {
 		onStatus(gdlText('verifying_steam', 'Verifying on Steam...'), '#8f98a0');
-		const data = await getGameData(steamAppId);
-		if (!data) {
-			onStatus(gdlText('appid_not_found', 'AppID {id} was not found on Steam.', { id: steamAppId }), '#ff6b6b');
-			return { ok: false, error: 'appid_not_found' };
+		// An explicit AppID change must not reuse the former Store/appinfo snapshot.
+		// Clear it before warming the new target so the visible route can repaint
+		// as soon as the bridge accepts its artwork.
+		const previousSteamAppId = options.shortcutAppId
+			? findMappingForShortcut(options.shortcutAppId)
+			: null;
+		const appIdChanged = Boolean(previousSteamAppId && previousSteamAppId !== steamAppId);
+		if (appIdChanged) {
+			invalidateLinkedGameResourceCaches(
+				[steamAppId, previousSteamAppId || ''],
+				options.shortcutAppId ? [options.shortcutAppId] : [],
+			);
 		}
+		// Begin the library-assets request while identity is being resolved. The
+		// same cache is reused by icon/artwork application below, so changing an
+		// AppID does not make the modal wait for a second network round-trip. A
+		// same-AppID repair joins the existing request/cache instead of invalidating
+		// an operation that may simply have outlived the foreground timeout.
+		const assetWarmup = options.deferAssetSync
+			? Promise.resolve(null)
+			: (appIdChanged ? refreshModernLibraryAssets(steamAppId) : getModernLibraryAssets(steamAppId));
+		void assetWarmup.catch(error =>
+			backendLog(`Library asset prefetch failed for ${steamAppId}: ${String(error)}`));
+		// A broken/retired Store endpoint must not hold the confirmation dialog
+		// forever. The fallback identity is sufficient to continue and the normal
+		// cache/queue can fill in richer metadata later.
+		const localizedRequest = getGameData(steamAppId);
+		const canonicalRequest = getCanonicalGameData(steamAppId);
+		const metadataTimeoutMs = Math.min(6000, Math.max(1200, Number(options.metadataTimeoutMs) || 6000));
+		const [localizedData, canonicalData] = await Promise.all([
+			withTimeout(localizedRequest, metadataTimeoutMs, 'game_data_timeout').catch((error): null => {
+				backendLog(`Localized game data timed out for ${steamAppId}: ${String(error)}`);
+				return null;
+			}),
+			withTimeout(canonicalRequest, metadataTimeoutMs, 'canonical_data_timeout').catch((error): null => {
+				backendLog(`Canonical game data timed out for ${steamAppId}: ${String(error)}`);
+				return null;
+			}),
+		]);
+		let data = localizedData;
+		if (!data) {
+			data = {
+				steam_appid: Number(steamAppId),
+				name: canonicalData?.name || options.canonicalNameHint || title,
+				header_image: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${steamAppId}/header.jpg`,
+				short_description: '',
+				is_delisted: canonicalData?.is_delisted === true,
+			};
+		}
+		const canonicalName = String(canonicalData?.name || data?.name || options.canonicalNameHint || title).trim();
 
 		try {
 			let shortcutAppId = await resolveShortcutForLink(
-				options.doc, title, options.shortcutAppId, options.shortcutExecutable || options.trackingExecutable || '',
+				options.doc, title, options.shortcutAppId, options.shortcutExecutable || options.trackingExecutable || '', canonicalName,
 			);
 			if (!shortcutAppId) throw new Error('shortcut_not_ready');
 			const aliases = new Set<string>();
-			const canonicalData = await getCanonicalGameData(steamAppId);
-			if (!canonicalData?.name) {
-				onStatus(gdlText('link_incomplete_retrying', 'The link is not complete yet. GameBridge will retry until name, icon and artwork are ready.'), '#e5ad37');
-				return { ok: false, data, shortcutAppId, aliases: Array.from(aliases), error: 'canonical_data_unavailable' };
-			}
-			onStatus(gdlText('linked_updating', '✓ Match verified for "{name}". Applying name, icon and artwork...', { name: data.name }), '#5ba32b');
+			onStatus(gdlText('linked_updating', '✓ Match verified for "{name}". Applying name, icon and artwork...', { name: canonicalName || title }), '#5ba32b');
+			// Drive the review UI from an explicit phase instead of parsing the
+			// localized status string. Steam can change language while this request
+			// is in flight, and translated messages are not a stable protocol.
+			options.onPhase?.('identity');
 
 			const synced = await synchronizeShortcutOfficialIdentity({
 				shortcutAppId,
 				currentTitle: title,
 				steamAppId,
 				data,
-				canonicalName: String(canonicalData.name),
+				canonicalName,
 				trackingExecutable: options.trackingExecutable,
 				trackingStartDir: options.trackingStartDir,
 				skipLauncher: options.skipLauncher,
 				existingLaunchOptions: options.existingLaunchOptions,
+				onPhase: options.onPhase,
 				refreshLibrary: options.refreshLibrary,
+				assetTimeoutMs: options.assetTimeoutMs,
+				deferAssetSync: options.deferAssetSync,
+				// Resource repair refreshes provider caches above but must retain every
+				// valid slot already written. Destructive cleanup is reserved for an
+				// actual AppID transition, where old-game artwork is genuinely stale.
+				clearStaleArtwork: appIdChanged,
 			});
 			shortcutAppId = synced.shortcutAppId;
 			aliases.add(shortcutMappingKey(shortcutAppId));
 
 			if (!synced.complete) {
-				onStatus(gdlText('link_incomplete_retrying', 'The link is not complete yet. GameBridge will retry until name, icon and artwork are ready.'), '#e5ad37');
+				onStatus(gdlText('link_incomplete_retrying', 'The link is not complete yet. NativeGameLink will retry until name, icon and artwork are ready.'), '#e5ad37');
 				return {
 					ok: false, data, shortcutAppId, aliases: Array.from(aliases), error: 'setup_incomplete',
 					setup: {
@@ -260,23 +534,48 @@ export async function linkShortcutToSteam(options: {
 			let finalMessage = gdlText('linked_official', '✓ Linked to "{name}". Official name, icon and artwork updated.', { name: synced.officialName });
 			if (synced.trackingApplied) finalMessage += gdlText('tracking_executable_updated', ' Steam will now launch the long-running game executable so playtime can be tracked.');
 			if (shouldAutoApplyNoLauncher(steamAppId) && synced.noLauncherConfigured) finalMessage += ' -nolauncher.';
-			if (await saveLinkedGameNote(synced.officialName || title, data, steamAppId)) finalMessage += gdlText('local_note_updated', ' Local note updated.');
+			// Notes are a best-effort cleanup. Steam's GameNotes bridge can be slow
+			// or never settle while it rebuilds a shortcut, so it must not delay the
+			// successful link or leave the confirmation modal on step 3.
+			void clearLinkedGameNote(synced.officialName || title).catch(error => backendLog('Linked note cleanup skipped: ' + error));
 			onStatus(finalMessage, '#5ba32b');
 			if (options.refreshLibrary !== false) shortcutRuntimeHost().resetLibraryInjection?.(true, options.doc);
+			if (!localizedData) {
+				// The six-second modal budget does not cancel the backend request. When
+				// a slow retired-game recovery completes, repaint its real metadata in
+				// this same Steam session instead of waiting for another navigation.
+				void localizedRequest.then(lateData => {
+					if (!lateData || findMappingForShortcut(shortcutAppId) !== steamAppId) return;
+					shortcutRuntimeHost().resetLibraryInjection?.(true, options.doc);
+				}).catch(() => {});
+			}
 			return {
 				ok: true, data, shortcutAppId, aliases: Array.from(aliases),
 				setup: {
-					nameReady: true, iconApplied: true, artworkComplete: true,
+					nameReady: synced.nameReady, iconApplied: synced.iconApplied, artworkComplete: synced.artwork.complete,
 					missingArtwork: synced.artwork.missing,
 					communityArtwork: synced.artwork.communitySlots,
 				},
 			};
 		} catch (e) {
 			backendLog('Save error: ' + e);
-			onStatus(gdlText('save_failed', 'Could not complete the link. It remains unlinked and can be retried.'), '#ff6b6b');
-			return { ok: false, data, error: String(e) };
+			const error = String(e).includes('shortcut_rename_pending') ? 'shortcut_rename_pending' : String(e);
+			onStatus(error === 'shortcut_rename_pending'
+				? gdlText('shortcut_rename_pending', 'Steam is updating the shortcut identity. NativeGameLink will finish the link in the background without using the previous entry.')
+				: gdlText('save_failed', 'Could not complete the link. It remains unlinked and can be retried.'),
+				error === 'shortcut_rename_pending' ? '#e5ad37' : '#ff6b6b');
+			return { ok: false, data, error };
 		}
 	} finally {
 		shortcutIdentityMutationDepth = Math.max(0, shortcutIdentityMutationDepth - 1);
 	}
+}
+
+export function linkShortcutToSteam(options: ShortcutLinkOptions): Promise<ShortcutLinkResult> {
+	return runShortcutMutations(shortcutMutationKeys({
+		shortcutAppId: options.shortcutAppId,
+		title: options.title,
+		exePath: options.shortcutExecutable,
+		exePaths: [options.trackingExecutable],
+	}), () => linkShortcutToSteamUnlocked(options));
 }

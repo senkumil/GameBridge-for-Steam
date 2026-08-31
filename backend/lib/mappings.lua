@@ -4,14 +4,37 @@ local cjson = deps.cjson
 local config = deps.config
 local M = {}
 
+local function backup_path()
+    return config.path("mappings.backup.json")
+end
+
 local function read_mappings()
-    return config.read_json(config.get_config_path(), {}) or {}
+    local primary = config.read_json(config.get_config_path(), {}) or {}
+    if next(primary) ~= nil then
+        local backup = config.read_json(backup_path(), {}) or {}
+        if next(backup) == nil then
+            local seeded, seed_err = config.write_json_atomic(backup_path(), primary)
+            if not seeded then logger:warn("Could not seed mappings backup: " .. tostring(seed_err)) end
+        end
+        return primary
+    end
+    local backup = config.read_json(backup_path(), {}) or {}
+    if next(backup) ~= nil then
+        logger:warn("Primary mappings were empty; restoring the persistent backup")
+        local restored, restore_err = config.write_json_atomic(config.get_config_path(), backup)
+        if not restored then logger:warn("Could not restore mappings backup: " .. tostring(restore_err)) end
+        return backup
+    end
+    return primary
 end
 
 local function write_mappings(data)
     local ok, err = config.write_json_atomic(config.get_config_path(), data)
     if not ok then logger:warn("Could not write mappings: " .. tostring(err)) end
-    return ok
+    if not ok then return false end
+    local backup_ok, backup_err = config.write_json_atomic(backup_path(), data)
+    if not backup_ok then logger:warn("Could not write mappings backup: " .. tostring(backup_err)) end
+    return true
 end
 
 function M.read_mappings()
@@ -44,8 +67,8 @@ function M.update_mappings(request_json)
         if tostring(value):match("^%d+$") then data[tostring(key)] = tostring(value) end
     end
     for _, key in ipairs(remove_values) do data[tostring(key)] = nil end
-    local written, err = config.write_json_atomic(config.get_config_path(), data)
-    return cjson.encode({ ok = written == true, error = written and nil or tostring(err or "write_failed"), data = written and data or nil })
+    local written = write_mappings(data)
+    return cjson.encode({ ok = written == true, error = written and nil or "write_failed", data = written and data or nil })
 end
 
 function M.get_all_mappings()

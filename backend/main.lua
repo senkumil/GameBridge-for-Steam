@@ -3,8 +3,9 @@ local millennium = require("millennium")
 local http       = require("http")
 local cjson      = require("json")
 local fs         = require("fs")
+local runtime_utils = require("utils")
 
-local USER_AGENT = "GameBridge-for-Steam/2.0.0"
+local USER_AGENT = "NativeGameLink-for-Steam/2.0.0"
 
 local function resolve_backend_dir()
     local raw = tostring(MILLENNIUM_PLUGIN_SECRET_BACKEND_ABSOLUTE or "")
@@ -38,8 +39,10 @@ deps.util = load_factory("util")(deps)
 deps.config = load_factory("config")(deps)
 deps.lru_cache = load_factory("lru_cache")(deps)
 deps.ttl_cache = load_factory("ttl_cache")(deps)
+deps.artwork_icon = load_factory("artwork_icon")(deps)
 deps.shortcut_detection_text = load_factory("shortcut_detection_text")(deps)
 deps.shortcut_detection_aliases = load_factory("shortcut_detection_aliases")(deps)
+deps.shortcut_detection_tracking = load_factory("shortcut_detection_tracking")(deps)
 
 local mappings = load_factory("mappings")(deps)
 local store = load_factory("store")(deps)
@@ -48,10 +51,14 @@ local news = load_factory("news")(deps)
 local social = load_factory("social")(deps)
 local community = load_factory("community")(deps)
 local artwork = load_factory("artwork")(deps)
+local artwork_candidates = load_factory("artwork_candidates")(deps)
 deps.achievement_settings = load_factory("achievement_settings")(deps)
 deps.achievement_policy = load_factory("achievement_policy")(deps)
 deps.achievement_sources = load_factory("achievement_sources")(deps)
 deps.achievement_state = load_factory("achievement_state")(deps)
+local achievement_export = load_factory("achievement_export")(deps)
+local steamworks_sync = load_factory("steamworks_sync")(deps)
+local steam_card_farmer = load_factory("steam_card_farmer")(deps)
 local achievements = load_factory("achievements")(deps)
 local playtime = load_factory("playtime")(deps)
 
@@ -73,9 +80,12 @@ function fetch_community_content(steam_app_id, language) return community.fetch_
 function fetch_community_items_catalog(steam_app_id, language) return community.fetch_community_items_catalog(steam_app_id, language) end
 function fetch_library_assets(request_json) return artwork.fetch_library_assets(request_json) end
 function fetch_community_artwork(request_json) return artwork.fetch_community_artwork(request_json) end
+function fetch_community_artwork_candidates(request_json) return artwork_candidates.fetch(request_json) end
+function validate_steamgriddb_api_key(request_json) return artwork.validate_steamgriddb_api_key(request_json) end
 function save_shortcut_icon(request_json) return artwork.save_shortcut_icon(request_json) end
 function clear_artwork(shortcut_app_id) return artwork.clear_artwork(shortcut_app_id) end
 function clear_artwork_except_icon(shortcut_app_id) return artwork.clear_artwork_except_icon(shortcut_app_id) end
+function clear_all_linked_artworks() return artwork.clear_all_linked_artworks() end
 function get_achievement_base_path() return achievements.get_achievement_base_path() end
 function set_achievement_base_path(path) return achievements.set_achievement_base_path(path) end
 function get_game_achievement_path(request_json) return achievements.get_game_achievement_path(request_json) end
@@ -83,6 +93,12 @@ function set_game_achievement_path(request_json) return achievements.set_game_ac
 function get_game_achievement_options(request_json) return achievements.get_game_achievement_options(request_json) end
 function set_game_achievement_options(request_json) return achievements.set_game_achievement_options(request_json) end
 function get_game_achievement_capabilities(request_json) return achievements.get_game_achievement_capabilities(request_json) end
+function export_achievements_json(request_json) return achievement_export.export_achievements_json(request_json) end
+function fetch_steam_account_achievements(steam_app_id) return steamworks_sync.fetch_steam_account_achievements(steam_app_id) end
+function sync_steam_account_achievements(request_json) return steamworks_sync.sync_steam_account_achievements(request_json) end
+function start_steam_card_farming(request_json) return steam_card_farmer.start_card_farming(request_json) end
+function stop_steam_card_farming() return steam_card_farmer.stop_card_farming() end
+function get_steam_card_farming_status() return steam_card_farmer.get_card_farming_status() end
 function fetch_local_achievement_data(request_json, language, state_app_id)
     return achievements.fetch_local_achievement_data(request_json, language, state_app_id)
 end
@@ -92,13 +108,16 @@ function stop_playtime_session(request_json) return playtime.stop_session(reques
 function get_playtime_data(request_json) return playtime.get_playtime(request_json) end
 function get_all_playtime_data(request_json) return playtime.get_all_playtime(request_json) end
 function set_playtime_data(request_json) return playtime.set_playtime(request_json) end
+function suppress_admin_prompt(request_json) return deps.util.suppress_admin_prompt(request_json) end
+function neutralize_steam_appid_file(request_json) return deps.util.neutralize_steam_appid_file(request_json) end
+function restore_steam_appid_file(request_json) return deps.util.restore_steam_appid_file(request_json) end
 function fe_log(msg)
     logger:info("[FE] " .. tostring(msg))
     return "ok"
 end
 
 local function on_load()
-    logger:info("GameBridge for Steam plugin loaded")
+    logger:info("NativeGameLink for Steam plugin loaded")
     local ok_diag, diag_err = pcall(function()
         logger:info("  Steam path: " .. tostring(millennium.steam_path()))
         logger:info("  Backend dir: " .. tostring(BACKEND_DIR))
@@ -109,17 +128,21 @@ local function on_load()
         logger:info("  Mappings loaded: " .. tostring(data ~= nil) .. " (" .. tostring(#cjson.encode(data)) .. " bytes)")
     end)
     if not ok_diag then logger:warn("  Diagnostic check failed: " .. tostring(diag_err)) end
+    -- Give Millennium 3.4.1's dynamic-enable transaction time to settle before
+    -- it rebuilds the shared frontend context. Without this short yield, its
+    -- reload can complete before this plugin's frontend is available.
+    runtime_utils.sleep(750)
     millennium.ready()
 end
 
 local function on_unload()
     local ok_flush, flush_err = pcall(function() playtime.flush() end)
     if not ok_flush then logger:warn("Could not flush playtime sessions: " .. tostring(flush_err)) end
-    logger:info("GameBridge for Steam plugin unloaded")
+    logger:info("NativeGameLink for Steam plugin unloaded")
 end
 
 local function on_frontend_loaded()
-    logger:info("Frontend loaded - GameBridge for Steam ready")
+    logger:info("Frontend loaded - NativeGameLink for Steam ready")
 end
 
 return {

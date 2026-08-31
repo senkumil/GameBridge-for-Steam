@@ -17,9 +17,11 @@ function walk(dir) {
 for (const directory of sourceRoots) walk(join(root, directory));
 
 const localizationSource = readFileSync(localizationPath, 'utf8');
+const spanishStart = localizationSource.indexOf('export const SPANISH_TRANSLATIONS');
+const spanishEnd = localizationSource.indexOf('};\n\nexport function', spanishStart);
 const spanishBlock = localizationSource.slice(
-	localizationSource.indexOf('export const SPANISH_TRANSLATIONS'),
-	localizationSource.indexOf('export function isSpanishLanguage'),
+	spanishStart,
+	spanishEnd !== -1 ? spanishEnd : localizationSource.indexOf('export function isSpanishLanguage'),
 );
 const spanishKeys = new Set([...spanishBlock.matchAll(/^\s*([A-Za-z0-9_]+):/gm)].map((match) => match[1]));
 const spanishWords = /[áéíóúñ¿¡]|\b(?:hoy|ayer|rechazar|vincular|recursos|identidad|añade|haz clic|listo|detectando|sin sugerencias|no se encontró|juego vinculado|detectado|la detección|la coincidencia|usar el ejecutable|completa todo|generación|para que|descargar|probar|envía|enviando|seguimiento|activar|carpeta|guardar|predeterminado|cargando|logros|muestra|juega|enlace|más|actualización|falta|oficial)\b/i;

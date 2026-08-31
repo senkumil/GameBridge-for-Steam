@@ -2,20 +2,31 @@ import { backendLog } from '../../api/backend';
 import { getPreferences } from '../../core/preferences';
 import { readShortcutOverviewField, shortcutExecutableIdentity, shortcutStableIdentity } from '../../steam/shortcuts';
 import { candidateSteamDocuments, nativeAddNonSteamDialogOpen, nativeAddSelectedExecutableIdentities } from './native-add-guard';
-import { isNativeAddAutoPromptSuppressed } from './auto-prompt-policy';
-import { getAllShortcutRecords, shortcutAlreadyLinked, type ShortcutRecord } from './registry';
+import { findMappingForShortcut, getAllShortcutRecords, shortcutAlreadyLinked, type ShortcutRecord } from './registry';
 import { requestNativeAddShortcutReview } from './manual-link';
+import { hasNoLauncherOption, mergeNoLauncherOption, removeIncompatibleLauncherBypass, shouldAutoApplyNoLauncher } from './linking';
 
 let watcherTimer: ReturnType<typeof setInterval> | null = null;
 let closeEvaluationTimers: ReturnType<typeof setTimeout>[] = [];
 let dialogOpen = false;
+let dialogObserved = false;
+let sessionArmedAt = 0;
 let sessionGeneration = 0;
+const STARTUP_WARMUP_MS = 6000;
+let pluginStartedAt = 0;
+let startupSettled = false;
+let startupTimer: ReturnType<typeof setTimeout> | null = null;
+
+const knownShortcutIds = new Set<number>();
+const knownShortcutIdentities = new Set<string>();
+const handledIds = new Set<number>();
+const handledIdentities = new Set<string>();
+const handledExecutables = new Set<string>();
+
 let baselineIds = new Set<number>();
 let baselineIdentities = new Set<string>();
 let selectedExecutables = new Set<string>();
-let handledIds = new Set<number>();
-let handledIdentities = new Set<string>();
-let handledExecutables = new Set<string>();
+
 const interactionListeners = new Map<Document, EventListener>();
 const documentObservers = new Map<Document, MutationObserver>();
 let scheduledTick: ReturnType<typeof setTimeout> | null = null;
@@ -41,6 +52,27 @@ function clearCloseEvaluationTimers(): void {
 	closeEvaluationTimers = [];
 }
 
+function looksLikeNativeAddAction(target: EventTarget | null): boolean {
+	if (!(target instanceof Element)) return false;
+	const clickable = target.closest('button, [role="button"], [role="menuitem"], [class*="MenuItem"], [class*="menuitem"], [class*="Button"]') as Element | null;
+	if (!clickable || clickable.closest('[id^="gdl-"]')) return false;
+	if (clickable.getAttribute('role') === 'switch') return false;
+	const text = `${clickable.textContent || ''} ${clickable.getAttribute('aria-label') || ''} ${clickable.getAttribute('title') || ''}`
+		.toLocaleLowerCase().replace(/[\u2018\u2019]/g, "'").trim();
+	if (text.length > 180) return false;
+	return /non[\s-]*steam|no\s+es\s+de\s+steam|n[aã]o(?:\s+é|\s+e)?(?:\s+da|\s+de)?\s+steam|nao?\s+steam|add\s+(?:a\s+)?non[\s-]*steam|a(?:n|ñ)adir\s+(?:un\s+)?juego.*steam|agregar\s+(?:un\s+)?juego.*steam|adicionar\s+(?:um\s+)?jogo.*steam|a(?:n|ñ)adir\s+un\s+producto|agregar\s+un\s+producto|a(?:n|ñ)adir\s+seleccionados|add\s+selected|agregar\s+seleccionados|adicionar\s+selecionados/.test(text);
+}
+
+function looksLikeAddSelectedAction(target: EventTarget | null): boolean {
+	if (!(target instanceof Element)) return false;
+	const clickable = target.closest('button, [role="button"], [class*="Button"]') as Element | null;
+	if (!clickable || clickable.closest('[id^="gdl-"]')) return false;
+	const text = `${clickable.textContent || ''} ${clickable.getAttribute('aria-label') || ''} ${clickable.getAttribute('title') || ''}`
+		.toLocaleLowerCase().replace(/[\u2018\u2019]/g, "'").trim();
+	if (text.length > 120) return false;
+	return /a(?:n|ñ)adir\s+seleccionados|add\s+selected|agregar\s+seleccionados|adicionar\s+selecionados|ajouter\s+les\s+programmes|programme\s+hinzufügen|aggiungi\s+programmi/.test(text);
+}
+
 function recordIdentity(record: ShortcutRecord): string {
 	return shortcutStableIdentity(record.app);
 }
@@ -56,9 +88,6 @@ function snapshotBaseline(): void {
 	baselineIds = new Set(records.map(record => record.id));
 	baselineIdentities = new Set(records.map(recordIdentity).filter(Boolean));
 	selectedExecutables.clear();
-	handledIds.clear();
-	handledIdentities.clear();
-	handledExecutables.clear();
 }
 
 function captureCurrentSelections(): void {
@@ -77,51 +106,106 @@ function recordWasExplicitlySelected(record: ShortcutRecord): boolean {
 	return Boolean(executable && selectedExecutables.has(executable));
 }
 
-function eligibleSessionRecords(): ShortcutRecord[] {
+function triggerShortcutAutoReview(record: ShortcutRecord): boolean {
+	if (handledIds.has(record.id)) return false;
+	const identity = recordIdentity(record);
+	const executable = recordExecutable(record);
+	if (identity && handledIdentities.has(identity)) return false;
+	if (executable && handledExecutables.has(executable)) return false;
+	if (shortcutAlreadyLinked(record.id)) return false;
+
+	handledIds.add(record.id);
+	if (identity) handledIdentities.add(identity);
+	if (executable) handledExecutables.add(executable);
+	knownShortcutIds.add(record.id);
+	if (identity) knownShortcutIdentities.add(identity);
+
+	backendLog(`Auto review opening for newly added shortcut "${record.title}" (${record.id}).`);
+	return requestNativeAddShortcutReview(record.id, record.title);
+}
+
+function scanForNewlyAddedShortcuts(): void {
+	if (!getPreferences().autoDetectShortcuts) return;
 	const records = getAllShortcutRecords();
-	const selectedMatches = records.filter(recordWasExplicitlySelected);
-	if (selectedMatches.length > 0) {
-		// Prefer records that are actually new to this picker session. If Steam
-		// reused the same Shortcut AppID (common after delete + re-add), retain the
-		// selected executable match as authoritative evidence of this explicit add.
-		const fresh = selectedMatches.filter(isSessionNewRecord);
-		return fresh.length > 0 ? fresh : selectedMatches;
+	if (!records.length) return;
+
+	const apps = (window as any).SteamClient?.Apps;
+	for (const record of records) {
+		const rawExe = readShortcutOverviewField(record.app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
+		const steamAppId = findMappingForShortcut(record.id, record.title, rawExe);
+		if (steamAppId) {
+			if (typeof apps?.SetShortcutLaunchOptions === 'function') {
+				const currentOptions = readShortcutOverviewField(record.app, 'strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strArguments') || '';
+				if (shouldAutoApplyNoLauncher(steamAppId)) {
+					if (!hasNoLauncherOption(currentOptions)) {
+						const updated = mergeNoLauncherOption(currentOptions, steamAppId);
+						void apps.SetShortcutLaunchOptions(record.id, updated);
+						backendLog(`Auto-reconciled launcher bypass for "${record.title}" (${record.id}): "${updated}"`);
+					}
+				} else if (hasNoLauncherOption(currentOptions)) {
+					const cleaned = removeIncompatibleLauncherBypass(currentOptions, steamAppId);
+					void apps.SetShortcutLaunchOptions(record.id, cleaned);
+					backendLog(`Cleaned incompatible launcher bypass for "${record.title}" (${record.id}): "${cleaned}"`);
+				}
+			}
+		}
 	}
-	// Fallback for Steam builds whose custom picker does not expose checkbox
-	// state. The baseline diff remains scoped to this one detected picker session.
-	return records.filter(isSessionNewRecord);
+
+	const inStartupWarmup = !startupSettled || (Date.now() - pluginStartedAt < STARTUP_WARMUP_MS);
+	const bulkCatalogHydration = knownShortcutIds.size === 0 && records.length > 0;
+
+	if (inStartupWarmup || bulkCatalogHydration) {
+		for (const record of records) {
+			knownShortcutIds.add(record.id);
+			const identity = recordIdentity(record);
+			if (identity) knownShortcutIdentities.add(identity);
+			handledIds.add(record.id);
+			if (identity) handledIdentities.add(identity);
+			const executable = recordExecutable(record);
+			if (executable) handledExecutables.add(executable);
+		}
+		return;
+	}
+
+	const currentIds = new Set<number>();
+	for (const record of records) {
+		currentIds.add(record.id);
+		const identity = recordIdentity(record);
+		const isNew = !knownShortcutIds.has(record.id) && !(identity && knownShortcutIdentities.has(identity));
+		const isSelected = recordWasExplicitlySelected(record);
+		const isDialogNew = isSessionNewRecord(record);
+
+		if (isNew || isSelected || isDialogNew) {
+			triggerShortcutAutoReview(record);
+		}
+	}
+
+	for (const id of Array.from(knownShortcutIds)) {
+		if (!currentIds.has(id)) {
+			knownShortcutIds.delete(id);
+			handledIds.delete(id);
+		}
+	}
 }
 
 function evaluateCommittedNativeAdds(generation: number): void {
 	if (generation !== sessionGeneration || dialogOpen || !getPreferences().autoDetectShortcuts) return;
-	for (const record of eligibleSessionRecords()) {
-		const identity = recordIdentity(record);
-		const executable = recordExecutable(record);
-		if (handledIds.has(record.id)
-			|| (identity && handledIdentities.has(identity))
-			|| (executable && handledExecutables.has(executable))) continue;
-		handledIds.add(record.id);
-		if (identity) handledIdentities.add(identity);
-		if (executable) handledExecutables.add(executable);
-		if (shortcutAlreadyLinked(record.id) || isNativeAddAutoPromptSuppressed(record.id)) {
-			backendLog(`Native-add auto review skipped for ${record.title}: linked or permanently suppressed.`);
-			continue;
-		}
-		if (requestNativeAddShortcutReview(record.id)) {
-			backendLog(`Native-add auto review requested for ${record.title} (${record.id}).`);
-		}
-	}
+	scanForNewlyAddedShortcuts();
 }
-
 
 function ensureInteractionListeners(): void {
 	for (const doc of candidateSteamDocuments()) {
 		if (interactionListeners.has(doc)) continue;
-		const handler: EventListener = () => {
-			// Capture selected executable paths in the event's capture phase. Steam
-			// may close the popup synchronously when the final Add button handles
-			// this same click, so waiting for the next polling tick can be too late.
-			if (dialogOpen) captureCurrentSelections();
+		const handler: EventListener = (event) => {
+			if (!dialogOpen && looksLikeNativeAddAction(event.target)) {
+				armNativeAddSession();
+			}
+			if (dialogOpen) {
+				captureCurrentSelections();
+				if (looksLikeAddSelectedAction(event.target)) {
+					onDialogClosed();
+				}
+			}
 		};
 		try {
 			doc.addEventListener('click', handler, true);
@@ -132,7 +216,9 @@ function ensureInteractionListeners(): void {
 				const observer = new Observer(records => {
 					if (dialogOpen || records.some(record =>
 						Array.from(record.addedNodes).some(nodeMayContainNativeAddUi)
-						|| Array.from(record.removedNodes).some(nodeMayContainNativeAddUi))) scheduleTick();
+						|| Array.from(record.removedNodes).some(nodeMayContainNativeAddUi))) {
+						scheduleTick();
+					}
 				});
 				observer.observe(doc.body, { childList: true, subtree: true });
 				documentObservers.set(doc, observer);
@@ -163,18 +249,30 @@ function onDialogOpened(): void {
 	clearCloseEvaluationTimers();
 	snapshotBaseline();
 	dialogOpen = true;
+	dialogObserved = true;
+	sessionArmedAt = Date.now();
 	captureCurrentSelections();
 	backendLog(`Native Add Non-Steam session opened with ${baselineIds.size} existing shortcut(s).`);
 }
 
+function armNativeAddSession(): void {
+	if (dialogOpen) return;
+	sessionGeneration += 1;
+	clearCloseEvaluationTimers();
+	snapshotBaseline();
+	dialogOpen = true;
+	dialogObserved = false;
+	sessionArmedAt = Date.now();
+	backendLog(`Native Add Non-Steam session armed from Steam menu with ${baselineIds.size} existing shortcut(s).`);
+}
+
 function onDialogClosed(): void {
-	// Capture one final time before the popup/document disappears from Steam's
-	// active window registry. This makes custom checkbox implementations much
-	// more reliable when the final Add click closes the picker immediately.
 	captureCurrentSelections();
 	dialogOpen = false;
+	dialogObserved = false;
+	sessionArmedAt = 0;
 	const generation = sessionGeneration;
-	for (const delay of [100, 250, 500, 900, 1500, 2500, 4000, 6500, 9000]) {
+	for (const delay of [50, 150, 300, 500, 800, 1200, 1800, 2500, 4000, 6500, 9000]) {
 		closeEvaluationTimers.push(setTimeout(() => evaluateCommittedNativeAdds(generation), delay));
 	}
 	backendLog(`Native Add Non-Steam session closed; selected executable(s): ${selectedExecutables.size}.`);
@@ -187,24 +285,32 @@ function tick(): void {
 	try { open = nativeAddNonSteamDialogOpen(); } catch {}
 	if (open) {
 		if (!dialogOpen) onDialogOpened();
-		else captureCurrentSelections();
-	} else if (dialogOpen) onDialogClosed();
+		else {
+			dialogObserved = true;
+			captureCurrentSelections();
+		}
+	} else if (dialogOpen && (dialogObserved || Date.now() - sessionArmedAt > 12000)) {
+		onDialogClosed();
+	}
+	scanForNewlyAddedShortcuts();
 }
 
-/** Start a narrowly-scoped watcher. DOM mutations open the fast path; the slow
- * watchdog only discovers newly-created Steam documents and never continuously
- * scans their complete contents while the native picker is closed.
- * It never infers new shortcuts from startup,
- * navigation or language changes. A review can only be scheduled after a real
- * open->closed lifecycle of Steam's native Add a Non-Steam Game picker. */
 export function startNativeAddAutoDetector(): void {
 	if (watcherTimer) return;
+	pluginStartedAt = Date.now();
 	dialogOpen = false;
+	startupSettled = false;
+	scanForNewlyAddedShortcuts();
+	if (startupTimer) clearTimeout(startupTimer);
+	startupTimer = setTimeout(() => {
+		startupSettled = true;
+		scanForNewlyAddedShortcuts();
+	}, STARTUP_WARMUP_MS);
+
 	watcherTimer = setInterval(() => {
-		const observedBefore = documentObservers.size;
 		ensureInteractionListeners();
-		if (dialogOpen || documentObservers.size !== observedBefore) scheduleTick(0);
-	}, 3000);
+		tick();
+	}, 350);
 	ensureInteractionListeners();
 	tick();
 }
@@ -212,13 +318,21 @@ export function startNativeAddAutoDetector(): void {
 export function stopNativeAddAutoDetector(): void {
 	if (watcherTimer) clearInterval(watcherTimer);
 	watcherTimer = null;
+	if (startupTimer) clearTimeout(startupTimer);
+	startupTimer = null;
 	if (scheduledTick) clearTimeout(scheduledTick);
 	scheduledTick = null;
 	clearCloseEvaluationTimers();
 	dialogOpen = false;
+	dialogObserved = false;
+	sessionArmedAt = 0;
+	pluginStartedAt = 0;
+	startupSettled = false;
 	baselineIds.clear();
 	baselineIdentities.clear();
 	selectedExecutables.clear();
+	knownShortcutIds.clear();
+	knownShortcutIdentities.clear();
 	handledIds.clear();
 	handledIdentities.clear();
 	handledExecutables.clear();

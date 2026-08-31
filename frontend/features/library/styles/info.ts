@@ -2,20 +2,15 @@ import { injectLibraryStyle } from './inject';
 
 export function ensureInfoPanelStyles(doc: Document): void {
 	injectLibraryStyle(doc, 'gdl-info-panel-styles', `
-		[data-gdl-game-info-button="1"] { cursor:pointer; }
-		[data-gdl-game-info-button="1"] svg,
-		[data-gdl-game-info-button="1"] .SVGIcon_Information {
-			width: 20px !important;
-			height: 20px !important;
-			display: block !important;
-		}
+		[data-gdl-game-info-button="1"] { cursor:pointer;display:flex !important;align-items:center !important;justify-content:center !important;visibility:visible !important;opacity:1 !important;flex:0 0 auto !important; }
+		/* Native MenuButton/DotDotDot classes own the icon dimensions. */
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback {
 			width:40px;height:40px;display:flex;align-items:center;justify-content:center;
 			padding:0;border:0;border-radius:2px;background:rgba(58,69,83,.72);color:#a8b0ba;
 		}
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback:hover,
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback.gdl-info-active { background:rgba(78,91,108,.88);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12); }
-		[data-gdl-game-info-button="1"].gdl-info-button-fallback svg { width:22px;height:22px;display:block; }
+		[data-gdl-game-info-button="1"].gdl-info-button-fallback svg { width:24px;height:24px;display:block; }
 
 		#gdl-game-info-panel {
 			transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease-in-out, transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
@@ -37,21 +32,28 @@ export function ensureInfoPanelStyles(doc: Document): void {
 
 		/* When the current Steam class modules resolve successfully, Steam owns
 		   the outer panel, expansion animation, column geometry and typography. */
-		#gdl-game-info-panel .gdl-info-portrait {
-			width: 109px !important;
-			min-width: 109px !important;
-			max-width: 109px !important;
-			height: 163px !important;
-			min-height: 163px !important;
-			max-height: 163px !important;
-			overflow: hidden !important;
-			border-radius: 2px !important;
+		/* Keep the injected portrait on Steam's current 2:3 box-art geometry. The
+		   private module does not constrain images inserted outside React, which
+		   otherwise lets a horizontal legacy capsule cover every information
+		   column. */
+		/* Preserve the pre-existing linked-game geometry outside legacy mode. */
+		#gdl-game-info-panel[data-gdl-native-layout="1"][data-gdl-legacy="0"] .gdl-info-portrait {
+			width:109px !important;min-width:109px !important;max-width:109px !important;
+			height:163px !important;min-height:163px !important;max-height:163px !important;
+			overflow:hidden !important;border-radius:2px !important;
 		}
-		#gdl-game-info-panel .gdl-info-portrait img {
-			width: 100% !important;
-			height: 100% !important;
-			object-fit: cover !important;
-			display: block !important;
+		#gdl-game-info-panel[data-gdl-native-layout="1"][data-gdl-legacy="0"] .gdl-info-portrait img {
+			width:100% !important;height:100% !important;object-fit:cover !important;display:block !important;
+		}
+		#gdl-game-info-panel[data-gdl-native-layout="1"][data-gdl-legacy="1"] .gdl-info-portrait {
+			width:109px !important;min-width:109px !important;max-width:109px !important;
+			height:163px !important;min-height:163px !important;max-height:163px !important;
+			overflow:hidden !important;border-radius:2px !important;
+		}
+		#gdl-game-info-panel[data-gdl-native-layout="1"][data-gdl-legacy="1"] .gdl-info-portrait img {
+			width:109px !important;min-width:109px !important;max-width:109px !important;
+			height:163px !important;min-height:163px !important;max-height:163px !important;
+			object-fit:cover !important;display:block !important;
 		}
 		#gdl-game-info-panel .gdl-info-associations {
 			display: flex !important;

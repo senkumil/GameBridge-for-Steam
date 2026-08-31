@@ -1,5 +1,6 @@
 import { backendLog } from '../api/backend';
 import { escapeRegex } from '../core/text';
+import { OTHER_LANGUAGE_TRANSLATIONS } from './custom-translations';
 
 let localizationDocumentProvider: (() => Document | null) | null = null;
 
@@ -10,10 +11,20 @@ export function setLocalizationDocumentProvider(provider: (() => Document | null
 export function steamLocalizationManager(): any | null {
 	try {
 		const providedDocument = localizationDocumentProvider?.() || null;
-		return (window as any).LocalizationManager
-			|| (providedDocument?.defaultView as any)?.LocalizationManager
-			|| (document?.defaultView as any)?.LocalizationManager
-			|| null;
+		if ((window as any).LocalizationManager) return (window as any).LocalizationManager;
+		if ((providedDocument?.defaultView as any)?.LocalizationManager) return (providedDocument?.defaultView as any).LocalizationManager;
+		if ((document?.defaultView as any)?.LocalizationManager) return (document?.defaultView as any).LocalizationManager;
+		if ((window as any).parent?.LocalizationManager) return (window as any).parent.LocalizationManager;
+		if ((window as any).top?.LocalizationManager) return (window as any).top.LocalizationManager;
+		if ((window as any).opener?.LocalizationManager) return (window as any).opener.LocalizationManager;
+		const popupMap = (window as any).g_PopupManager?.m_mapPopups;
+		if (popupMap && typeof popupMap.values === 'function') {
+			for (const popup of popupMap.values()) {
+				const lm = popup?.m_popup?.LocalizationManager || popup?.value?.LocalizationManager || popup?.LocalizationManager;
+				if (lm) return lm;
+			}
+		}
+		return null;
 	} catch { return null; }
 }
 
@@ -68,9 +79,26 @@ export const SPANISH_TOKEN_FALLBACKS: Record<string, string> = {
 	AppActivity_Wishlist: 'lista de deseados',
 	AppActivity_PlayedGameFirstTime: ' ha jugado a %1$s por primera vez',
 	AppActivity_UserStatus: ' ha publicado una actualización de estado',
+	AppDetails_SectionTitle_Controller: 'Control',
+	AppDetailsControllerSection_Title_Supported_Xbox: 'Compatible con tu control de Xbox',
+	AppDetailsControllerSection_Title_Supported_DualShock: 'Compatible con tu control DualShock',
+	AppDetailsControllerSection_Title_Supported_Dualsense: 'Compatible con tu control DualSense',
+	AppDetailsControllerSection_Title_Supported_Generic: 'Compatible con tu control',
+	AppDetailsControllerSection_DevSupported: 'Este juego debería funcionar muy bien con tu control',
+	AppControllerConfiguration_Link: 'Ver los ajustes del control',
+	AppDetails_Achievement_ViewAllAchievements: 'Ver todos mis logros',
+	AppDetails_ViewAllAchievements: 'Ver todos mis logros',
+	AppDetails_Achievements_ViewAll: 'Ver todos mis logros',
 };
 
 export const SPANISH_TRANSLATIONS: Record<string, string> = {
+	controller_section_title: 'Control',
+	controller_supported_xbox: 'Compatible con tu control de Xbox',
+	controller_supported_dualshock: 'Compatible con tu control DualShock',
+	controller_supported_dualsense: 'Compatible con tu control DualSense',
+	controller_supported_generic: 'Compatible con tu control',
+	controller_supported_desc: 'Este juego debería funcionar muy bien con tu control',
+	controller_settings_link: 'Ver los ajustes del control',
 	activity: 'Actividad',
 	post_placeholder: 'Diles algo sobre este juego a tus amigos...',
 	publish: 'Publicar',
@@ -79,6 +107,7 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	community_content: 'Contenido de la comunidad',
 	achievements_label: 'Logros',
 	achievements_unlocked: '{unlocked} de {total} logros desbloqueados',
+	all_achievements_unlocked: '¡Has desbloqueado todos los logros! {unlocked}/{total}',
 	achievements_mine: 'MIS LOGROS',
 	achievements_global: 'LOGROS GLOBALES',
 	hidden_achievement: 'Logro oculto',
@@ -103,6 +132,33 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	family_sharing: 'Préstamo familiar',
 	trading_cards: 'Tarjetas',
 	store_page: 'Página de la tienda',
+	historical_record: 'Ficha histórica',
+	information: 'Información',
+	retired_from_store: 'Retirado de la tienda',
+	genre_label: 'Género',
+	steam_release_label: 'Lanzamiento en Steam',
+	controller_support_label: 'Compatibilidad con control',
+	no_steam_achievements: 'Sin logros de Steam',
+	no_steam_achievements_detail: 'No existe un esquema público de Steam para este AppID.',
+	view_historical_record: 'Ver ficha histórica',
+	legacy_pes2013_description: 'Pro Evolution Soccer 2013 vuelve a sus raíces poniendo el énfasis en la habilidad individual de los mejores jugadores del mundo y ofreciendo libertad total para jugar con cualquier estilo.',
+	legacy_blur_description: 'Blur combina carreras intensas con combate vehicular: recoge y utiliza potenciadores mientras compites en ubicaciones reales, tanto en eventos para un jugador como multijugador.',
+	legacy_blur_xbox_status: '1 logro descontinuado · 1 parcialmente descontinuado',
+	legacy_blur_trophy_breakdown: '1 Platino · 2 Oro · 10 Plata · 36 Bronce',
+	genre_sports: 'Deportes',
+	genre_racing: 'Carreras',
+	legacy_description_developer_genre: '{name} es un título de {genre} desarrollado por {developer}.',
+	legacy_description_developer: '{name} fue desarrollado por {developer}.',
+	other_platform_achievements: 'Logros en otras plataformas',
+	external_achievements_total: '{count} logros',
+	external_trophies_total: '{count} trofeos',
+	external_achievements_discontinued: '{count} logros descontinuados',
+	external_trophy_breakdown: '1 Platino · 3 Oro · 21 Plata · 4 Bronce',
+	featured_community: 'Comunidad destacada',
+	guide_label: 'Guía',
+	screenshot_label: 'Captura',
+	community_historical_available: 'El contenido de Steam Community continúa disponible para este juego.',
+	view_community_hub: 'Ver Punto de encuentro',
 	dlc_links: 'DLC',
 	community_hub: 'Punto de encuentro',
 	points_shop: 'Tienda de puntos',
@@ -147,34 +203,81 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	game_zero_achievements_title: 'Ignorar progreso local y mostrar 0',
 	game_zero_achievements_description: 'Ignora la ruta personalizada y las carpetas globales de AppID para este juego sin borrar sus archivos.',
 	game_simulated_achievements_title: 'Logros simulados',
-	game_simulated_achievements_description: 'Muestra progreso determinista usando los nombres e iconos reales de Steam.',
-	game_simulated_unlock_all_title: 'Desbloquear todos los logros',
-	game_simulated_unlock_all_description: 'Muestra el 100 % completado en lugar de progreso simulado parcial.',
+	game_simulated_achievements_description: 'Muestra progreso usando los nombres e iconos reales de Steam.',
+	game_simulate_count_title: 'Logros simulados',
+	game_simulate_count_desc: 'Selecciona cuántos logros simular para este juego (0 para usar logros reales).',
+	game_simulate_count_offline_title: 'Logros offline simulados',
+	game_simulate_count_offline_desc: 'Selecciona cuántos logros offline simular para este juego (los logros online se controlan por separado).',
+	game_simulate_online_count_title: 'Logros online simulados',
+	game_simulate_online_count_desc: 'Selecciona cuántos logros online simular para este juego.',
+	game_simulate_percent_title: 'Logros simulados',
+	game_simulate_percent_desc: 'Selecciona cuántos logros simular para este juego.',
+	game_simulate_percent_offline_title: 'Logros offline simulados',
+	game_simulate_percent_offline_desc: 'Selecciona cuántos logros offline simular para este juego (los logros online se controlan por separado).',
+	game_simulate_online_percent_title: 'Logros online simulados',
+	game_simulate_online_percent_desc: 'Selecciona cuántos logros online simular para este juego.',
 	game_online_achievements_title: 'Desbloquear solo logros online',
 	game_online_achievements_description: 'También desbloquea los logros identificados como online, multijugador o cooperativos.',
-	game_replay_next_achievements_title: 'Repetir todos los logros en el próximo inicio',
-	game_replay_next_achievements_description: 'Muestra una vez todos los logros desbloqueados hasta el momento y después se desactiva automáticamente.',
-	game_replay_every_achievements_title: 'Mostrar todos los logros en cada inicio',
-	game_replay_every_achievements_description: 'Repite todos los logros desbloqueados cada vez que se ejecuta este juego.',
-	game_achievement_options_reset: 'Usar valores globales',
-	game_achievement_options_local: 'Usando opciones guardadas para este juego.',
+	game_achievement_options_reset: 'Usar logros reales',
+	game_achievement_options_use_real: 'Usar logros reales',
+	game_achievement_real_priority_hint: 'Al usar logros reales se leerá primero la ruta personalizada de este juego y, si no está configurada, las carpetas automáticas de los ajustes del plugin.',
+	game_achievement_options_local: 'Usando opciones de simulación guardadas para este juego.',
 	game_achievement_options_global: 'Usando los valores globales del plugin.',
+	game_achievement_options_real_per_game: 'Usando la ruta personalizada de logros de este juego.',
+	game_achievement_options_real_global: 'Usando logros reales desde las carpetas automáticas del plugin.',
 	game_achievement_path_simulation_blocked: 'Los logros simulados están activos; no se puede usar a la vez una ruta de progreso personalizada.',
 	game_achievement_path_zero_blocked: 'El progreso local está desactivado para este juego; se mostrará la lista real de Steam al 0 %.',
 	game_achievement_options_saving: 'Guardando opciones de logros...',
 	game_achievement_options_failed: 'No se pudieron guardar las opciones de logros.',
+	game_achievement_picker_btn: 'Personalizar logros individualmente',
+	game_achievement_picker_title: 'Selector de logros simulados',
+	game_achievement_picker_desc: 'Haz clic en cada logro para activarlo o desactivarlo. Los logros en color se mostrarán como desbloqueados y los apagados como bloqueados.',
+	game_achievement_picker_select_all: 'Seleccionar todos',
+	game_achievement_picker_deselect_all: 'Deseleccionar todos',
+	game_achievement_picker_select_offline: 'Solo offline',
+	game_achievement_picker_select_online: 'Solo online',
+	game_achievement_picker_save: 'Guardar y aplicar',
+	game_achievement_picker_export: 'Exportar a achievements.json (Fusión inteligente)',
+	game_achievement_picker_exporting: 'Exportando y fusionando logros...',
+	game_achievement_picker_export_success: 'Logros exportados y fusionados con éxito en {path}. Usando logros reales.',
+	game_achievement_picker_export_failed: 'No se pudo exportar el archivo de logros.',
+	game_achievement_picker_cancel: 'Cancelar',
+	game_achievement_picker_count: '{selected} de {total} logros seleccionados',
+	game_achievement_picker_search: 'Buscar logro...',
+	game_achievement_picker_no_results: 'No se encontraron logros coincidentes.',
+	game_achievement_export_path_label: 'Ruta de exportación:',
+	game_achievement_picker_sync_steam: 'Sincronizar con cuenta de Steam',
+	game_achievement_picker_syncing: 'Sincronizando con los servidores de Steam...',
+	game_achievement_picker_sync_success: 'Logros sincronizados con éxito en tu cuenta de Steam.',
+	game_achievement_picker_sync_failed: 'No se pudieron sincronizar los logros con tu cuenta de Steam (asegúrate de que posees el juego y Steam está abierto).',
+	game_achievement_picker_sync_confirm: '¿Deseas sincronizar los logros seleccionados directamente con tu cuenta oficial de Steam?',
+	native_steam_achievements_title: 'Logros de Steam (NativeGameLink)',
+	native_steam_achievements_desc: 'Gestiona, personaliza y sincroniza los logros oficiales de este juego directamente en tu cuenta de Steam.',
+	native_steam_achievements_manage_btn: '☁️ Gestionar y sincronizar logros en Steam',
+	native_steam_achievements_loading: 'Cargando logros de Steam...',
+	native_steam_achievements_picker_title: 'Selector de logros de Steam',
+	native_steam_achievements_picker_desc: 'Selecciona los logros que deseas sincronizar con tu cuenta oficial de Steam. Steam confirmará los cambios guardados.',
+	native_steam_achievements_no_achievements: 'Este juego no contiene logros en Steam.',
+	native_steam_card_farming_title: 'Farmeo de cromos de Steam (NativeGameLink)',
+	native_steam_card_farming_desc: 'Simula la ejecución del juego en segundo plano para que Valve suelte las tarjetas/cromos oficiales directamente en tu inventario de Steam.',
+	native_steam_card_farming_start_btn: '🃏 Iniciar farmeo de cromos',
+	native_steam_card_farming_stop_btn: '⏹️ Detener farmeo de cromos',
+	native_steam_card_farming_active_status: '🟢 Farmeando cromos ({elapsed} transcurridos)...',
+	native_steam_card_farming_started: 'Farmeo de cromos iniciado en segundo plano.',
+	native_steam_card_farming_stopped: 'Farmeo de cromos detenido.',
+	native_steam_card_farming_failed: 'No se pudo iniciar el farmeo de cromos.',
 	no_match_found: 'No se encontró una coincidencia confiable. Puedes introducir el AppID manualmente.',
 	shortcut_suggestions_title: 'Sugerencias de Steam AppID:',
 	no_suggestions_found: 'Sin sugerencias automáticas (introduce el AppID abajo)',
 	current_linked_option: 'Juego vinculado actualmente (AppID {appid})',
 	detecting_game: 'Detectando el juego automáticamente...',
-	detected_game: 'Detectado: {name}. Revisa el resultado y pulsa Guardar para vincularlo.',
+	detected_game: 'Detectado: {name}. Revisa el resultado y pulsa Vincular para vincularlo.',
 	detection_ready: 'La detección automática está lista para confirmar.',
 	detection_uncertain: 'La coincidencia es incierta. Elige el resultado correcto o introduce el AppID manualmente.',
 	use_tracking_executable: 'Usar el ejecutable real del juego',
 	tracking_executable_help: '{bootstrap} se cierra después de iniciar {game}. Usa {game} para que Steam registre tus horas de juego.',
 	locked_achievements: 'Logros bloqueados',
-	view_all_achievements: 'Ver todos los logros',
+	view_all_achievements: 'Ver todos mis logros',
 	view_dlc_store: 'Ver DLC en la tienda',
 	view_my_cards: 'Ver mis tarjetas',
 	cards_found: 'Tarjetas encontradas',
@@ -187,7 +290,7 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	explore_workshop: 'Explora el contenido creado por la comunidad para este juego.',
 	visit_workshop: 'Visitar este Workshop',
 	trending_item: 'Artículo popular',
-	settings_title: 'GameBridge for Steam',
+	settings_title: 'NativeGameLink for Steam',
 	settings_guide_title: '¿Cómo vincular tus juegos a Steam?',
 	settings_step_1: 'Añade tu juego en Steam (+ Añadir un producto → Añadir un producto que no es de Steam).',
 	settings_step_2: 'Haz clic derecho en el juego en tu biblioteca de Steam → Propiedades.',
@@ -241,22 +344,27 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	bulk_link_reason_failed: 'No se pudo completar la vinculación.',
 	bulk_link_result: 'Vinculación masiva terminada: {linked} vinculados, {queued} en cola para reintento, {skipped} ambiguos omitidos, {failed} fallidos.',
 	bulk_link_failed: 'No se pudo completar la vinculación masiva.',
+	bulk_link_cancelled: 'Vinculación masiva cancelada.',
 	bulk_linking_short: 'Vinculando...',
 	link_management_description: 'Vincula o desvincula juegos externos individualmente. La revisión automática, si está habilitada, queda aislada al flujo nativo de Steam para añadir juegos que no son de Steam.',
 	link_management_title: 'Gestión de vinculaciones',
-	manual_link_only_description: 'La vinculación es únicamente manual. GameBridge nunca abre una ventana de vinculación automáticamente.',
+	manual_link_only_description: 'La vinculación es únicamente manual. NativeGameLink nunca abre una ventana de vinculación automáticamente.',
 	link_management_summary: '{linked} de {total} juego(s) que no son de Steam están vinculados.',
 	link_management_empty: 'No hay juegos que no sean de Steam disponibles actualmente.',
 	link_all_button: 'Vincular todos',
 	unlink_all_button: 'Desvincular todos',
 	link_button: 'Vincular',
+	link_searching: 'Buscando coincidencias de Steam…',
+	game_linked_status: 'Vinculado',
 	game_linked_appid: 'Vinculado · Steam AppID {appid}',
 	game_unlinked_status: 'Desvinculado',
+	linking_progress_button: 'Vinculando...',
+	manual_link_success: 'Acceso directo vinculado a Steam con éxito.',
 	manual_link_review_started: 'Revisión de vinculación abierta para {game}.',
 	manual_link_review_failed: 'No se pudo iniciar la revisión de vinculación para {game}.',
 	bulk_link_started: 'Revisión manual de vinculación iniciada para {count} juego(s).',
 	bulk_link_none: 'No hay juegos desvinculados para revisar.',
-	bulk_unlinking: 'Desvinculando todos los juegos de GameBridge...',
+	bulk_unlinking: 'Desvinculando todos los juegos de NativeGameLink...',
 	bulk_unlinking_short: 'Desvinculando...',
 	bulk_unlink_success: 'Todos los juegos vinculados fueron desvinculados. Las ventanas automáticas seguirán bloqueadas hasta que vuelvas a vincular explícitamente.',
 	bulk_unlink_partial: 'Algunos juegos no se pudieron desvincular ({failed} fallidos).',
@@ -288,6 +396,9 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	auto_link_step_assets: '3 · Recursos',
 	auto_link_executable_verified_review: 'El ejecutable coincide con este juego de Steam, pero el nombre del acceso directo es incierto. Revísalo antes de vincularlo.',
 	link_queued_background: 'Vinculación en cola. Puedes cerrar esta ventana; la configuración continúa en segundo plano.',
+	link_queued_retrying: 'Reintentando la vinculación en segundo plano (intento {attempts}).',
+	link_queued_complete: '✓ La vinculación en segundo plano se completó. El juego ya está listo en tu biblioteca.',
+	link_queued_failed: 'La vinculación en segundo plano no pudo completarse. Puedes intentarlo de nuevo.',
 	auto_link_message: 'Se encontró una coincidencia en Steam para “{name}”. Confírmala antes de que el plugin cargue la información del juego.',
 	selected_executable: 'Ejecutable seleccionado: {exe}',
 	executable_preserved: 'Steam seguirá iniciando el ejecutable que seleccionaste: {exe}',
@@ -301,13 +412,13 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	tracking_repair_success: '✓ El acceso directo ahora ejecuta el proceso principal del juego. Steam registrará tu tiempo de juego.',
 	tracking_repair_failed: 'No se pudo actualizar el destino. Puedes seleccionar el ejecutable recomendado manualmente en Propiedades.',
 	linked_updating: '✓ Vinculado a “{name}”. Actualizando nombre, icono y portadas...',
-	link_incomplete_retrying: 'La vinculación todavía no está completa. GameBridge reintentará hasta que nombre, icono y portadas estén listos.',
+	link_incomplete_retrying: 'La vinculación todavía no está completa. NativeGameLink reintentará hasta que nombre, icono y portadas estén listos.',
 	linked_official: '✓ Vinculado a “{name}”. Nombre e icono oficiales actualizados.',
 	linked_name: '✓ Vinculado a “{name}”. Nombre oficial actualizado; el icono oficial no estaba disponible.',
 	linked_reopen: '✓ Vinculado a “{name}”. Es posible que debas reiniciar Steam para ver el nuevo icono.',
 	tracking_executable_updated: ' Steam ejecutará ahora el proceso principal del juego para registrar tu tiempo de juego.',
 	local_note_updated: ' Nota local actualizada.',
-	linked_open_save: '✓ Vinculado a “{name}”. Abre la página del juego y pulsa Guardar para actualizar su nombre e icono.',
+	linked_open_save: '✓ Vinculado a “{name}”. Abre la página del juego y pulsa Vincular para actualizar su nombre e icono.',
 	verifying_steam: 'Verificando en Steam...',
 	achievement_unlocked_toast: 'Logro desbloqueado',
 	community_guide: 'Guía de la comunidad',
@@ -346,7 +457,39 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	steamgriddb_artwork_description: 'Sólo se consulta si Steam no publicó una portada, fondo, logo o cápsula. Nunca reemplaza artwork oficial.',
 	steamgriddb_auto_artwork: 'Aplicar automáticamente recursos de SteamGridDB que falten',
 	steamgriddb_api_key_placeholder: 'API key de SteamGridDB (se guarda sólo localmente)',
+	steamgriddb_api_key_restore: 'Restaurar clave predeterminada',
+	steamgriddb_api_key_verifying: 'Comprobando la clave con SteamGridDB...',
+	steamgriddb_api_key_saved: 'Clave de SteamGridDB guardada y verificada correctamente.',
+	steamgriddb_api_key_restored: 'Clave predeterminada restaurada y verificada correctamente.',
+	steamgriddb_api_key_required: 'Introduce una clave de SteamGridDB válida.',
+	steamgriddb_api_key_invalid: 'SteamGridDB rechazó la clave. La clave anterior continúa activa.',
+	steamgriddb_api_key_unavailable: 'No se pudo contactar con SteamGridDB. La clave anterior continúa activa.',
 	steamgriddb_contributed: ' SteamGridDB aportó: {assets}.',
+	game_artwork_picker_title: 'Artwork de la biblioteca',
+	game_artwork_picker_desc: 'Elige artwork alternativo de SteamGridDB para este juego retirado. Tu selección reemplaza los valores predeterminados sólo para este acceso directo.',
+	game_artwork_picker_desc_native: 'Elige artwork alternativo de SteamGridDB para este juego de Steam. Tu selección cambia sólo el artwork de tu biblioteca local.',
+	game_artwork_picker_open: 'Elegir artwork',
+	game_artwork_picker_reset: 'Restablecer artwork',
+	game_artwork_picker_resetting: 'Restableciendo...',
+	game_artwork_picker_reset_success: 'Artwork predeterminado del plugin restaurado.',
+	game_artwork_picker_reset_failed: 'No se pudo restaurar el artwork predeterminado. Inténtalo de nuevo.',
+	game_artwork_picker_modal_desc: 'Selecciona una imagen para cada espacio de la biblioteca de Steam. El borde azul indica la imagen que se aplicará.',
+	game_artwork_slot_portrait: 'Carátula vertical',
+	game_artwork_slot_hero: 'Fondo amplio',
+	game_artwork_slot_logo: 'Logo',
+	game_artwork_slot_wide: 'Cápsula horizontal',
+	game_artwork_picker_defaults: 'Usar recomendados',
+	game_artwork_picker_apply: 'Aplicar artwork',
+	game_artwork_picker_applying: 'Aplicando...',
+	game_artwork_picker_loading: 'Cargando artwork...',
+	game_artwork_picker_empty: 'No se encontró artwork compatible para este espacio.',
+	game_artwork_picker_summary: '{selected} de {total} espacios seleccionados · Fuente: SteamGridDB',
+	game_artwork_picker_api_key: 'Primero añade tu API key de SteamGridDB en los ajustes de NativeGameLink.',
+	game_artwork_picker_no_appid: 'Vincula este juego a un AppID de Steam para elegir artwork.',
+	game_artwork_picker_unavailable: 'Puedes buscar artwork manualmente con tu clave de SteamGridDB.',
+	game_artwork_picker_load_failed: 'No se pudo cargar el artwork de SteamGridDB. Comprueba la API key y la conexión.',
+	game_artwork_picker_success: 'El artwork seleccionado se aplicó y quedó guardado para este acceso directo.',
+	game_artwork_picker_failed: 'No se pudo aplicar parte del artwork. Comprueba la conexión e inténtalo de nuevo.',
 	link_complete_title: '✓ Vinculación completada.',
 	link_complete_body: 'Nombre oficial, icono y las cuatro imágenes de biblioteca se aplicaron correctamente.',
 	link_ready_library: 'El juego ya está listo en tu biblioteca.',
@@ -355,12 +498,79 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	link_warning_missing: ' Faltan: {assets}.',
 	link_warning_fallback: 'Cuando Steam no publica una pieza de biblioteca, se conserva su arte oficial disponible como alternativa.',
 	link_saved_review: 'La vinculación se guardó; revisa los recursos indicados.',
+	shortcut_rename_pending: 'Steam está actualizando la identidad del acceso directo. NativeGameLink terminará la vinculación en segundo plano sin utilizar la entrada anterior.',
 	appid_not_found: 'No se encontró el AppID {id} en Steam.',
 	save_failed: 'No se pudo guardar.',
+	recent: 'Reciente',
+	user_status: 'Publicación de estado',
 };
 
+export function detectSynchronousSteamLanguage(): string | null {
+	const normalizeDetectedLanguage = (value: unknown): string | null => {
+		const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+		if (!raw || !/^[a-z0-9-]+$/i.test(raw)) return null;
+		const base = raw.split('-')[0];
+		const mapped = LOCALE_TO_STEAM_LANG[raw] || LOCALE_TO_STEAM_LANG[base] || raw.replace(/-/g, '_');
+		return /^[a-z0-9_]+$/i.test(mapped) ? mapped : null;
+	};
+	try {
+		const lm = steamLocalizationManager();
+		if (lm) {
+			const strELang = String(lm.m_strELanguage || lm.m_strLanguage || lm.m_Language || '').toLowerCase();
+			const normalized = normalizeDetectedLanguage(strELang);
+			if (normalized) return normalized;
+			const locales: string[] = lm.m_rgLocalesToUse || [];
+			for (const raw of locales) {
+				const detected = normalizeDetectedLanguage(raw);
+				if (detected) return detected;
+			}
+		}
+	} catch {}
+
+	try {
+		const sc = (window as any).SteamClient || (window as any).parent?.SteamClient || (window as any).opener?.SteamClient;
+		const syncLang = sc?.Settings?.GetCurrentLanguageSync?.() || sc?.User?.GetLanguageSync?.() || sc?.System?.GetLanguageSync?.();
+		const normalized = normalizeDetectedLanguage(syncLang);
+		if (normalized) return normalized;
+	} catch {}
+
+	try {
+		const gStr = String((window as any).g_strLanguage || (window as any).parent?.g_strLanguage || (window as any).opener?.g_strLanguage || '').toLowerCase();
+		const normalized = normalizeDetectedLanguage(gStr);
+		if (normalized) return normalized;
+	} catch {}
+
+	try {
+		const docLang = String(document.documentElement.lang || document.querySelector('html')?.getAttribute('lang') || (window as any).parent?.document?.documentElement?.lang || (window as any).opener?.document?.documentElement?.lang || '').toLowerCase();
+		const normalized = normalizeDetectedLanguage(docLang);
+		if (normalized) return normalized;
+	} catch {}
+
+	try {
+		const ach = loc('AppDetails_SectionTitle_Achievements', '');
+		if (ach && LANG_FINGERPRINT[ach]) {
+			const tie = LANG_TIEBREAK[ach];
+			if (tie) {
+				return tie[loc('AppDetails_SectionTitle_Friends', '')] || Object.values(tie)[0];
+			}
+			return LANG_FINGERPRINT[ach];
+		}
+	} catch {}
+
+	try {
+		const navLang = String(navigator.language || (navigator as any).userLanguage || '').toLowerCase();
+		if (navLang) {
+			if (LOCALE_TO_STEAM_LANG[navLang]) return LOCALE_TO_STEAM_LANG[navLang];
+			const base = navLang.split('-')[0];
+			if (LOCALE_TO_STEAM_LANG[base]) return LOCALE_TO_STEAM_LANG[base];
+		}
+	} catch {}
+
+	return null;
+}
+
 export function isSpanishLanguage(): boolean {
-	const lang = String(steamLanguageSync() || '').toLowerCase();
+	const lang = String(steamLanguageSync() || detectSynchronousSteamLanguage() || '').toLowerCase();
 	if (lang === 'spanish' || lang === 'latam') return true;
 	try {
 		const lm = steamLocalizationManager();
@@ -429,7 +639,17 @@ export let _steamLanguage: string | null = (() => {
 	} catch { return null; }
 })();
 
+let lastSynchronousLanguageProbe = 0;
+
 export function steamLanguageSync(): string | null {
+	const now = Date.now();
+	if (_steamLanguage && now - lastSynchronousLanguageProbe < 1000) return _steamLanguage;
+	lastSynchronousLanguageProbe = now;
+	const syncDetected = detectSynchronousSteamLanguage();
+	if (syncDetected) {
+		if (syncDetected !== _steamLanguage) commitSteamLanguage(syncDetected);
+		return _steamLanguage || syncDetected;
+	}
 	return _steamLanguage;
 }
 
@@ -445,9 +665,9 @@ export function subscribeSteamLanguageChange(listener: SteamLanguageListener): (
 }
 
 export function commitSteamLanguage(language: string): string {
-	const raw = String(language || '').toLowerCase().replace('_', '-');
+	const raw = String(language || '').toLowerCase().replace(/_/g, '-');
 	const base = raw.split('-')[0];
-	const mapped = LOCALE_TO_STEAM_LANG[raw] || LOCALE_TO_STEAM_LANG[base] || raw.replace('-', '_');
+	const mapped = LOCALE_TO_STEAM_LANG[raw] || LOCALE_TO_STEAM_LANG[base] || raw.replace(/-/g, '_');
 	const next = /^[a-z_]+$/.test(mapped) ? mapped : 'english';
 	const previous = _steamLanguage;
 	_steamLanguage = next;
@@ -462,8 +682,7 @@ export function commitSteamLanguage(language: string): string {
 }
 
 export function startSteamLanguageWatcher(): void {
-	if (steamLanguageWatchTimer) return;
-	steamLanguageWatchTimer = setInterval(() => { void getSteamLanguage(true).catch(() => {}); }, 4000);
+	// Steam client always restarts whenever the user changes interface language.
 }
 
 export function stopSteamLanguageWatcher(): void {
@@ -473,43 +692,28 @@ export function stopSteamLanguageWatcher(): void {
 }
 
 export async function getSteamLanguage(forceRefresh = false): Promise<string> {
-	const cachedLanguage = _steamLanguage;
 	if (_steamLanguage && !forceRefresh) return _steamLanguage;
 	let lang = '';
 
 	// 1. Ask the client directly
 	try {
-		const sc = (window as any).SteamClient;
+		const sc = (window as any).SteamClient || (window as any).parent?.SteamClient || (window as any).opener?.SteamClient;
 		if (typeof sc?.Settings?.GetCurrentLanguage === 'function') {
 			const l = await sc.Settings.GetCurrentLanguage();
+			if (typeof l === 'string' && /^[a-z0-9_-]+$/i.test(l)) lang = l;
+		} else if (typeof sc?.User?.GetLanguage === 'function') {
+			const l = await sc.User.GetLanguage();
+			if (typeof l === 'string' && /^[a-z0-9_-]+$/i.test(l)) lang = l;
+		} else if (typeof sc?.System?.GetLanguage === 'function') {
+			const l = await sc.System.GetLanguage();
 			if (typeof l === 'string' && /^[a-z0-9_-]+$/i.test(l)) lang = l;
 		}
 	} catch {}
 
-	// 2. Fingerprint the loaded localization tokens
+	// 2. Synchronous detect via manager, cookies or fingerprinting
 	if (!lang) {
-		const ach = loc('AppDetails_SectionTitle_Achievements', '');
-		if (ach) {
-			const tie = LANG_TIEBREAK[ach];
-			if (tie) {
-				lang = tie[loc('AppDetails_SectionTitle_Friends', '')] || Object.values(tie)[0];
-			} else {
-				lang = LANG_FINGERPRINT[ach] || '';
-			}
-		}
-	}
-
-	// 3. Browser locale mapping
-	if (!lang) {
-		try {
-			const locales: string[] = (window as any).LocalizationManager?.m_rgLocalesToUse || [];
-			for (const raw of locales) {
-				const lc = String(raw).toLowerCase();
-				if (LOCALE_TO_STEAM_LANG[lc]) { lang = LOCALE_TO_STEAM_LANG[lc]; break; }
-				const base = lc.split('-')[0];
-				if (LOCALE_TO_STEAM_LANG[base]) { lang = LOCALE_TO_STEAM_LANG[base]; break; }
-			}
-		} catch {}
+		const sync = detectSynchronousSteamLanguage();
+		if (sync) lang = sync;
 	}
 
 	if (lang) {
@@ -517,7 +721,7 @@ export async function getSteamLanguage(forceRefresh = false): Promise<string> {
 		backendLog('Steam language detected: ' + committed);
 		return committed;
 	}
-	return cachedLanguage || 'english';
+	return _steamLanguage || 'english';
 }
 
 export type SteamUiTokenSpec = { tokens?: string[]; params?: string[] };
@@ -530,6 +734,7 @@ export const GDL_STEAM_TOKEN_SPECS: Record<string, SteamUiTokenSpec> = {
 	community_content: { tokens: ['AppDetails_SectionTitle_Community'] },
 	achievements_label: { tokens: ['AppDetails_SectionTitle_Achievements'] },
 	achievements_unlocked: { tokens: ['AppDetails_PlayerUnlockedPercent'], params: ['unlocked', 'total'] },
+	all_achievements_unlocked: { tokens: ['AppDetails_PlayerUnlockedPercentAll', 'AppDetails_PlayerUnlockedPercent'], params: ['unlocked', 'total'] },
 	no_recent_activity: { tokens: ['AppActivity_NoActivity'] },
 	latest_news: { tokens: ['AppActivity_ViewLatestNews'] },
 	developer: { tokens: ['AppDetails_Developer'] },
@@ -614,176 +819,9 @@ export function applySteamTemplateValues(text: string, values: Record<string, st
 }
 
 const GDL_CUSTOM_LANGUAGE_TRANSLATIONS: Record<string, Record<string, string>> = {
-	italian: {
-		experimental_title: 'Sperimentale',
-		experimental_badge: 'SPERIMENTALE',
-		bulk_link_experimental_title: 'Collegamento rapido in massa',
-		bulk_link_experimental_description: 'Collega in background solo le corrispondenze ad alta affidabilità senza aprire una finestra per ogni gioco. I casi ambigui restano scollegati per la revisione manuale.',
-		bulk_link_running: 'Analisi e collegamento delle corrispondenze affidabili...',
-		bulk_link_progress: 'Collegamento {done}/{total}: {game}',
-		bulk_link_analyzing_progress: 'Analisi {done}/{total}: {game}',
-		bulk_link_analyzing_game: 'Analisi: {game}',
-		bulk_link_linking_game: 'Collegamento: {game}',
-		bulk_link_not_linked_title: 'Impossibile collegare ({count})',
-		bulk_link_retrying_games: 'Completamento ancora in background ({count}): {games}',
-		bulk_link_reason_ambiguous: 'Non è stata trovata una corrispondenza sufficientemente affidabile.',
-		bulk_link_reason_context: 'Impossibile leggere le informazioni del collegamento.',
-		bulk_link_reason_detection: 'Rilevamento dei candidati non riuscito.',
-		bulk_link_reason_invalid_appid: 'Lo Steam AppID rilevato non è valido.',
-		bulk_link_reason_native: 'La voce non è stata riconosciuta come collegamento non-Steam.',
-		bulk_link_reason_incomplete: 'Il collegamento non ha completato tutte le risorse richieste.',
-		bulk_link_reason_failed: 'Impossibile completare il collegamento.',
-		bulk_link_result: 'Collegamento in massa completato: {linked} collegati, {queued} in coda, {skipped} ambigui ignorati, {failed} non riusciti.',
-		bulk_link_failed: 'Impossibile completare il collegamento in massa.',
-		bulk_linking_short: 'Collegamento...',
-		auto_detect_native_add_description: 'Controlla solo la sessione della finestra nativa di Steam “Aggiungi gioco non di Steam”. Avvio, navigazione, cambio lingua e scollegamento non possono attivare questo avviso. Chiudere o rifiutare un avviso automatico lo blocca permanentemente per quel gioco.',
-		auto_detect_shortcuts_toggle: 'Suggerisci il collegamento solo dopo aver aggiunto un gioco dalla finestra nativa di Steam',
-		auto_detect_suppressed_count: 'Suggerimenti automatici bloccati permanentemente: {count}.',
-		auto_detect_reset_suppressed: 'Ripristina i suggerimenti automatici rifiutati',
-		link_management_description: 'Collega o scollega singolarmente i giochi non Steam. La revisione automatica, se attiva, è isolata al flusso nativo di Steam per aggiungere giochi non Steam.',
-		activity_end: 'Fine dell’attività',
-		link_button: 'Collega', link_game: 'Collega gioco', auto_link_ready_to_review: 'Pronto per la revisione',
-		detection_uncertain: 'Scegli il risultato corretto oppure inserisci manualmente l’AppID.',
-		manual_appid_label: 'Oppure inserisci manualmente uno Steam AppID', manual_appid_placeholder: 'Steam AppID',
-		manual_link_only_description: 'Il collegamento è esclusivamente manuale. GameBridge non apre mai automaticamente una finestra di collegamento.',
-		done: 'Fatto',
-	},
-	portuguese: {
-		experimental_title: 'Experimental',
-		experimental_badge: 'EXPERIMENTAL',
-		bulk_link_experimental_title: 'Vinculação rápida em massa',
-		bulk_link_experimental_description: 'Vincula em segundo plano apenas correspondências de alta confiança, sem abrir uma janela por jogo. Casos ambíguos permanecem desvinculados para revisão manual.',
-		bulk_link_running: 'A analisar e vincular correspondências de alta confiança...',
-		bulk_link_progress: 'A vincular {done}/{total}: {game}',
-		bulk_link_analyzing_progress: 'A analisar {done}/{total}: {game}',
-		bulk_link_analyzing_game: 'A analisar: {game}',
-		bulk_link_linking_game: 'A vincular: {game}',
-		bulk_link_not_linked_title: 'Não foi possível vincular ({count})',
-		bulk_link_retrying_games: 'Ainda a concluir em segundo plano ({count}): {games}',
-		bulk_link_reason_ambiguous: 'Não foi encontrada uma correspondência suficientemente fiável.',
-		bulk_link_reason_context: 'Não foi possível ler as informações do atalho.',
-		bulk_link_reason_detection: 'A deteção de candidatos falhou.',
-		bulk_link_reason_invalid_appid: 'O Steam AppID detetado não é válido.',
-		bulk_link_reason_native: 'A entrada não foi reconhecida como um atalho não-Steam.',
-		bulk_link_reason_incomplete: 'A vinculação não conseguiu concluir todos os recursos necessários.',
-		bulk_link_reason_failed: 'Não foi possível concluir a vinculação.',
-		bulk_link_result: 'Vinculação em massa concluída: {linked} vinculados, {queued} em fila, {skipped} ambíguos ignorados, {failed} falharam.',
-		bulk_link_failed: 'Não foi possível concluir a vinculação em massa.',
-		bulk_linking_short: 'A vincular...',
-		auto_detect_native_add_description: 'Só observa a sessão da janela nativa do Steam “Adicionar um jogo que não é do Steam”. O arranque, navegação, mudanças de idioma e desvinculação nunca podem ativar este aviso. Fechar ou rejeitar um aviso automático bloqueia-o permanentemente para esse jogo.',
-		auto_detect_shortcuts_toggle: 'Sugerir vinculação apenas depois de adicionar um jogo pela janela nativa do Steam',
-		auto_detect_suppressed_count: 'Sugestões automáticas bloqueadas permanentemente: {count}.',
-		auto_detect_reset_suppressed: 'Repor sugestões automáticas rejeitadas',
-		link_management_description: 'Vincula ou desvincula jogos não Steam individualmente. A revisão automática, se ativa, fica isolada ao fluxo nativo do Steam para adicionar jogos não Steam.',
-		activity_end: 'Fim da atividade',
-		link_button: 'Vincular', link_game: 'Vincular jogo', auto_link_ready_to_review: 'Pronto para revisão',
-		detection_uncertain: 'Escolhe o resultado correto ou introduz o AppID manualmente.',
-		manual_appid_label: 'Ou introduz manualmente um Steam AppID', manual_appid_placeholder: 'Steam AppID',
-		manual_link_only_description: 'A vinculação é exclusivamente manual. O GameBridge nunca abre automaticamente uma janela de vinculação.',
-		done: 'Concluído',
-	},
-	brazilian: {
-		experimental_title: 'Experimental',
-		experimental_badge: 'EXPERIMENTAL',
-		bulk_link_experimental_title: 'Vinculação rápida em massa',
-		bulk_link_experimental_description: 'Vincula em segundo plano apenas correspondências de alta confiança sem abrir uma janela por jogo. Casos ambíguos permanecem desvinculados para revisão manual.',
-		bulk_link_running: 'Analisando e vinculando correspondências de alta confiança...',
-		bulk_link_progress: 'Vinculando {done}/{total}: {game}',
-		bulk_link_analyzing_progress: 'Analisando {done}/{total}: {game}',
-		bulk_link_analyzing_game: 'Analisando: {game}',
-		bulk_link_linking_game: 'Vinculando: {game}',
-		bulk_link_not_linked_title: 'Não foi possível vincular ({count})',
-		bulk_link_retrying_games: 'Ainda concluindo em segundo plano ({count}): {games}',
-		bulk_link_reason_ambiguous: 'Nenhuma correspondência suficientemente confiável foi encontrada.',
-		bulk_link_reason_context: 'Não foi possível ler as informações do atalho.',
-		bulk_link_reason_detection: 'A detecção de candidatos falhou.',
-		bulk_link_reason_invalid_appid: 'O Steam AppID detectado não é válido.',
-		bulk_link_reason_native: 'A entrada não foi reconhecida como um atalho não Steam.',
-		bulk_link_reason_incomplete: 'A vinculação não conseguiu concluir todos os recursos necessários.',
-		bulk_link_reason_failed: 'Não foi possível concluir a vinculação.',
-		bulk_link_result: 'Vinculação em massa concluída: {linked} vinculados, {queued} na fila, {skipped} ambíguos ignorados, {failed} falharam.',
-		bulk_link_failed: 'Não foi possível concluir a vinculação em massa.',
-		bulk_linking_short: 'Vinculando...',
-		auto_detect_native_add_description: 'Observa somente a sessão da janela nativa do Steam “Adicionar um jogo não Steam”. Inicialização, navegação, mudança de idioma e desvinculação nunca podem ativar esse aviso. Fechar ou rejeitar um aviso automático o bloqueia permanentemente para esse jogo.',
-		auto_detect_shortcuts_toggle: 'Sugerir vinculação somente depois de adicionar um jogo pela janela nativa do Steam',
-		auto_detect_suppressed_count: 'Sugestões automáticas bloqueadas permanentemente: {count}.',
-		auto_detect_reset_suppressed: 'Redefinir sugestões automáticas rejeitadas',
-		link_management_description: 'Vincule ou desvincule jogos não Steam individualmente. A revisão automática, se ativada, fica isolada ao fluxo nativo do Steam para adicionar jogos não Steam.',
-		activity_end: 'Fim da atividade',
-		link_button: 'Vincular', link_game: 'Vincular jogo', auto_link_ready_to_review: 'Pronto para revisão',
-		detection_uncertain: 'Escolha o resultado correto ou insira o AppID manualmente.',
-		manual_appid_label: 'Ou insira manualmente um Steam AppID', manual_appid_placeholder: 'Steam AppID',
-		manual_link_only_description: 'A vinculação é exclusivamente manual. O GameBridge nunca abre automaticamente uma janela de vinculação.',
-		done: 'Concluído',
-	},
-	french: {
-		experimental_title: 'Expérimental',
-		experimental_badge: 'EXPÉRIMENTAL',
-		bulk_link_experimental_title: 'Association groupée rapide',
-		bulk_link_experimental_description: 'Associe en arrière-plan uniquement les correspondances très fiables sans ouvrir une fenêtre par jeu. Les cas ambigus restent non associés pour vérification manuelle.',
-		bulk_link_running: 'Analyse et association des correspondances fiables...',
-		bulk_link_progress: 'Association {done}/{total} : {game}',
-		bulk_link_analyzing_progress: 'Analyse {done}/{total} : {game}',
-		bulk_link_analyzing_game: 'Analyse : {game}',
-		bulk_link_linking_game: 'Association : {game}',
-		bulk_link_not_linked_title: 'Impossible à associer ({count})',
-		bulk_link_retrying_games: 'Finalisation en arrière-plan ({count}) : {games}',
-		bulk_link_reason_ambiguous: 'Aucune correspondance suffisamment fiable n’a été trouvée.',
-		bulk_link_reason_context: 'Impossible de lire les informations du raccourci.',
-		bulk_link_reason_detection: 'La détection des candidats a échoué.',
-		bulk_link_reason_invalid_appid: 'Le Steam AppID détecté est invalide.',
-		bulk_link_reason_native: 'L’entrée n’a pas été reconnue comme raccourci non-Steam.',
-		bulk_link_reason_incomplete: 'L’association n’a pas pu terminer toutes les ressources requises.',
-		bulk_link_reason_failed: 'Impossible de terminer l’association.',
-		bulk_link_result: 'Association groupée terminée : {linked} associés, {queued} en attente, {skipped} ambigus ignorés, {failed} échecs.',
-		bulk_link_failed: 'Impossible de terminer l’association groupée.',
-		bulk_linking_short: 'Association...',
-		auto_detect_native_add_description: 'Surveille uniquement la session de la fenêtre Steam « Ajouter un jeu non-Steam ». Le démarrage, la navigation, le changement de langue et la dissociation ne peuvent jamais déclencher cette invite. Fermer ou refuser une invite automatique la bloque définitivement pour ce jeu.',
-		auto_detect_shortcuts_toggle: 'Suggérer l’association uniquement après l’ajout via la fenêtre native de Steam',
-		auto_detect_suppressed_count: 'Suggestions automatiques bloquées définitivement : {count}.',
-		auto_detect_reset_suppressed: 'Réinitialiser les suggestions automatiques refusées',
-		link_management_description: 'Associez ou dissociez individuellement les jeux non-Steam. La vérification automatique, si activée, est limitée au flux natif Steam d’ajout de jeux non-Steam.',
-		activity_end: 'Fin de l’activité',
-		link_button: 'Associer', link_game: 'Associer le jeu', auto_link_ready_to_review: 'Prêt à vérifier',
-		detection_uncertain: 'Choisissez le bon résultat ou saisissez manuellement l’AppID.',
-		manual_appid_label: 'Ou saisissez manuellement un Steam AppID', manual_appid_placeholder: 'Steam AppID',
-		manual_link_only_description: 'L’association est uniquement manuelle. GameBridge n’ouvre jamais automatiquement de fenêtre d’association.',
-		done: 'Terminé',
-	},
-	german: {
-		experimental_title: 'Experimentell',
-		experimental_badge: 'EXPERIMENTELL',
-		bulk_link_experimental_title: 'Schnelle Massenverknüpfung',
-		bulk_link_experimental_description: 'Verknüpft nur sehr sichere Treffer im Hintergrund, ohne für jedes Spiel einen Dialog zu öffnen. Mehrdeutige Fälle bleiben für die manuelle Prüfung unverknüpft.',
-		bulk_link_running: 'Sichere Treffer werden analysiert und verknüpft...',
-		bulk_link_progress: 'Verknüpfe {done}/{total}: {game}',
-		bulk_link_analyzing_progress: 'Analysiere {done}/{total}: {game}',
-		bulk_link_analyzing_game: 'Analysiere: {game}',
-		bulk_link_linking_game: 'Verknüpfe: {game}',
-		bulk_link_not_linked_title: 'Konnte nicht verknüpft werden ({count})',
-		bulk_link_retrying_games: 'Wird noch im Hintergrund abgeschlossen ({count}): {games}',
-		bulk_link_reason_ambiguous: 'Es wurde kein ausreichend zuverlässiger Treffer gefunden.',
-		bulk_link_reason_context: 'Die Shortcut-Informationen konnten nicht gelesen werden.',
-		bulk_link_reason_detection: 'Die Kandidatenerkennung ist fehlgeschlagen.',
-		bulk_link_reason_invalid_appid: 'Die erkannte Steam-AppID ist ungültig.',
-		bulk_link_reason_native: 'Der Eintrag wurde nicht als Steam-fremder Shortcut erkannt.',
-		bulk_link_reason_incomplete: 'Die Verknüpfung konnte nicht alle erforderlichen Ressourcen abschließen.',
-		bulk_link_reason_failed: 'Die Verknüpfung konnte nicht abgeschlossen werden.',
-		bulk_link_result: 'Massenverknüpfung abgeschlossen: {linked} verknüpft, {queued} in Warteschlange, {skipped} mehrdeutige übersprungen, {failed} fehlgeschlagen.',
-		bulk_link_failed: 'Massenverknüpfung konnte nicht abgeschlossen werden.',
-		bulk_linking_short: 'Verknüpfen...',
-		auto_detect_native_add_description: 'Überwacht ausschließlich die Sitzung des nativen Steam-Dialogs „Steam-fremdes Spiel hinzufügen“. Start, Navigation, Sprachwechsel und Aufheben von Verknüpfungen können diesen Hinweis niemals auslösen. Schließen oder Ablehnen sperrt den automatischen Hinweis dauerhaft für dieses Spiel.',
-		auto_detect_shortcuts_toggle: 'Verknüpfung nur nach Hinzufügen über den nativen Steam-Dialog vorschlagen',
-		auto_detect_suppressed_count: 'Dauerhaft blockierte automatische Vorschläge: {count}.',
-		auto_detect_reset_suppressed: 'Abgelehnte automatische Vorschläge zurücksetzen',
-		link_management_description: 'Steam-fremde Spiele einzeln verknüpfen oder trennen. Die automatische Prüfung ist, falls aktiviert, ausschließlich auf Steams nativen Hinzufügen-Dialog begrenzt.',
-		activity_end: 'Ende der Aktivität',
-		link_button: 'Verknüpfen', link_game: 'Spiel verknüpfen', auto_link_ready_to_review: 'Bereit zur Prüfung',
-		detection_uncertain: 'Wähle das richtige Ergebnis oder gib die AppID manuell ein.',
-		manual_appid_label: 'Oder Steam-AppID manuell eingeben', manual_appid_placeholder: 'Steam-AppID',
-		manual_link_only_description: 'Die Verknüpfung erfolgt ausschließlich manuell. GameBridge öffnet niemals automatisch ein Verknüpfungsfenster.',
-		done: 'Fertig',
-	},
+	spanish: SPANISH_TRANSLATIONS,
+	latam: SPANISH_TRANSLATIONS,
+	...OTHER_LANGUAGE_TRANSLATIONS,
 };
 
 export function gdlText(key: string, fallbackEnglish: string, values: Record<string, string | number> = {}): string {
@@ -794,7 +832,7 @@ export function gdlText(key: string, fallbackEnglish: string, values: Record<str
 	const params = spec.params || Object.keys(values);
 	let localized = officialSteamText(fallbackEnglish, spec.tokens || []);
 	if (localized === fallbackEnglish) {
-		const language = String(steamLanguageSync() || '').toLowerCase();
+		const language = String(steamLanguageSync() || detectSynchronousSteamLanguage() || '').toLowerCase();
 		localized = GDL_CUSTOM_LANGUAGE_TRANSLATIONS[language]?.[key] || localized;
 	}
 	if (localized === fallbackEnglish && isSpanishLanguage()) {

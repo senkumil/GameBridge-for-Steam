@@ -20,19 +20,26 @@ export function isUnrealShippingExecutable(value: string): boolean {
 
 export function getAllShortcutRecords(): ShortcutRecord[] {
 	const appStore = getSteamAppStore();
-	if (!appStore?.m_mapApps) return [];
+	if (!appStore) return [];
 	const records: ShortcutRecord[] = [];
 	const seen = new Set<number>();
 	const add = (rawId: unknown, app: any) => {
 		const id = normalizedShortcutAppId(rawId ?? app?.appid);
 		if (!id || seen.has(id)) return;
-		const title = String(app?.display_name || app?.m_strDisplayName || app?.strDisplayName || '').trim();
+		const title = String(app?.display_name || app?.m_strDisplayName || app?.strDisplayName || app?.strAppName || app?.name || '').trim();
 		if (!title) return;
 		seen.add(id);
 		records.push({ id, title, app });
 	};
-	try { for (const [id, app] of appStore.m_mapApps) add(id, app); } catch {}
+	try {
+		if (appStore.m_mapApps instanceof Map || typeof appStore.m_mapApps?.[Symbol.iterator] === 'function') {
+			for (const [id, app] of appStore.m_mapApps) add(id, app);
+		} else if (appStore.m_mapApps && typeof appStore.m_mapApps === 'object') {
+			for (const [id, app] of Object.entries(appStore.m_mapApps)) add(id, app);
+		}
+	} catch {}
 	try { for (const app of Array.from(appStore.allApps || []) as any[]) add(app?.appid, app); } catch {}
+	try { for (const app of Array.from(appStore.m_rgApps || []) as any[]) add(app?.appid, app); } catch {}
 	return records;
 }
 
@@ -72,6 +79,9 @@ export function findMappingForDuplicateShortcut(shortcutAppId: number): string |
 }
 
 export function shortcutAlreadyLinked(id: number): boolean {
+	// Two Steam shortcuts may intentionally launch the same executable/title.
+	// Only this concrete row's mapping marks it linked; never hide the Link
+	// action because a sibling duplicate happens to be linked already.
 	return /^\d+$/.test(String(mappings[shortcutMappingKey(id)] || ''));
 }
 
@@ -81,10 +91,9 @@ export function getCommittedShortcutSteamAppId(id: number): string | null {
 }
 
 /** Resolve an existing mapping without allowing one shortcut to inherit the
- * identity of another franchise-relative title. Once a concrete Shortcut AppID
- * is known, only exact ID, exact duplicate launch definition, or exact full
- * executable path are accepted. Title/stem aliases are fallback-only when no
- * concrete shortcut identity exists. */
+ * identity of another duplicate library row. Once a concrete Shortcut AppID
+ * is known, only its exact ID is accepted; executable/title aliases are used
+ * only when no concrete shortcut identity is available. */
 export function findMappingForShortcut(
 	shortcutAppId?: string | number | null,
 	title?: string | null,
@@ -93,6 +102,9 @@ export function findMappingForShortcut(
 	const numId = normalizedShortcutAppId(shortcutAppId);
 	if (numId) {
 		const exact = mappings[shortcutMappingKey(numId)];
+		// Once Steam gives us a concrete shortcut AppID, this row is the only
+		// authoritative owner. Never fall back to title/executable aliases here:
+		// duplicate shortcuts intentionally share both and must link independently.
 		return exact && /^\d+$/.test(String(exact)) ? String(exact) : null;
 	}
 

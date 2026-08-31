@@ -3,9 +3,9 @@
     "executable": "re9.exe",
     "title": "re9",
     "expect": {
-      "aliasesAreHintsOnly": true,
-      "validateTopCandidates": 3,
-      "requireTopScoreGap": true
+      "expectedAppId": "3764200",
+      "verifiedMaintainedAliasFastPath": true,
+      "requiresOfficialAppValidation": true
     }
   },
   {
@@ -31,8 +31,19 @@
     "executable": "MKKE.exe",
     "title": "MKKE",
     "expect": {
-      "aliasesAreHintsOnly": true,
-      "requireOfficialStoreCandidate": true
+      "expectedAppId": "237110",
+      "verifiedMaintainedAliasFastPath": true,
+      "requiresOfficialAppValidation": true
+    }
+  },
+  {
+    "executable": "pes2013.exe",
+    "title": "pes2013.exe - Acceso directo",
+    "expect": {
+      "expectedAppId": "221430",
+      "verifiedMaintainedAliasFastPath": true,
+      "appinfoCanValidateWithoutStorePage": true,
+      "bulkCanAcceptVerifiedAlias": true
     }
   },
   {
@@ -53,6 +64,8 @@
     "executable": "GTAIV.exe",
     "title": "Grand Theft Auto IV: The Complete Edition",
     "expect": {
+      "expectedAppId": "12210",
+      "verifiedMaintainedAliasFastPath": true,
       "editionsMustBeRankedAndValidated": true
     }
   },
@@ -96,8 +109,10 @@
     "executable": "gta-sa.exe",
     "title": "Grand Theft Auto: San Andreas",
     "expect": {
+      "expectedAppId": "12120",
+      "verifiedMaintainedAliasFastPath": true,
       "multipleEditionAliasesRemainDistinguishable": true,
-      "bulkRequiresUniqueExactTitle": true
+      "requiresOfficialAppValidation": true
     }
   }
 ]
