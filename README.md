@@ -225,7 +225,7 @@ Plugin-specific windows, detection messages, settings, and linking results use N
 ## 📥 Installation
 
 1. Install [Millennium](https://steambrew.app/) for Steam.
-2. Download the latest `NativeGameLink-for-Steam` release.
+2. Download the latest `NativeGameLink-for-Steam.zip` release.
 3. Extract the archive and place the `NativeGameLink for Steam` folder into your Millennium plugins directory:
 
    - **Windows:**
