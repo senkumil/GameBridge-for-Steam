@@ -20,8 +20,6 @@ Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: reci
 - **Simulación y Farmeo de Cromos de Steam (Trading Cards):** Colección interactiva de tarjetas en 3D, seguimiento de cromos restantes, progreso de insignia y acceso directo a la comunidad.
 - **Simulador de Logros Simplificado para Juegos No-Steam:** Configuración ultra accesible por juego (100% completado, progreso simulado o manual), compatible con emuladores y lanzadores externos.
 - **Detección Automática Inteligente:** Evalúa evidencias reales de ejecutables, rutas de instalación y niveles de confianza con previsualización de carátulas.
-- **Página de Biblioteca de Estilo Nativo:** Reconstruye feed de actividad, parches, logros, panel de información, contenido de la comunidad, amigos, DLC, Workshop y notas.
-- **Cero Ventanas al Iniciar y Rendimiento sin Parpadeos:** Las alertas solo se abren al añadir juegos manualmente; decodificación limpia de carátulas y aislamiento estricto de juegos nativos.
 - **Integración con Big Picture & Steam Deck UI:** Renderizado oficial de fondos hero, logos y tiempo de juego sincronizado de forma nativa.
 
 ---
