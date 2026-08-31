@@ -14,7 +14,7 @@ Once linked, an external game no longer feels like an empty shortcut: it receive
 
 ## ✨ Highlights & What's New in v3.0.0
 
-- **Delisted & Removed Steam Games Support:** Full support for delisted, retired, or unlisted Steam games (e.g. *Mortal Kombat Komplete Edition*, *Transformers: Devastation*) with resilient metadata and official artwork resolution.
+- **Delisted & Removed Steam Games Support:** Full support for delisted, retired, or unlisted Steam games (e.g. *Mortal Kombat Komplete Edition*, *Pro Evolution Soccer 2013*) with resilient metadata and official artwork resolution.
 - **Direct Artwork Management in Game Properties:** Choose, preview, and apply custom hero backgrounds, logos, capsules, and icons directly from the *Customization* tab in Properties.
 - **Steam Achievement Manager (SAM) Integration:** Inspect, unlock, lock, or modify achievement progress for your official Steam games directly from your library interface.
 - **Steam Trading Card Farming & Simulation:** Interactive trading card showcase with 3D animated cards, foil holographic reflection, badge level progression, and remaining card tracking.
