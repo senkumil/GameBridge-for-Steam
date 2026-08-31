@@ -232,12 +232,17 @@ Las ventanas propias del complemento, mensajes de detección, ajustes y resultad
 ## 📥 Instalación
 
 1. Instala [Millennium](https://steambrew.app/) para Steam.
-2. Descarga la versión más reciente de NativeGameLink for Steam.
-3. Coloca la carpeta del complemento en:
+2. Descarga la versión más reciente `NativeGameLink-for-Steam-v3.0.0.zip`.
+3. Descomprime el archivo y coloca la carpeta `NativeGameLink for Steam` en el directorio de plugins de Millennium:
 
-   ```text
-   <Steam>\millennium\plugins\NativeGameLinkForSteam
-   ```
+   - **Windows:**
+     ```text
+     C:\Program Files (x86)\Steam\millennium\plugins\NativeGameLink for Steam\
+     ```
+   - **Steam Deck / Linux:**
+     ```text
+     ~/.steam/steam/millennium/plugins/NativeGameLink for Steam/
+     ```
 
 4. Reinicia Steam.
 5. Activa **NativeGameLink for Steam** en la sección de complementos de Millennium.
