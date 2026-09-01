@@ -96,7 +96,8 @@ These captures show the visual difference between an unlinked shortcut and a lin
 
 ### 7. Integration with SAM
 
-<img width="2558" height="1354" alt="image" src="https://github.com/user-attachments/assets/2c0eb58e-d0c2-4f8c-addb-c7a7194ea624" />
+<img width="2558" height="1356" alt="image" src="https://github.com/user-attachments/assets/d25978a0-7b77-4695-890c-03a4560d618d" />
+
 
 ---
 
