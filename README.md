@@ -59,13 +59,18 @@ These captures show the visual difference between an unlinked shortcut and a lin
 
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/5abb8961-6936-46f3-897b-6fede3df0c34" />
 
+
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/e7e839a8-a73d-4b70-b93d-2ea97ca32847" />
+
 
 <img width="1917" height="907" alt="image" src="https://github.com/user-attachments/assets/883df422-cca0-4022-8076-1d830af6e92e" />
 
+
 <img width="1917" height="1016" alt="image" src="https://github.com/user-attachments/assets/36998798-fb85-4e07-8e4b-2b0ae7c09ac2" />
 
+
 <img width="1917" height="1016" alt="image" src="https://github.com/user-attachments/assets/3e9913ae-0d2e-47c2-a99f-f284aa4cf290" />
+
 
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/be7e3a13-1405-4b7b-b708-bdb45de6b14f" />
 
@@ -74,6 +79,7 @@ These captures show the visual difference between an unlinked shortcut and a lin
 
 <img width="1917" height="1020" alt="image" src="https://github.com/user-attachments/assets/763d36c1-8f60-4bd2-9901-4a1da09cd12a" />
 
+
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/f4e460c7-d7df-46f6-ac8d-645aeae06ccd" />
 
 
@@ -81,12 +87,16 @@ These captures show the visual difference between an unlinked shortcut and a lin
 
 <img width="1917" height="1077" alt="aa" src="https://github.com/user-attachments/assets/55e55988-6749-4673-ab26-7efb3003fb3e" />
 
+
 <img width="1917" height="1077" alt="ASDADASD" src="https://github.com/user-attachments/assets/3808bca5-ef79-4d78-9c1f-1fca03857067" />
 
 ### 6. AppID linking / automatic detection
 
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/bb057d46-3946-4b83-842c-0f7171bf9fc2" />
 
+### 7. Integration with SAM
+
+<img width="2558" height="1354" alt="image" src="https://github.com/user-attachments/assets/2c0eb58e-d0c2-4f8c-addb-c7a7194ea624" />
 
 ---
 
