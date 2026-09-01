@@ -167,14 +167,6 @@ El uso de archivos JSON de logros generados externamente es **totalmente opciona
 - **Simulación progresiva:** Simula la obtención gradual de logros a medida que juegas.
 - **Seguimiento manual:** Ajusta el progreso y el número de logros manualmente mediante controles deslizantes en las Propiedades del juego.
 
-### 📁 Configurar el archivo de logros JSON
-
-Si dispones de archivos JSON de progreso compatibles (por ejemplo, generados por GSE Saves o Goldberg), NativeGameLink únicamente los lee sin modificarlos. La estructura predeterminada de GSE Saves es:
-
-```text
-%APPDATA%\GSE Saves\<AppID>\achievements.json
-```
-
 Puedes configurar el origen de los logros de tres formas:
 
 1. **Búsqueda automática por AppID (Por defecto):** Busca automáticamente en `%APPDATA%\GSE Saves\<AppID>\`, ubicaciones compatibles de Goldberg y las carpetas globales configuradas.
