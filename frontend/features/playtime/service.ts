@@ -62,6 +62,16 @@ async function fetchSinglePlaytimeStats(lookup: PlaytimeLookup): Promise<Playtim
 	}
 }
 
+const instantPlaytimeStats = new Map<number, PlaytimeStats>();
+
+export function getInstantPlaytimeStats(shortcutAppId: number): PlaytimeStats | null {
+	return instantPlaytimeStats.get(shortcutAppId) ?? null;
+}
+
+export function setInstantPlaytimeStats(shortcutAppId: number, stats: PlaytimeStats): void {
+	instantPlaytimeStats.set(shortcutAppId, stats);
+}
+
 /** Resolve a complete Library shelf through one backend IPC. The single-item
  * endpoint remains as a compatibility fallback for a backend hot-reload that
  * has not picked up the batch callable yet. */
@@ -89,12 +99,19 @@ export async function fetchPlaytimeStatsBatch(lookups: PlaytimeLookup[]): Promis
 				let parsed: any = raw;
 				for (let i = 0; i < 2 && typeof parsed === 'string'; i++) parsed = JSON.parse(parsed);
 				for (const item of Array.isArray(parsed?.items) ? parsed.items : []) {
-					resolved.set(String(item.key || ''), parsePlaytimeStats(item));
+					const stats = parsePlaytimeStats(item);
+					resolved.set(String(item.key || ''), stats);
+					const rawId = Number(item.shortcut_app_id);
+					if (stats && Number.isFinite(rawId) && rawId > 0) {
+						instantPlaytimeStats.set(rawId, stats);
+					}
 				}
 				return resolved;
 			} catch {
 				await Promise.all(missing.map(async item => {
-					resolved.set(requestKey(item.shortcutAppId, item.title, item.steamAppId), await fetchSinglePlaytimeStats(item));
+					const stats = await fetchSinglePlaytimeStats(item);
+					resolved.set(requestKey(item.shortcutAppId, item.title, item.steamAppId), stats);
+					if (stats) instantPlaytimeStats.set(item.shortcutAppId, stats);
 				}));
 				return resolved;
 			}
@@ -105,10 +122,11 @@ export async function fetchPlaytimeStatsBatch(lookups: PlaytimeLookup[]): Promis
 				expiresAt: now + PLAYTIME_STATS_CACHE_MS,
 				request: Promise.resolve(null),
 			};
-			entry.request = batch.then(values => generation === playtimeRequestGeneration
-				&& playtimeStatsRequests.get(key) === entry
-				? values.get(key) ?? null
-				: null);
+			entry.request = batch.then(values => {
+				const stats = values.get(key) ?? null;
+				if (stats) instantPlaytimeStats.set(item.shortcutAppId, stats);
+				return generation === playtimeRequestGeneration && playtimeStatsRequests.get(key) === entry ? stats : null;
+			});
 			playtimeStatsRequests.set(key, entry);
 		}
 		trimPlaytimeCache();

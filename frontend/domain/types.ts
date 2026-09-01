@@ -128,6 +128,7 @@ export interface ShortcutDetectionContext {
 	bootstrapDetected?: boolean;
 	recommendedExePath?: string;
 	recommendedStartDir?: string;
+	trackingExecutableAutoApply?: boolean;
 }
 
 export interface ShortcutLinkResult {

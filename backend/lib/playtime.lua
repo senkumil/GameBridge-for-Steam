@@ -46,7 +46,9 @@ local function candidate_keys(shortcut_app_id, steam_app_id, title)
         end
     end
     if shortcut_app_id and tostring(shortcut_app_id):match("^%d+$") then
-        add("id:" .. tostring(shortcut_app_id))
+        local sid = tostring(shortcut_app_id)
+        add("id:" .. sid)
+        add(sid)
     end
     if steam_app_id and tostring(steam_app_id):match("^%d+$") then
         add("steam:" .. tostring(steam_app_id))
@@ -230,9 +232,12 @@ local function flush_if_due(force)
 end
 
 local function register_aliases(keys, canonical)
+    if not canonical or canonical == "" then return end
     for _, key in ipairs(keys) do
-        -- The canonical shortcut ID is the sessions key, never an alias.
-        if not key:match("^id:") then STORE.aliases[key] = canonical end
+        -- Any key that is not the exact canonical shortcut ID itself should point to the canonical ID.
+        if key ~= ("id:" .. canonical) and key ~= canonical then
+            STORE.aliases[key] = canonical
+        end
     end
 end
 
@@ -346,16 +351,22 @@ function M.stop_session(request_json)
     local instance_id, now, stopped = tostring(req.instance_id or ""), os.time(), false
     if sessions then
         for _, session in ipairs(sessions) do
-            if session.instance_id == instance_id or instance_id == "" then
+            if (instance_id ~= "" and session.instance_id == instance_id) or (instance_id == "" and session.instance_id) then
                 session.ended_at = now
                 session.instance_id = nil
                 stopped = true
                 break
             end
         end
+        if not stopped and instance_id == "" and #sessions > 0 then
+            sessions[#sessions].ended_at = now
+            stopped = true
+        end
         collapse_sessions(sessions)
+    end
+    if stopped then
         STORE_DIRTY = true
-        if not flush_if_due(true) then return cjson.encode({ ok = false, error = "save_failed" }) end
+        save_sessions()
     end
     logger:info("Playtime session stopped for " .. tostring(req.title or canonical or ""))
     return cjson.encode({ ok = stopped })
@@ -363,7 +374,8 @@ end
 
 local function calculate_playtime(req)
     local keys = candidate_keys(req.shortcut_app_id, req.steam_app_id, req.title)
-    local sessions = find_sessions_list(req, keys) or {}
+    local sessions, canonical = find_sessions_list(req, keys)
+    sessions = sessions or {}
     local two_weeks_ago, unix_epoch = os.time() - (14 * 24 * 60 * 60), 0
     local seconds_forever, seconds_last_two_weeks, last_played_at = 0, 0, 0
 
@@ -374,6 +386,10 @@ local function calculate_playtime(req)
         seconds_forever = seconds_forever + duration
         if started > two_weeks_ago or ended > two_weeks_ago then seconds_last_two_weeks = seconds_last_two_weeks + duration end
         if started ~= unix_epoch and ended > last_played_at then last_played_at = ended end
+    end
+
+    if canonical then
+        register_aliases(keys, canonical)
     end
 
     return {

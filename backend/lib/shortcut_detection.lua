@@ -212,12 +212,13 @@ local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
                             launch_options = detection_trim(record.LaunchOptions or record.launchoptions or ""),
                             source = "shortcuts_vdf",
                         }
-                        local recommended_exe, recommended_start = detection_find_tracking_executable(
+                        local recommended_exe, recommended_start, tracking_auto_apply = detection_find_tracking_executable(
                             shortcut.exe_path, shortcut.start_dir, shortcut.title)
                         if recommended_exe then
                             shortcut.bootstrap_detected = true
                             shortcut.recommended_exe_path = recommended_exe
                             shortcut.recommended_start_dir = recommended_start or ""
+                            shortcut.tracking_executable_auto_apply = tracking_auto_apply == true
                         end
                         return shortcut
                     end

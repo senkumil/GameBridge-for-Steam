@@ -41,7 +41,9 @@ function enqueueBulkRetry(item: { record: { id: number; title: string }; context
 	enqueueLinkJob({
 		title: item.context.title, shortcutAppId, steamAppId: item.candidate.appid,
 		skipLauncher: false, existingLaunchOptions: item.context.launchOptions || '',
-		trackingExecutable: '', trackingStartDir: '', shortcutExecutable: item.context.exePath || '', repairResources,
+		trackingExecutable: item.context.trackingExecutableAutoApply && item.context.recommendedExePath ? item.context.recommendedExePath : '',
+		trackingStartDir: item.context.trackingExecutableAutoApply && item.context.recommendedStartDir ? item.context.recommendedStartDir : '',
+		shortcutExecutable: item.context.exePath || '', repairResources,
 	});
 }
 
@@ -69,7 +71,10 @@ export async function linkAllShortcutsExperimental(
 			// settle before a different shortcut starts changing identity/artwork.
 			const linked = await linkShortcutToSteam({
 				doc: null, title: item.context.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid,
-				shortcutExecutable: item.context.exePath, refreshLibrary: false, assetTimeoutMs: 30_000,
+				shortcutExecutable: item.context.exePath,
+				trackingExecutable: item.context.trackingExecutableAutoApply && item.context.recommendedExePath ? item.context.recommendedExePath : '',
+				trackingStartDir: item.context.trackingExecutableAutoApply && item.context.recommendedStartDir ? item.context.recommendedStartDir : '',
+				refreshLibrary: false, assetTimeoutMs: 30_000,
 				deferAssetSync: true, metadataTimeoutMs: 1_200, canonicalNameHint: item.candidate.name,
 				onStatus: message => backendLog(`Bulk link ${item.record.title}: ${message}`),
 			});

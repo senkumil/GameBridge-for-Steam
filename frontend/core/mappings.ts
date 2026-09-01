@@ -330,13 +330,31 @@ export function findMappingForTitle(title: string, shortcutAppId?: string | numb
 	return null;
 }
 
+function isAppKnownInSteam(shortcutAppId: number): boolean {
+	try {
+		const appStore = (window as any).appStore || (window as any).AppStore;
+		if (appStore?.m_mapApps) {
+			const signed = shortcutAppId >= 2147483648 ? shortcutAppId - 4294967296 : shortcutAppId;
+			if (typeof appStore.m_mapApps.has === 'function') {
+				return appStore.m_mapApps.has(shortcutAppId) || appStore.m_mapApps.has(signed);
+			}
+			return Boolean(appStore.m_mapApps[shortcutAppId] || appStore.m_mapApps[signed]);
+		}
+	} catch {}
+	return false;
+}
+
 export function findShortcutIdForMappedSteamAppId(steamAppId: string | number): number | null {
 	const target = String(steamAppId);
+	let fallbackId: number | null = null;
 	for (const [key, mappedAppId] of Object.entries(mappings)) {
 		if (mappedAppId === target && key.startsWith('shortcut:')) {
 			const rawId = Number(key.replace('shortcut:', ''));
-			if (Number.isFinite(rawId) && rawId >= 2147483648) return rawId;
+			if (Number.isFinite(rawId) && rawId >= 2147483648) {
+				if (isAppKnownInSteam(rawId)) return rawId;
+				if (!fallbackId) fallbackId = rawId;
+			}
 		}
 	}
-	return null;
+	return fallbackId;
 }

@@ -11,6 +11,41 @@ local KNOWN_TITLE_ALIASES = deps.shortcut_detection_aliases or {}
 
 local M = {}
 
+local game_rules = deps.shortcut_detection_rules
+
+-- Some PC releases keep the launcher alive as the process Steam owns while
+-- the visible game process is spawned separately. Keep this allowlist narrow
+-- and title-scoped so unknown launchers still receive the normal review path.
+local PERSISTENT_LAUNCHER_OVERRIDES = {
+    ["reddeadredemption2"] = { ["launcher.exe"] = true },
+}
+
+local function should_preserve_selected_launcher(exe_path, shortcut_title)
+    if game_rules and game_rules.should_preserve_launcher then
+        return game_rules.should_preserve_launcher(exe_path, shortcut_title)
+    end
+    local exe_name = detection_basename(exe_path):lower()
+    return exe_name == "launcher.exe"
+end
+
+-- RDR2's Empress build keeps the game session attached to the sibling
+-- Launcher.exe rather than RDR2.exe. Specific titles with dedicated tracking rules
+-- are managed in shortcut_detection_rules.
+local function find_persistent_launcher_override(exe_path, start_dir, shortcut_title)
+    if game_rules and game_rules.find_game_rule_override then
+        local target, dir, auto = game_rules.find_game_rule_override(exe_path, start_dir, shortcut_title)
+        if target then return target, dir, auto end
+    end
+
+    local exe_name = detection_basename(exe_path):lower()
+    if exe_name == "rdr2.exe" then
+        local selected_dir = fs.parent_path(exe_path)
+        local launcher = fs.join(selected_dir, "Launcher.exe")
+        if fs.exists(launcher) then return launcher, selected_dir, true end
+    end
+    return nil, nil
+end
+
 local skipped_directories = {
     ["_commonredist"] = true, ["redist"] = true, ["redistributables"] = true,
     ["directx"] = true, ["vcredist"] = true, ["installers"] = true,
@@ -83,6 +118,14 @@ end
 function M.find_tracking_executable(exe_path, start_dir, shortcut_title)
     local selected = detection_clean_path(exe_path)
     if selected == "" then return nil, nil end
+    local persistent_launcher, persistent_start, persistent_auto = find_persistent_launcher_override(
+        selected, start_dir, shortcut_title)
+    if persistent_launcher then
+        return persistent_launcher, persistent_start, persistent_auto or true
+    end
+    if should_preserve_selected_launcher(selected, shortcut_title) then
+        return nil, nil
+    end
     local lower_selected = selected:lower()
     if lower_selected:match("[%s_%-]win%d%d[%s_%-]shipping%.exe$")
         or lower_selected:match("[%s_%-]linux[%s_%-]shipping$") then

@@ -397,27 +397,24 @@ export default definePlugin(() => {
 	};
 
 	try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.startsWith('events8_') || k.startsWith('events7_') || k.startsWith('friends_') || k.startsWith('gdl_cache_friends_'))) localStorage.removeItem(k); } } catch {}
-	loadMappings()
-		.then(() => {
-			backendLog('Loaded ' + Object.keys(mappings).length + ' mapping(s)');
-			startLinkedGamePrefetch(getCurrentInjectedAppId);
-			startPlaytimeTracker();
-			startFirstLaunchAchievementWatcher();
-			void processPendingLinkJobs(mainWindowDoc);
-			void neutralizeSteamAppIdFileBackend({ request_json: '{}' }).catch(() => {});
-			if (mainWindowDoc) {
-				installGhostSidebarCleanup(mainWindowDoc);
-				tryInjectLibraryData(mainWindowDoc).catch(e => backendLog('Post-startup library refresh error: ' + e));
-			}
-			const bigPictureDoc = getBigPictureDocument();
-			if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
-		})
-		.catch((e) => {
-			console.error('[GDL] Failed to load mappings from backend:', e);
-			// Continue anyway - the UI should still work, just without saved mappings
-			startPlaytimeTracker();
-			startFirstLaunchAchievementWatcher();
-		});
+	loadMappings().then(() => {
+		backendLog('Loaded ' + Object.keys(mappings).length + ' mapping(s)');
+		startLinkedGamePrefetch(getCurrentInjectedAppId);
+		startPlaytimeTracker();
+		startFirstLaunchAchievementWatcher();
+		void processPendingLinkJobs(mainWindowDoc);
+		void neutralizeSteamAppIdFileBackend({ request_json: '{}' }).catch(() => {});
+		if (mainWindowDoc) {
+			installGhostSidebarCleanup(mainWindowDoc);
+			tryInjectLibraryData(mainWindowDoc).catch(e => backendLog('Post-startup library refresh error: ' + e));
+		}
+		const bigPictureDoc = getBigPictureDocument();
+		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
+	}).catch((e) => {
+		console.error('[GDL] Failed to load mappings from backend:', e);
+		startPlaytimeTracker();
+		startFirstLaunchAchievementWatcher();
+	});
 
 	const disposeMappingRefresh = installMappingRefresh({
 		getCurrentAppId: getCurrentInjectedAppId,
@@ -427,6 +424,16 @@ export default definePlugin(() => {
 	});
 	const repaintArtwork = (event: Event): void => { const steamAppId = String((event as CustomEvent<{ steamAppId?: unknown }>).detail?.steamAppId || ''); if (steamAppId && steamAppId === getCurrentInjectedAppId()) resetLibraryInjection(true); };
 	window.addEventListener('gdl:artwork-changed', repaintArtwork);
+
+	const onPlaytimeChanged = (): void => {
+		if (mainWindowDoc) {
+			void patchDesktopLibraryHomePlaytime(mainWindowDoc).catch(() => {});
+			void tryInjectLibraryData(mainWindowDoc).catch(() => {});
+		}
+		const bigPictureDoc = getBigPictureDocument();
+		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(() => {});
+	};
+	window.addEventListener('gdl:playtime-changed', onPlaytimeChanged);
 
 	const unsubscribeLanguageRefresh = subscribeSteamLanguageChange((language, previousLanguage) => {
 		if (!previousLanguage || previousLanguage === language) return;
@@ -445,8 +452,6 @@ export default definePlugin(() => {
 	});
 	startSteamLanguageWatcher();
 
-	// The cached language is available synchronously; validate it in the
-	// background in case the user changed Steam's language since the last run.
 	getSteamLanguage(true).catch(() => {});
 	let unregisterUIModeChanged: (() => void) | null = null;
 	try {
@@ -454,20 +459,15 @@ export default definePlugin(() => {
 		if (typeof registration === 'function') unregisterUIModeChanged = registration;
 		void (async () => {
 			try {
-	const currentMode = await (window as any).SteamClient?.UI?.GetUIMode?.();
-			if (currentMode !== undefined) refreshForUIMode(Number(currentMode));
-		} catch {}
+				const currentMode = await (window as any).SteamClient?.UI?.GetUIMode?.();
+				if (currentMode !== undefined) refreshForUIMode(Number(currentMode));
+			} catch {}
 		})();
 	} catch {}
 
-	try {
-		Millennium.AddWindowCreateHook(windowCreated);
-	} catch (e) {
-		console.error('[GDL] Failed to register window hook:', e);
-	}
+	try { Millennium.AddWindowCreateHook(windowCreated); } catch (e) { console.error('[GDL] Failed to register window hook:', e); }
 	const existingWindowAdoptionTimers = [0, 250, 1000, 2500].map(delay => setTimeout(() => {
-		try { adoptExistingSteamWindows(windowCreated); }
-		catch (e) { console.error('[GDL] Failed to adopt existing Steam windows:', e); }
+		try { adoptExistingSteamWindows(windowCreated); } catch (e) { console.error('[GDL] Failed to adopt existing Steam windows:', e); }
 	}, delay));
 	console.log('[GDL] Window create hook registered');
 
@@ -477,6 +477,7 @@ export default definePlugin(() => {
 		content: <SettingsContent clearAchievementCache={clearLocalAchievementCache} showAchievementToast={showAchievementToast} />,
 		onDismount: () => {
 			window.removeEventListener('gdl:artwork-changed', repaintArtwork);
+			window.removeEventListener('gdl:playtime-changed', onPlaytimeChanged);
 			for (const timer of existingWindowAdoptionTimers) clearTimeout(timer);
 			disposeDocumentLifecycles();
 			unsubscribeLanguageRefresh();

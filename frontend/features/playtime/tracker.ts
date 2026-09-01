@@ -15,9 +15,9 @@ import {
 	NATIVE_UI_BLUEPRINT_KEYS,
 } from '../../steam/native-dom';
 import { getMappedShortcuts, getShortcutAppById } from '../../steam/shortcuts';
-import { clearPlaytimeStatsCache, fetchPlaytimeStats } from './service';
+import { clearPlaytimeStatsCache, fetchPlaytimeStats, getInstantPlaytimeStats, type PlaytimeStats } from './service';
 import { formatLastPlayedDate, formatPlaytimeMinutes } from './format';
-import { isDesktopLibraryPlaytimeHydrated } from './library-home';
+import { isDesktopLibraryPlaytimeHydrated, setDesktopPlaytimeField } from './library-home';
 import { findShortcutIdForMappedSteamAppId } from '../../core/mappings';
 
 export { fetchPlaytimeStats } from './service';
@@ -34,6 +34,14 @@ interface ActiveGameSession {
 
 const activeSessions = new Map<number, ActiveGameSession>();
 let trackerInterval: ReturnType<typeof setInterval> | null = null;
+
+export function notifyPlaytimeChanged(shortcutAppId: number, title: string, steamAppId?: string): void {
+	try {
+		window.dispatchEvent(new CustomEvent('gdl:playtime-changed', {
+			detail: { shortcutAppId, title, steamAppId },
+		}));
+	} catch {}
+}
 
 function readNativeSidebarRunningTitles(): Set<string> {
 	const titles = new Set<string>();
@@ -102,6 +110,21 @@ function findNativePlaytimeElements(doc: Document): HTMLElement[] {
 	return result;
 }
 
+function findNativeLastPlayedElements(doc: Document): HTMLElement[] {
+	const classes = PLAYBAR_CLASSES();
+	const result: HTMLElement[] = [];
+	const statsSections = elementsWithCssModuleClass(doc, classes.GameStatsSection);
+	for (const stats of statsSections) {
+		const lastPlayedElements = elementsWithCssModuleClass(stats, classes.LastPlayed);
+		for (const el of lastPlayedElements) {
+			if (!el.closest('[data-gdl-playtime="1"]') && !el.closest('[data-gdl-cloud-status="1"]') && !el.closest('[data-gdl-playbar-achievements="1"]')) {
+				result.push(el);
+			}
+		}
+	}
+	return result;
+}
+
 /** Check if Steam client natively displays playtime for this game without NativeGameLink. */
 export function isNativePlaytimePresent(doc: Document, app: any): boolean {
 	const nativeMinutes = Number(app?.minutes_playtime_forever ?? app?.m_nPlaytimeForever ?? 0);
@@ -109,60 +132,71 @@ export function isNativePlaytimePresent(doc: Document, app: any): boolean {
 	return findNativePlaytimeElements(doc).length > 0;
 }
 
-export async function injectPlaytimeFallbackStats(
+function applyPlaytimeStatsToDom(
 	doc: Document,
 	shortcutAppId: number,
-	title: string,
-	steamAppId?: string,
-	isCurrent: () => boolean = () => true,
-): Promise<void> {
-	if (!isCurrent()) return;
-	if (!getPreferences().trackNonSteamPlaytime) {
-		removePlaytimeFallbackStats(doc);
-		return;
+	statsData: PlaytimeStats,
+	isCurrent: () => boolean,
+): boolean {
+	if (!isCurrent()) return false;
+	if (!statsData || (statsData.minutesForever <= 0 && !statsData.lastPlayedAt)) {
+		return false;
 	}
 
 	const app = getShortcutAppById(shortcutAppId);
 	const nativeBridgeHydrated = isDesktopLibraryPlaytimeHydrated(app);
-	if (!nativeBridgeHydrated && isNativePlaytimePresent(doc, app)) {
-		// Steam is already rendering this block and therefore owns its complete
-		// typography, colors and spacing.
-		removePlaytimeFallbackStats(doc);
-		return;
-	}
+	const hydratedMinutes = nativeBridgeHydrated ? Number(app?.minutes_playtime_forever || 0) : Number(app?.minutes_playtime_forever || 0);
+	const minutesForever = Math.max(0, statsData.minutesForever, hydratedMinutes);
+	const playtimeFormatted = formatPlaytimeMinutes(minutesForever);
+	const lastPlayedFormatted = statsData.lastPlayedAt ? formatLastPlayedDate(statsData.lastPlayedAt) : '';
 
-	const statsData = await fetchPlaytimeStats(shortcutAppId, title, steamAppId);
-	if (!isCurrent()) return;
-	if (!statsData || (statsData.minutesForever <= 0 && !statsData.lastPlayedAt)) {
-		return;
+	if (app) {
+		if (minutesForever > 0) setDesktopPlaytimeField(app, 'minutes_playtime_forever', minutesForever);
+		if (statsData.minutesLastTwoWeeks > 0) setDesktopPlaytimeField(app, 'minutes_playtime_last_two_weeks', statsData.minutesLastTwoWeeks);
+		if (statsData.lastPlayedAt && statsData.lastPlayedAt > 0) {
+			setDesktopPlaytimeField(app, 'rt_last_time_played', statsData.lastPlayedAt);
+			setDesktopPlaytimeField(app, 'rt_recent_activity_time', statsData.lastPlayedAt);
+		}
 	}
 
 	const classes = PLAYBAR_CLASSES();
 	const statsSections = elementsWithCssModuleClass(doc, classes.GameStatsSection).filter(s => s.isConnected);
-	if (!statsSections.length) return;
+	if (!statsSections.length) return false;
 
-	const hydratedMinutes = nativeBridgeHydrated
-		? Number(app?.minutes_playtime_forever || 0)
-		: 0;
-	const minutesForever = Math.max(0, statsData.minutesForever, hydratedMinutes);
-	const playtimeFormatted = formatPlaytimeMinutes(minutesForever);
-	const lastPlayedFormatted = statsData.lastPlayedAt ? formatLastPlayedDate(statsData.lastPlayedAt) : '';
-	if (nativeBridgeHydrated) {
-		let updatedNativeValue = false;
-		for (const nativePlaytime of findNativePlaytimeElements(doc)) {
+	const nativePlaytimes = findNativePlaytimeElements(doc);
+	const nativeLastPlayeds = findNativeLastPlayedElements(doc);
+
+	let hasNativePlaytime = false;
+	let hasNativeLastPlayed = false;
+
+	if (nativePlaytimes.length > 0 && minutesForever > 0) {
+		for (const nativePlaytime of nativePlaytimes) {
 			const detail = elementsWithCssModuleClass(nativePlaytime, classes.PlayBarDetailLabel)[0];
-			if (!detail) continue;
-			detail.textContent = playtimeFormatted;
-			updatedNativeValue = true;
-		}
-		if (updatedNativeValue) {
-			removePlaytimeFallbackStats(doc);
-			return;
+			if (detail) {
+				detail.textContent = playtimeFormatted;
+				hasNativePlaytime = true;
+			}
 		}
 	}
 
+	if (nativeLastPlayeds.length > 0 && lastPlayedFormatted) {
+		for (const nativeLastPlayed of nativeLastPlayeds) {
+			const detail = elementsWithCssModuleClass(nativeLastPlayed, classes.PlayBarDetailLabel)[0]
+				|| elementsWithCssModuleClass(nativeLastPlayed, classes.LastPlayedInfo)[0];
+			if (detail) {
+				detail.textContent = lastPlayedFormatted;
+				hasNativeLastPlayed = true;
+			}
+		}
+	}
+
+	if (hasNativePlaytime && hasNativeLastPlayed) {
+		removePlaytimeFallbackStats(doc);
+		return true;
+	}
+
 	for (const stats of statsSections) {
-		if (!isCurrent()) return;
+		if (!isCurrent()) return false;
 		let container = stats.querySelector('[data-gdl-playtime="1"]') as HTMLElement | null;
 		if (!container) {
 			container = doc.createElement('div');
@@ -176,9 +210,7 @@ export async function injectPlaytimeFallbackStats(
 
 		const nativeStats: HTMLElement[] = [];
 
-		// Steam's native playbar always presents the session first, followed by
-		// the clock/playtime block. Keep the fallback DOM in that exact order.
-		if (lastPlayedFormatted) {
+		if (lastPlayedFormatted && !hasNativeLastPlayed) {
 			const native = buildNativePlaybarStatBlueprint(doc, 'lastPlayed', loc('AppDetails_SectionTitle_LastPlayed', 'ÚLTIMA VEZ JUGADO'), lastPlayedFormatted);
 			if (native) { native.dataset.gdlStat = 'last-played'; native.dataset.gdlNativePlaybar = '1'; nativeStats.push(native); }
 			else nativeStats.push(...htmlToElements(doc, `
@@ -189,7 +221,7 @@ export async function injectPlaytimeFallbackStats(
 					</div>
 				</div>`));
 		}
-		if (minutesForever > 0) {
+		if (minutesForever > 0 && !hasNativePlaytime) {
 			const native = buildNativePlaybarStatBlueprint(doc, 'playtime', loc('AppDetails_SectionTitle_PlayTime', 'TIEMPO DE JUEGO'), playtimeFormatted);
 			if (native) {
 				native.dataset.gdlStat = 'playtime';
@@ -215,6 +247,34 @@ export async function injectPlaytimeFallbackStats(
 		}
 		container.replaceChildren(...nativeStats);
 	}
+	return true;
+}
+
+export async function injectPlaytimeFallbackStats(
+	doc: Document,
+	shortcutAppId: number,
+	title: string,
+	steamAppId?: string,
+	isCurrent: () => boolean = () => true,
+): Promise<void> {
+	if (!isCurrent()) return;
+	if (!getPreferences().trackNonSteamPlaytime) {
+		removePlaytimeFallbackStats(doc);
+		return;
+	}
+
+	const instant = getInstantPlaytimeStats(shortcutAppId);
+	if (instant) {
+		applyPlaytimeStatsToDom(doc, shortcutAppId, instant, isCurrent);
+	}
+
+	const statsData = await fetchPlaytimeStats(shortcutAppId, title, steamAppId);
+	if (!isCurrent()) return;
+	if (!statsData || (statsData.minutesForever <= 0 && !statsData.lastPlayedAt)) {
+		return;
+	}
+
+	applyPlaytimeStatsToDom(doc, shortcutAppId, statsData, isCurrent);
 }
 
 export function removePlaytimeFallbackStats(doc: Document): void {
@@ -233,9 +293,10 @@ async function pollRunningApps(): Promise<void> {
 	const observedRunningApps = new Map<number, { title: string; steamAppId?: string }>();
 	const nativeSidebarRunningTitles = readNativeSidebarRunningTitles();
 
+	// 1. Check SteamUIStore.RunningApps
 	if (runningAppsSet && typeof runningAppsSet[Symbol.iterator] === 'function') {
 		for (const app of runningAppsSet) {
-			const rawId = Number(app?.appid ?? app?.m_unAppID);
+			const rawId = Number(app?.appid ?? app?.m_unAppID ?? (typeof app === 'number' ? app : 0));
 			const numId = rawId < 0 ? (rawId >>> 0) : rawId;
 			if (!Number.isFinite(numId) || numId <= 0) continue;
 			const mappedShortcutId = numId < SHORTCUT_THRESHOLD
@@ -249,53 +310,80 @@ async function pollRunningApps(): Promise<void> {
 			const steamAppId = mappedShortcutId ? String(numId) : undefined;
 			observedRunningApps.set(trackedId, { title, steamAppId });
 		}
-		for (const [trackedId, observed] of observedRunningApps) {
-			currentRunningIds.add(trackedId);
-			const existing = activeSessions.get(trackedId);
-
-				if (!existing) {
-					const instanceId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-					const session: ActiveGameSession = {
-						instanceId,
-						shortcutAppId: trackedId,
-						title: observed.title,
-						steamAppId: observed.steamAppId,
-						startedAt: Date.now(),
-					};
-					activeSessions.set(trackedId, session);
-					backendLog(`Non-Steam app launched: ${observed.title} (${trackedId}), starting playtime session`);
-					clearPlaytimeCacheAfter(startPlaytimeSessionBackend({
-						request_json: JSON.stringify({
-							instance_id: instanceId,
-							shortcut_app_id: String(trackedId),
-							steam_app_id: observed.steamAppId || '',
-							title: observed.title,
-						}),
-					}));
-				} else {
-					// Heartbeat ping
-					clearPlaytimeCacheAfter(pingPlaytimeSessionBackend({
-						request_json: JSON.stringify({
-							instance_id: existing.instanceId,
-							shortcut_app_id: String(trackedId),
-							steam_app_id: existing.steamAppId || '',
-							title: existing.title,
-						}),
-					}));
-				}
-		}
 	}
-	// Steam emulators can transfer the native running identity away from the
+
+	// 2. Check SteamClient.Apps if available
+	try {
+		const appsApi = (window as any).SteamClient?.Apps;
+		const runningList = (typeof appsApi?.GetRunningAppIDs === 'function' ? appsApi.GetRunningAppIDs() : null)
+			|| (typeof appsApi?.GetRunningApps === 'function' ? appsApi.GetRunningApps() : null);
+		if (Array.isArray(runningList)) {
+			for (const item of runningList) {
+				const rawId = Number(item?.appid ?? item?.m_unAppID ?? (typeof item === 'number' ? item : 0));
+				const numId = rawId < 0 ? (rawId >>> 0) : rawId;
+				if (!Number.isFinite(numId) || numId <= 0) continue;
+				const mappedShortcutId = numId < SHORTCUT_THRESHOLD ? findShortcutIdForMappedSteamAppId(numId) : null;
+				const trackedId = numId >= SHORTCUT_THRESHOLD ? numId : mappedShortcutId;
+				if (!trackedId || observedRunningApps.has(trackedId)) continue;
+				const shortcut = getShortcutAppById(trackedId);
+				const title = String(shortcut?.display_name || shortcut?.m_strDisplayName || '').trim();
+				const steamAppId = mappedShortcutId ? String(numId) : undefined;
+				observedRunningApps.set(trackedId, { title, steamAppId });
+			}
+		}
+	} catch {}
+
+	// 3. Steam emulators can transfer the native running identity away from the
 	// shortcut and omit the official AppID from SteamUIStore.RunningApps. The
-	// virtualized sidebar remains authoritative in that state. Resolve the live
-	// shortcut record instead of an obsolete historical shortcut mapping.
+	// virtualized sidebar remains authoritative in that state.
 	for (const shortcut of getMappedShortcuts()) {
 		if (!nativeSidebarRunningTitles.has(shortcut.title.toLocaleLowerCase())) continue;
-		observedRunningApps.set(shortcut.id, { title: shortcut.title, steamAppId: shortcut.steamAppId });
+		if (!observedRunningApps.has(shortcut.id)) {
+			observedRunningApps.set(shortcut.id, { title: shortcut.title, steamAppId: shortcut.steamAppId });
+		}
 	}
 	syncMappedRunningSidebarLabels(nativeSidebarRunningTitles);
 
-	// Check stopped games
+	// 4. Start or ping active sessions for all observed running apps
+	for (const [trackedId, observed] of observedRunningApps) {
+		currentRunningIds.add(trackedId);
+		const existing = activeSessions.get(trackedId);
+
+		if (!existing) {
+			const instanceId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+			const session: ActiveGameSession = {
+				instanceId,
+				shortcutAppId: trackedId,
+				title: observed.title,
+				steamAppId: observed.steamAppId,
+				startedAt: Date.now(),
+			};
+			activeSessions.set(trackedId, session);
+			backendLog(`Non-Steam app launched: ${observed.title} (${trackedId}), starting playtime session`);
+			clearPlaytimeCacheAfter(startPlaytimeSessionBackend({
+				request_json: JSON.stringify({
+					instance_id: instanceId,
+					shortcut_app_id: String(trackedId),
+					steam_app_id: observed.steamAppId || '',
+					title: observed.title,
+				}),
+			}));
+			notifyPlaytimeChanged(trackedId, observed.title, observed.steamAppId);
+		} else {
+			// Heartbeat ping
+			clearPlaytimeCacheAfter(pingPlaytimeSessionBackend({
+				request_json: JSON.stringify({
+					instance_id: existing.instanceId,
+					shortcut_app_id: String(trackedId),
+					steam_app_id: existing.steamAppId || '',
+					title: existing.title,
+				}),
+			}));
+			notifyPlaytimeChanged(trackedId, existing.title, existing.steamAppId);
+		}
+	}
+
+	// 5. Check stopped games
 	for (const [id, session] of Array.from(activeSessions.entries())) {
 		if (!currentRunningIds.has(id)) {
 			activeSessions.delete(id);
@@ -308,6 +396,7 @@ async function pollRunningApps(): Promise<void> {
 					title: session.title,
 				}),
 			}));
+			notifyPlaytimeChanged(id, session.title, session.steamAppId);
 		}
 	}
 }
@@ -332,6 +421,7 @@ export function stopPlaytimeTracker(): void {
 				title: session.title,
 			}),
 		}));
+		notifyPlaytimeChanged(id, session.title, session.steamAppId);
 	}
 	activeSessions.clear();
 	readNativeSidebarRunningTitles();

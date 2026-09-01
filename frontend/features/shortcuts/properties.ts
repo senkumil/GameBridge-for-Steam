@@ -697,8 +697,19 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			if (detectionContext.bootstrapDetected && detectionContext.recommendedExePath) {
 				const bootstrap = shortcutPathBasename(detectionContext.exePath);
 				const gameExe = shortcutPathBasename(detectionContext.recommendedExePath);
-				trackingExecutableCopy.innerHTML = `<strong style="font-weight:500;color:#dcdedf;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam tracks your playtime.', { bootstrap, game: gameExe }))}`;
-				trackingExecutableLabel.style.display = 'flex';
+				if (detectionContext.trackingExecutableAutoApply) {
+					trackingExecutableCopy.innerHTML = `<strong style="font-weight:500;color:#dcdedf;">${escapeHtml(gdlText('selected_executable', 'Selected executable: {exe}', { exe: gameExe }))}</strong><br /><span style="color:#8f98a0;font-size:11px;line-height:1.35;display:block;margin-top:2px;">${escapeHtml(gdlText('persistent_tracking_exe_note', '{exe} is the main process for this game to ensure playtime tracking works correctly.', { exe: gameExe }))}</span>`;
+					trackingExecutableLabel.style.display = 'flex';
+					trackingExecutableLabel.style.pointerEvents = 'none';
+					trackingExecutableInput.style.display = 'none';
+					trackingExecutableInput.checked = true;
+				} else {
+					trackingExecutableCopy.innerHTML = `<strong style="font-weight:500;color:#dcdedf;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam tracks your playtime.', { bootstrap, game: gameExe }))}`;
+					trackingExecutableLabel.style.display = 'flex';
+					trackingExecutableLabel.style.pointerEvents = '';
+					trackingExecutableInput.style.display = '';
+					trackingExecutableInput.checked = false;
+				}
 			}
 			autoSelect.addEventListener('change', () => {
 				if (autoSelect.value) {

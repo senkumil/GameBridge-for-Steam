@@ -42,6 +42,7 @@ deps.ttl_cache = load_factory("ttl_cache")(deps)
 deps.artwork_icon = load_factory("artwork_icon")(deps)
 deps.shortcut_detection_text = load_factory("shortcut_detection_text")(deps)
 deps.shortcut_detection_aliases = load_factory("shortcut_detection_aliases")(deps)
+deps.shortcut_detection_rules = load_factory("shortcut_detection_rules")(deps)
 deps.shortcut_detection_tracking = load_factory("shortcut_detection_tracking")(deps)
 
 local mappings = load_factory("mappings")(deps)

@@ -134,47 +134,62 @@ Es una integración visual local: no convierte el acceso en una licencia adquiri
 
 ---
 
-## 🏆 Logros locales y notificaciones
+## 🏆 Logros en Juegos No-Steam y Notificaciones Nativas
 
-NativeGameLink combina los metadatos e iconos de logros de Steam con un archivo local `achievements.json`. Cuando el archivo cambia mientras juegas, actualiza la Biblioteca y puede mostrar una notificación de desbloqueo estilo Steam con sonido.
+NativeGameLink ofrece una experiencia completa de logros para tus juegos vinculados que no son de Steam, combinando los metadatos e iconos oficiales de Steam con archivos locales de progreso o simulación.
 
 Incluye:
 
-- Contadores desbloqueados/totales en la barra y el panel lateral.
-- Barras de progreso, grupos bloqueados y desbloqueados, iconos, descripciones y fechas.
+- Contadores desbloqueados/totales en la barra superior y en el panel lateral.
+- Barras de progreso, grupos bloqueados y desbloqueados, iconos, descripciones y fechas de desbloqueo.
 - Ventana completa de logros con filtros de estilo nativo y porcentajes globales cuando están disponibles.
 - Supervisión en vivo del archivo de progreso.
-- Toast y sonido al desbloquear.
-- Botón de prueba de notificaciones en los ajustes.
+- Notificaciones toast y sonido de desbloqueo utilizando el sistema nativo de Steam.
+- Botón de prueba de notificaciones en los ajustes del plugin.
 - Logros de prueba deterministas opcionales para revisar la interfaz sin un archivo local; desactivados por defecto.
 
-### Configurar el archivo de logros
+### 💡 Cómo funcionan los logros en juegos No-Steam (Estilo Achievement Watcher)
 
-NativeGameLink solo lee el archivo y no lo modifica. La estructura predeterminada de GSE Saves es:
+Básicamente, el plugin **únicamente lee archivos JSON de logros que ya hayan sido generados previamente**, de forma similar a como funciona *Achievement Watcher*. La principal diferencia es que, en este caso, el sistema de logros está **integrado directamente en la interfaz de Steam** y utiliza las **notificaciones y sonidos nativos de Steam**.
+
+> [!IMPORTANT]
+> **Independencia absoluta respecto a SteamAutoCrack y generadores externos:**
+> - **La generación de los archivos JSON de logros es un proceso totalmente independiente y externo al plugin.**
+> - Si un usuario desea generarlos utilizando herramientas como [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases) o Goldberg Emulator, SteamAutoCrack debe instalarse y ejecutarse de forma **independiente**.
+> - SteamAutoCrack **no** viene incluido, ni empaquetado, ni es llamado, ejecutado o integrado de ninguna manera por NativeGameLink for Steam.
+> - **En resumen:** NativeGameLink for Steam **no** depende de SteamAutoCrack y **no** tiene ninguna integración con él. El plugin únicamente puede leer archivos JSON compatibles si el usuario ya dispone de ellos en su equipo, independientemente de cómo hayan sido generados.
+
+### ⚙️ El uso de archivos externos es 100% Opcional (Logros Simulados)
+
+El uso de archivos JSON de logros generados externamente es **totalmente opcional**. Los usuarios pueden vincular sus juegos No-Steam sin necesidad de dichos archivos y utilizar en su lugar el **sistema de logros simulados integrado** en el plugin:
+
+- **100% completado instantáneo:** Marca todos los logros como desbloqueados de inmediato.
+- **Simulación progresiva:** Simula la obtención gradual de logros a medida que juegas.
+- **Seguimiento manual:** Ajusta el progreso y el número de logros manualmente mediante controles deslizantes en las Propiedades del juego.
+
+### 📁 Configurar el archivo de logros JSON
+
+Si dispones de archivos JSON de progreso compatibles (por ejemplo, generados por GSE Saves o Goldberg), NativeGameLink únicamente los lee sin modificarlos. La estructura predeterminada de GSE Saves es:
 
 ```text
 %APPDATA%\GSE Saves\<AppID>\achievements.json
 ```
 
-Puedes configurar la fuente de tres formas:
+Puedes configurar el origen de los logros de tres formas:
 
-1. **Carpeta global:** En los ajustes de NativeGameLink, elige una carpeta base con una subcarpeta por AppID.
-2. **Ruta por juego:** Abre el acceso directo → **Propiedades** → **Juego vinculado** y selecciona el archivo `achievements.json` o una carpeta que lo contenga.
-3. **Búsqueda automática:** Deja la ruta individual en automático para buscar el AppID en GSE Saves, ubicaciones compatibles de Goldberg y las carpetas globales configuradas.
+1. **Búsqueda automática por AppID (Por defecto):** Busca automáticamente en `%APPDATA%\GSE Saves\<AppID>\`, ubicaciones compatibles de Goldberg y las carpetas globales configuradas.
+2. **Carpeta global:** Abre los ajustes de NativeGameLink y selecciona una carpeta raíz que contenga una subcarpeta por cada AppID de Steam.
+3. **Ruta personalizada por juego:** Haz clic derecho en el acceso directo → **Propiedades** → **Juego vinculado** y selecciona un archivo `achievements.json` concreto o su carpeta contenedora.
 
-### Usar SteamAutoCrack / Goldberg
+---
 
-Los juegos que no generan un archivo local compatible necesitan un emulador o generador externo. NativeGameLink incluye orientación para [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases), que puede configurar Goldberg Emulator y crear las carpetas de AppID y el archivo `achievements.json` a medida que consigues logros.
+## 🎖️ Steam Achievement Manager (SAM Integrado) para Juegos Originales
 
-Configuración habitual:
+Lo que **sí está integrado directamente** en el plugin es la funcionalidad de **Steam Achievement Manager (SAM)** para gestionar los logros de **juegos de Steam legítimos/originales**:
 
-1. Configura el juego con SteamAutoCrack/Goldberg siguiendo la documentación de ese proyecto.
-2. Comprueba que genere `achievements.json` en una carpeta asociada con el AppID correcto.
-3. Apunta la carpeta global o la ruta individual de NativeGameLink a esa ubicación.
-4. Inicia el juego mediante el acceso directo vinculado de Steam.
-5. Usa **Probar notificación de logro** para comprobar el toast y el sonido por separado.
-
-SteamAutoCrack y Goldberg Emulator son proyectos externos; no vienen incluidos ni son mantenidos por NativeGameLink. Úsalos únicamente con software que tengas permiso legal para configurar. Los desbloqueos locales se muestran en NativeGameLink, pero no desbloquean logros oficiales del perfil de Steam.
+- **Gestión directa en la biblioteca:** Consulta, desbloquea, bloquea o edita el progreso de logros de tus juegos oficiales de Steam directamente desde la interfaz de Steam.
+- **Sin herramientas externas independientes:** No necesitas descargar, configurar ni abrir aplicaciones externas como `SAM.exe`.
+- **Sincronización instantánea:** Los cambios se sincronizan de inmediato con el backend de Steam y se reflejan en tiempo real en la interfaz de la biblioteca.
 
 ---
 

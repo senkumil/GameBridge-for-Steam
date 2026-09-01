@@ -72,6 +72,7 @@ export async function buildShortcutDetectionContext(
 	let bootstrapDetected = false;
 	let recommendedExePath = '';
 	let recommendedStartDir = '';
+	let trackingExecutableAutoApply = false;
 
 	if (!exePath || !startDir) {
 		const appsApi = (window as any).SteamClient?.Apps;
@@ -105,6 +106,7 @@ export async function buildShortcutDetectionContext(
 				bootstrapDetected = !!details.bootstrap_detected;
 				recommendedExePath = cleanShortcutPath(details.recommended_exe_path || '');
 				recommendedStartDir = cleanShortcutPath(details.recommended_start_dir || '');
+				trackingExecutableAutoApply = details.tracking_executable_auto_apply === true;
 				if (neededPathFallback && exePath) backendLog(`Resolved shortcut executable from shortcuts.vdf for ${title || backendTitle || shortcutAppId}`);
 			}
 		} catch (error) {
@@ -136,6 +138,7 @@ export async function buildShortcutDetectionContext(
 		bootstrapDetected,
 		recommendedExePath,
 		recommendedStartDir,
+		trackingExecutableAutoApply,
 	};
 }
 

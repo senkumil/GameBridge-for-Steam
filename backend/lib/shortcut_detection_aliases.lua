@@ -24,6 +24,9 @@ return {
     ["gta 5"] = { name = "Grand Theft Auto V", appids = { "271590" } },
     ["rdr2"] = { name = "Red Dead Redemption 2", appids = { "1174180" }, auto_appid = "1174180" },
     ["rdr 2"] = { name = "Red Dead Redemption 2", appids = { "1174180" }, auto_appid = "1174180" },
+    ["rdr"] = { name = "Red Dead Redemption", appids = { "2668510" }, auto_appid = "2668510" },
+    ["red dead redemption"] = { name = "Red Dead Redemption", appids = { "2668510", "1174180" } },
+    ["red dead redemption 2"] = { name = "Red Dead Redemption 2", appids = { "1174180" }, auto_appid = "1174180" },
     ["gow"] = { name = "God of War", appids = { "1593500" } },
     ["god of war"] = { name = "God of War", appids = { "1593500" } },
     ["godofwar"] = { name = "God of War", appids = { "1593500" } },
@@ -57,6 +60,9 @@ return {
     ["tloui"] = { name = "The Last of Us Part I", appids = { "1888930" } },
     ["tlou-i"] = { name = "The Last of Us Part I", appids = { "1888930" } },
     ["tlou1"] = { name = "The Last of Us Part I", appids = { "1888930" } },
+    ["the last of us"] = { name = "The Last of Us Part I", appids = { "1888930" } },
+    ["the last of us part i"] = { name = "The Last of Us Part I", appids = { "1888930" } },
+    ["the last of us part 1"] = { name = "The Last of Us Part I", appids = { "1888930" } },
     ["sh2"] = { name = "SILENT HILL 2", appids = { "2124490" } },
     ["sh2r"] = { name = "SILENT HILL 2", appids = { "2124490" } },
     ["sm2"] = { name = "Marvel's Spider-Man 2", appids = { "2651280" } },
@@ -64,6 +70,8 @@ return {
     ["miles morales"] = { name = "Marvel's Spider-Man: Miles Morales", appids = { "1817190" } },
     ["mkke"] = { name = "Mortal Kombat Komplete Edition", appids = { "237110" }, auto_appid = "237110" },
     ["mortal kombat ke"] = { name = "Mortal Kombat Komplete Edition", appids = { "237110" }, auto_appid = "237110" },
+    ["mortal kombat komplete edition"] = { name = "Mortal Kombat Komplete Edition", appids = { "237110" }, auto_appid = "237110" },
+    ["mortal kombat"] = { name = "Mortal Kombat Komplete Edition", appids = { "237110" } },
     -- Retired Store entries never appear in storesearch. Keep their verified
     -- executable/title identities here so the detector can seed an AppID and
     -- then confirm it against Steam's still-public appinfo launch metadata.

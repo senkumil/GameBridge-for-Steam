@@ -276,6 +276,8 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	detection_uncertain: 'La coincidencia es incierta. Elige el resultado correcto o introduce el AppID manualmente.',
 	use_tracking_executable: 'Usar el ejecutable real del juego',
 	tracking_executable_help: '{bootstrap} se cierra después de iniciar {game}. Usa {game} para que Steam registre tus horas de juego.',
+	persistent_launcher_rdr2_note: 'Launcher.exe es el hilo principal de este juego necesario para que Steam registre tus horas de juego correctamente.',
+	persistent_tracking_exe_note: '{exe} es el hilo principal de este juego necesario para que Steam registre tus horas de juego correctamente.',
 	locked_achievements: 'Logros bloqueados',
 	view_all_achievements: 'Ver todos mis logros',
 	view_dlc_store: 'Ver DLC en la tienda',

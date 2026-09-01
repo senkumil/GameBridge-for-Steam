@@ -1,5 +1,5 @@
 import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes } from '../../steam/shortcuts';
-import { fetchPlaytimeStatsBatch, type PlaytimeStats } from './service';
+import { fetchPlaytimeStatsBatch, type PlaytimeStats, setInstantPlaytimeStats } from './service';
 import { formatPlaytimeMinutes } from './format';
 import {
 	patchDesktopLibraryHomePlaytimeCards,
@@ -36,12 +36,19 @@ function readDesktopPlaytimeSnapshots(): Map<number, DesktopPlaytimeDomSnapshot>
 			const shortcutAppId = Number(item.shortcutAppId);
 			const minutesForever = normalizedWholeNumber(item.minutesForever);
 			if (!Number.isFinite(shortcutAppId) || shortcutAppId <= 0 || minutesForever <= 0) continue;
+			const minutesRecent = normalizedWholeNumber(item.minutesRecent);
+			const lastPlayedAt = normalizedWholeNumber(item.lastPlayedAt);
 			snapshots.set(shortcutAppId, {
 				shortcutAppId,
 				title: String(item.title || ''),
 				minutesForever,
-				minutesRecent: normalizedWholeNumber(item.minutesRecent),
-				lastPlayedAt: normalizedWholeNumber(item.lastPlayedAt),
+				minutesRecent,
+				lastPlayedAt,
+			});
+			setInstantPlaytimeStats(shortcutAppId, {
+				minutesForever,
+				minutesLastTwoWeeks: minutesRecent,
+				lastPlayedAt: lastPlayedAt || null,
 			});
 		}
 	} catch {}
@@ -71,30 +78,34 @@ function normalizedWholeNumber(value: unknown): number {
 	return Number.isFinite(number) ? Math.max(0, Math.round(number)) : 0;
 }
 
-/** Steam has shipped both writable MobX fields and getter-only AppOverview
- * fields. Prefer normal assignment so MobX observes the update, then use an
- * instance value as a compatibility fallback. Steam can rebuild the overview;
- * the mutation-driven desktop refresh will safely reapply the larger value. */
-function setDesktopPlaytimeField(target: any, key: DesktopPlaytimeKey, value: number): boolean {
+export function setDesktopPlaytimeField(target: any, key: DesktopPlaytimeKey, value: number): boolean {
 	const current = normalizedWholeNumber(target?.[key]);
 	if (value <= current) return false;
-	try {
-		target[key] = value;
-		if (normalizedWholeNumber(target[key]) >= value) return true;
-	} catch {}
+	let changed = false;
+	const keysToUpdate: string[] = [key];
+	if (key === 'minutes_playtime_forever') keysToUpdate.push('m_nPlaytimeForever', 'nPlaytimeForever');
+	else if (key === 'minutes_playtime_last_two_weeks') keysToUpdate.push('m_nPlaytime2Weeks');
+	else if (key === 'rt_last_time_played') keysToUpdate.push('m_rtimeLastPlayed', 'rtime_last_played');
+	else if (key === 'rt_recent_activity_time') keysToUpdate.push('m_rtimeRecentActivity');
 
-	try {
-		const ownDescriptor = Object.getOwnPropertyDescriptor(target, key);
-		Object.defineProperty(target, key, {
-			configurable: true,
-			enumerable: ownDescriptor?.enumerable ?? true,
-			writable: true,
-			value,
-		});
-		return normalizedWholeNumber(target[key]) >= value;
-	} catch {
-		return false;
+	for (const k of keysToUpdate) {
+		try {
+			target[k] = value;
+			if (normalizedWholeNumber(target[k]) >= value) changed = true;
+		} catch {}
+
+		try {
+			const ownDescriptor = Object.getOwnPropertyDescriptor(target, k);
+			Object.defineProperty(target, k, {
+				configurable: true,
+				enumerable: ownDescriptor?.enumerable ?? true,
+				writable: true,
+				value,
+			});
+			if (normalizedWholeNumber(target[k]) >= value) changed = true;
+		} catch {}
 	}
+	return changed;
 }
 
 async function refreshDesktopShortcutPlaytime(

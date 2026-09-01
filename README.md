@@ -127,9 +127,9 @@ This is a local UI integration. It does not convert the shortcut into an owned S
 
 ---
 
-## 🏆 Local Achievements and Unlock Notifications
+## 🏆 Non-Steam Achievements and Native Notifications
 
-NativeGameLink combines Steam's achievement metadata and icons with a local `achievements.json` progress file. When the file changes while you play, the plugin can update the Library page and display Steam-style unlock notifications with sound.
+NativeGameLink brings a full achievement experience to your linked non-Steam games by combining official Steam achievement metadata and icons with a local achievement file or simulated progression.
 
 Available achievement features include:
 
@@ -137,37 +137,52 @@ Available achievement features include:
 - Progress bars, unlocked and locked groups, icons, descriptions, and unlock dates.
 - Full achievement modal with native-style filtering and global unlock percentages when available.
 - Live monitoring of local progress files.
-- Achievement unlock toast and sound.
+- Achievement unlock toast and sound using Steam's native notification system.
 - A settings button for testing achievement notifications.
 - Optional deterministic test achievements for interface testing when no progress file exists; disabled by default.
 
-### Configure an achievement file
+### 💡 How Non-Steam Achievements Work (Achievement Watcher Style)
 
-NativeGameLink reads achievement files without modifying them. The default GSE Saves layout is:
+Basically, the plugin **only reads achievement JSON files that have already been generated**, similar to how *Achievement Watcher* works. The main difference is that with NativeGameLink for Steam, the achievement system is **integrated directly into Steam's interface** and displays **Steam's native achievement notifications with sound**.
+
+> [!IMPORTANT]
+> **Complete Independence from SteamAutoCrack and External Generators:**
+> - **Generating achievement JSON files is completely separate from the plugin.**
+> - If a user wants to generate them using [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases) or Goldberg Emulator, SteamAutoCrack must be installed and used **independently**.
+> - SteamAutoCrack is **not** included, bundled, called, executed, or integrated in any way by NativeGameLink for Steam.
+> - **In short:** NativeGameLink for Steam does **not** depend on SteamAutoCrack and has **no integration** with it. The plugin can only read compatible achievement JSON files if the user already has them, regardless of how those files were generated.
+
+### ⚙️ Externally Generated Files Are 100% Optional (Simulated Achievements)
+
+Using externally generated achievement JSON files is **entirely optional**. Users can link their non-Steam games without any external files and use the plugin's **built-in simulated achievement system** instead:
+
+- **Instant 100% Completion:** Mark all achievements as unlocked immediately.
+- **Progressive Simulation:** Simulate earning achievements gradually over time.
+- **Manual Tracking:** Adjust achievement progress and counts manually via sliders in Game Properties.
+
+### 📁 Configuring an Achievement JSON File
+
+If you do have compatible achievement JSON files (e.g. from GSE Saves or Goldberg), NativeGameLink reads them without modifying them. The default GSE Saves layout is:
 
 ```text
 %APPDATA%\GSE Saves\<AppID>\achievements.json
 ```
 
-You can configure the source in either of these ways:
+You can configure the achievement source in three ways:
 
-1. **Global folder:** Open NativeGameLink settings and select a base folder containing one subfolder per Steam AppID.
-2. **Per-game override:** Right-click the shortcut → **Properties** → **Linked Game** and select an exact `achievements.json` file or a folder containing it.
-3. **Automatic AppID lookup:** Leave the per-game path on automatic to search GSE Saves, supported Goldberg locations, and configured global folders for the linked AppID.
+1. **Automatic AppID lookup (Default):** Searches `%APPDATA%\GSE Saves\<AppID>\`, supported Goldberg locations, and configured global folders automatically.
+2. **Global folder:** Open NativeGameLink Settings and select a base folder containing one subfolder per Steam AppID.
+3. **Per-game override:** Right-click the shortcut → **Properties** → **Linked Game** and select an exact `achievements.json` file or directory.
 
-### Using SteamAutoCrack / Goldberg
+---
 
-Games that do not natively create a compatible local progress file need an external emulator or achievement generator. NativeGameLink includes guidance for [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases), which can configure Goldberg Emulator and generate the AppID folders and `achievements.json` file as achievements are earned.
+## 🎖️ Steam Achievement Manager (SAM) for Official Steam Games
 
-Typical setup:
+What **is** integrated directly into the plugin is **Steam Achievement Manager (SAM)** functionality for managing achievements of **legitimately owned Steam games**:
 
-1. Configure the game with SteamAutoCrack/Goldberg according to that project's documentation.
-2. Make sure it generates `achievements.json` under a folder associated with the correct Steam AppID.
-3. Point NativeGameLink's global achievement folder or per-game override to that location.
-4. Launch the game through the linked Steam shortcut.
-5. Use **Test achievement notification** in NativeGameLink settings to verify the toast and sound independently.
-
-SteamAutoCrack and Goldberg Emulator are external projects and are not bundled with or maintained by NativeGameLink. Use them only with software you are legally permitted to configure. Local unlocks are for the NativeGameLink interface and do not unlock official Steam profile achievements.
+- **Direct In-Client Management:** Inspect, unlock, lock, or modify achievement progress for your official Steam games directly from your Steam Library interface.
+- **No External Standalone Tools:** No need to download, configure, or run separate standalone SAM applications (`SAM.exe`).
+- **Instant Synchronization:** Changes synchronize immediately with Steam's backend and reflect live across your Steam client UI.
 
 ---
 

@@ -108,7 +108,7 @@ export function showShortcutManualLinkModal(
 				</label>
 				<div class="gdl-manual-link-exe-summary" style="padding:9px 11px;background:rgba(0,0,0,.18);color:#8f98a0;font-size:11px;line-height:1.35;overflow-wrap:anywhere;">${escapeHtml(executableSummary)}</div>
 				<label class="gdl-manual-link-tracking" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;padding:10px 11px;background:rgba(91,163,43,.10);border:1px solid rgba(91,163,43,.28);color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;">
-					<input class="gdl-manual-link-tracking-input" type="checkbox" checked style="margin-top:2px;" />
+					<input class="gdl-manual-link-tracking-input" type="checkbox" style="margin-top:2px;" />
 					<span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam keeps tracking playtime.', { bootstrap: shortcutPathBasename(context.exePath), game: shortcutPathBasename(context.recommendedExePath || '') }))}</span>
 				</label>
 				<label class="gdl-manual-link-launcher" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;">
@@ -301,9 +301,13 @@ export function showShortcutManualLinkModal(
 	}
 	const exeSummary = overlay.querySelector('.gdl-manual-link-exe-summary') as HTMLElement;
 	const updateExeSummary = () => {
-		if (hasTrackingRecommendation && trackingInput.checked) {
+		if (hasTrackingRecommendation && (context.trackingExecutableAutoApply || trackingInput.checked)) {
 			const recName = shortcutPathBasename(context.recommendedExePath || '') || context.recommendedExePath || '';
-			exeSummary.textContent = gdlText('selected_executable', 'Selected executable: {exe}', { exe: recName });
+			if (context.trackingExecutableAutoApply) {
+				exeSummary.innerHTML = `${escapeHtml(gdlText('selected_executable', 'Selected executable: {exe}', { exe: recName }))}<br /><span style="display:block;margin-top:3px;color:#8f98a0;font-size:10.5px;">${escapeHtml(gdlText('persistent_tracking_exe_note', '{exe} is the main process for this game to ensure playtime tracking works correctly.', { exe: recName }))}</span>`;
+			} else {
+				exeSummary.textContent = gdlText('selected_executable', 'Selected executable: {exe}', { exe: recName });
+			}
 			exeSummary.style.color = '#a4d007';
 		} else {
 			exeSummary.textContent = gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: exeName });
@@ -311,9 +315,14 @@ export function showShortcutManualLinkModal(
 		}
 	};
 	if (hasTrackingRecommendation) {
-		trackingLabel.style.display = 'flex';
-		trackingInput.checked = true;
-		trackingInput.addEventListener('change', updateExeSummary);
+		if (context.trackingExecutableAutoApply) {
+			trackingLabel.style.display = 'none';
+			trackingInput.checked = true;
+		} else {
+			trackingLabel.style.display = 'flex';
+			trackingInput.checked = false;
+			trackingInput.addEventListener('change', updateExeSummary);
+		}
 		updateExeSummary();
 	}
 
@@ -417,8 +426,8 @@ export function showShortcutManualLinkModal(
 			steamAppId,
 			skipLauncher: launcherInput.checked || shouldAutoApplyNoLauncher(steamAppId),
 			existingLaunchOptions: context.launchOptions,
-			trackingExecutable: hasTrackingRecommendation && trackingInput.checked ? context.recommendedExePath : '',
-			trackingStartDir: hasTrackingRecommendation && trackingInput.checked ? context.recommendedStartDir : '',
+			trackingExecutable: hasTrackingRecommendation && (context.trackingExecutableAutoApply || trackingInput.checked) ? context.recommendedExePath : '',
+			trackingStartDir: hasTrackingRecommendation && (context.trackingExecutableAutoApply || trackingInput.checked) ? context.recommendedStartDir : '',
 			shortcutExecutable: context.exePath || '',
 			repairResources,
 		});
@@ -460,8 +469,8 @@ export function showShortcutManualLinkModal(
 				steamAppId,
 				skipLauncher: launcherInput.checked || shouldAutoApplyNoLauncher(steamAppId),
 				existingLaunchOptions: context.launchOptions,
-				trackingExecutable: hasTrackingRecommendation && trackingInput.checked ? context.recommendedExePath : '',
-				trackingStartDir: hasTrackingRecommendation && trackingInput.checked ? context.recommendedStartDir : '',
+				trackingExecutable: hasTrackingRecommendation && (context.trackingExecutableAutoApply || trackingInput.checked) ? context.recommendedExePath : '',
+				trackingStartDir: hasTrackingRecommendation && (context.trackingExecutableAutoApply || trackingInput.checked) ? context.recommendedStartDir : '',
 				shortcutExecutable: context.exePath || '',
 				onStatus: (message, color = '#8f98a0') => {
 					status.textContent = message;
