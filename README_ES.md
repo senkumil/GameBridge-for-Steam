@@ -44,27 +44,47 @@ Los datos esenciales pueden aparecer inmediatamente desde la caché mientras not
 
 ---
 
-## 📸 Capturas
+## 📸 Capturas de pantalla
 
-Estas capturas muestran la diferencia visual entre un acceso directo sin vincular y un juego vinculado, además de los logros/feed y la integración con Big Picture.
+Estas capturas muestran la diferencia visual entre un acceso directo no vinculado y un juego vinculado, además de las interfaces de logros, actividad y la integración con Big Picture.
 
-<p align="center">
-  <img src="docs/screenshots/library-tlou-before.png" alt="The Last of Us Part I antes de vincular: Biblioteca no-Steam vacía" width="49%">
-  <img src="docs/screenshots/library-tlou-after.png" alt="The Last of Us Part I después de vincular: ilustraciones, actividad y logros de Steam" width="49%">
-</p>
-<p align="center"><em>The Last of Us Part I · Antes de vincular · Después de vincular</em></p>
+### 1. Antes de vincular — acceso directo original que no es de Steam
 
-<p align="center">
-  <img src="docs/screenshots/library-gow-before.png" alt="God of War Ragnarök antes de vincular: Biblioteca no-Steam vacía" width="49%">
-  <img src="docs/screenshots/library-gow-after.png" alt="God of War Ragnarök después de vincular: ilustraciones, actividad y logros de Steam" width="49%">
-</p>
-<p align="center"><em>God of War Ragnarök · Antes de vincular · Después de vincular</em></p>
+<img width="1917" height="928" alt="Captura de pantalla 2026-08-26 163249" src="https://github.com/user-attachments/assets/e6e6de91-6ab3-4b21-9aaa-3d1f8e709394" />
 
-<p align="center">
-  <img src="docs/screenshots/big-picture-library.png" alt="Cuadrícula de juegos instalados en Big Picture" width="49%">
-  <img src="docs/screenshots/big-picture-recent.png" alt="Juegos recientes de Big Picture con tiempo de juego vinculado" width="49%">
-</p>
-<p align="center"><em>Biblioteca de Big Picture · Juegos recientes y tiempo de juego</em></p>
+### 2. Después de vincular — integración de NativeGameLink en la Biblioteca
+
+<img width="1917" height="974" alt="Captura de pantalla 2026-08-26 164536 pFDFDFng" src="https://github.com/user-attachments/assets/1dc423ff-04dc-496c-89a1-51a594c2fdc9" />
+
+### 3. Logros / actividad / información del juego
+
+<img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/5abb8961-6936-46f3-897b-6fede3df0c34" />
+
+<img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/e7e839a8-a73d-4b70-b93d-2ea97ca32847" />
+
+<img width="1917" height="907" alt="image" src="https://github.com/user-attachments/assets/883df422-cca0-4022-8076-1d830af6e92e" />
+
+<img width="1917" height="1016" alt="image" src="https://github.com/user-attachments/assets/36998798-fb85-4e07-8e4b-2b0ae7c09ac2" />
+
+<img width="1917" height="1016" alt="image" src="https://github.com/user-attachments/assets/3e9913ae-0d2e-47c2-a99f-f284aa4cf290" />
+
+<img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/be7e3a13-1405-4b7b-b708-bdb45de6b14f" />
+
+### 4. Personalización de ilustraciones / integración con Propiedades
+
+<img width="1917" height="1020" alt="image" src="https://github.com/user-attachments/assets/763d36c1-8f60-4bd2-9901-4a1da09cd12a" />
+
+<img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/f4e460c7-d7df-46f6-ac8d-645aeae06ccd" />
+
+### 5. Integración con Big Picture
+
+<img width="1917" height="1077" alt="aa" src="https://github.com/user-attachments/assets/55e55988-6749-4673-ab26-7efb3003fb3e" />
+
+<img width="1917" height="1077" alt="ASDADASD" src="https://github.com/user-attachments/assets/3808bca5-ef79-4d78-9c1f-1fca03857067" />
+
+### 6. Vinculación de AppID / detección automática
+
+<img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/bb057d46-3946-4b83-842c-0f7171bf9fc2" />
 
 ---
 
