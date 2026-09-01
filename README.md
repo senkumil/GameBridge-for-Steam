@@ -160,22 +160,6 @@ Using externally generated achievement JSON files is **entirely optional**. User
 - **Progressive Simulation:** Simulate earning achievements gradually over time.
 - **Manual Tracking:** Adjust achievement progress and counts manually via sliders in Game Properties.
 
-### 📁 Configuring an Achievement JSON File
-
-If you do have compatible achievement JSON files (e.g. from GSE Saves or Goldberg), NativeGameLink reads them without modifying them. The default GSE Saves layout is:
-
-```text
-%APPDATA%\GSE Saves\<AppID>\achievements.json
-```
-
-You can configure the achievement source in three ways:
-
-1. **Automatic AppID lookup (Default):** Searches `%APPDATA%\GSE Saves\<AppID>\`, supported Goldberg locations, and configured global folders automatically.
-2. **Global folder:** Open NativeGameLink Settings and select a base folder containing one subfolder per Steam AppID.
-3. **Per-game override:** Right-click the shortcut → **Properties** → **Linked Game** and select an exact `achievements.json` file or directory.
-
----
-
 ## 🎖️ Steam Achievement Manager (SAM) for Official Steam Games
 
 What **is** integrated directly into the plugin is **Steam Achievement Manager (SAM)** functionality for managing achievements of **legitimately owned Steam games**:
