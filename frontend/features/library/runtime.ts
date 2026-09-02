@@ -43,6 +43,7 @@ let injectionGeneration = 0;
 let injectionInFlight: { doc: Document; steamAppId: string; generation: number } | null = null;
 const navigationController = new LibraryNavigationController();
 const linkedRenderRetryState = new WeakMap<Document, { generation: number; attempts: number }>();
+const routeMismatchRetryState = new WeakMap<Document, { generation: number; attempts: number }>();
 const MAX_LINKED_RENDER_RETRIES = 12;
 function isCurrentNavigation(doc: Document, generation: number): boolean {
 	return isUsableLibraryDocument(doc) && navigationController.isCurrent(doc, generation);
@@ -75,23 +76,15 @@ export function refreshLibraryArtwork(_appId?: number): void {
 }
 
 function renderLinkedPage(
-	doc: Document,
-	notice: Element,
-	data: SteamGameData,
-	steamAppId: string,
-	newsItems: NewsItem[],
-	friendResult: FriendCategories | null | undefined,
-	communityItems: CommunityContentItem[] | undefined,
-	generation: number,
+	doc: Document, notice: Element, data: SteamGameData, steamAppId: string,
+	newsItems: NewsItem[], friendResult: FriendCategories | null | undefined,
+	communityItems: CommunityContentItem[] | undefined, generation: number,
 ): boolean {
 	const rendered = renderLinkedGamePage(doc, notice, data, steamAppId, newsItems, friendResult, communityItems, {
 		shortcutAppId: currentInjectedShortcutAppId,
 		isCurrent: () => isCurrentRender(doc, steamAppId, generation),
 	});
 	if (rendered) {
-		// renderLinkedGamePage already verified current render ownership. Remove
-		// whichever loading stage belongs to this document; its route generation
-		// is intentionally independent from the render generation above.
 		completeLinkedShortcutLoading(doc);
 		linkedRenderRetryState.delete(doc);
 	}
@@ -118,9 +111,6 @@ export function cleanupInjection(doc: Document): void {
 	doc.querySelectorAll('[data-gdl-hidden]').forEach(element => element.removeAttribute('data-gdl-hidden'));
 }
 
-/** Finish a route change without touching any Steam-owned node. Native style
- * restoration happens synchronously while leaving the linked shortcut; this
- * deferred step only disposes listeners and removes NativeGameLink-owned chrome. */
 function cleanupOwnedLibraryChromeAfterRouteExit(doc: Document): void {
 	cancelLinkedShortcutLoading(doc);
 	finishLibraryRouteExit(doc);
@@ -266,7 +256,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		scheduleNavigationRetry(doc, navigationGeneration, 80);
 		return;
 	}
-	const routedShortcutAppId = findActiveShortcutAppId(doc, '');
+	const routedShortcutAppId = findActiveShortcutAppId(doc, gameTitle);
 	const routedApp = routedShortcutAppId ? getShortcutAppById(Number(routedShortcutAppId)) : null;
 	const routedTitle = String(routedApp?.display_name || routedApp?.m_strDisplayName || '').trim();
 	const routeMatchesGameTitle = Boolean(routedTitle && (looseMatchTitle(routedTitle, gameTitle) || normalizeTitle(routedTitle) === normalizeTitle(gameTitle)));
@@ -281,17 +271,27 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 
 	// Steam commits the visible notice and route URL in separate React turns.
 	// Only cancel and retry if the route definitely belongs to a different game.
+	const mismatchState = routeMismatchRetryState.get(doc);
+	const mismatchAttempts = mismatchState?.generation === navigationGeneration ? mismatchState.attempts + 1 : 1;
 	if (routedShortcutAppId && titleMatchedShortcutAppId
 		&& routedShortcutAppId !== titleMatchedShortcutAppId
 		&& !routeBelongsToGame) {
-		if (currentInjectedDocument === doc) clearCurrentInjection(doc);
-		restoreNativeLibraryStyles(doc);
-		if (hasOwnedLibraryChrome(doc)) scheduleNavigationCleanup(doc, navigationGeneration);
-		cancelLinkedShortcutLoading(doc, navigationGeneration);
-		scheduleNavigationRetry(doc, navigationGeneration, 80);
-		return;
+		if (mismatchAttempts <= 3) {
+			routeMismatchRetryState.set(doc, { generation: navigationGeneration, attempts: mismatchAttempts });
+			if (currentInjectedDocument === doc) clearCurrentInjection(doc);
+			restoreNativeLibraryStyles(doc);
+			if (hasOwnedLibraryChrome(doc)) scheduleNavigationCleanup(doc, navigationGeneration);
+			cancelLinkedShortcutLoading(doc, navigationGeneration);
+			scheduleNavigationRetry(doc, navigationGeneration, 80);
+			return;
+		}
+		// Route URL remained stale after 3 retries (common when returning from Big Picture);
+		// trust the visible DOM notice and proceed with the title-matched shortcut!
+		routeMismatchRetryState.delete(doc);
+	} else {
+		routeMismatchRetryState.delete(doc);
 	}
-	const activeShortcutAppId = (routeBelongsToGame && routedShortcutAppId) || routedShortcutAppId || titleMatchedShortcutAppId || (shortcutByName ? String(shortcutByName) : null);
+	const activeShortcutAppId = (routeBelongsToGame && routedShortcutAppId) || titleMatchedShortcutAppId || routedShortcutAppId || (shortcutByName ? String(shortcutByName) : null);
 	const normalizedActiveShortcutId = normalizedShortcutAppId(activeShortcutAppId);
 	const activeShortcutDismissed = Boolean(normalizedActiveShortcutId && isShortcutDismissed(normalizedActiveShortcutId));
 	const activeMapping = activeShortcutDismissed ? null : findMappingForShortcut(activeShortcutAppId, gameTitle);

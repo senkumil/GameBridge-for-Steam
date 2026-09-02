@@ -159,23 +159,29 @@ export function findShortcutAppIdByName(title: string): number | null {
 /** Resolve the shortcut ID represented by a Steam library document. */
 export function findActiveShortcutAppId(doc: Document, title: string): string | null {
 	const trimmedTitle = (title || '').trim();
-	const urls = [
+	const localUrls = [
 		String(doc.defaultView?.location?.href || ''),
 		String(doc.location?.href || ''),
-	];
-	if (typeof document !== 'undefined') {
-		urls.push(String((window as any).location?.href || ''));
-		urls.push(String(document.location?.href || ''));
-	}
+	].filter(Boolean);
+	const urls = localUrls.length > 0 ? localUrls : [
+		...(typeof document !== 'undefined' ? [String((window as any).location?.href || ''), String(document.location?.href || '')] : []),
+	].filter(Boolean);
 	for (const url of urls) {
 		const match = url.match(/(?:games\/details|library\/app|app)\/(\d+)/i);
 		if (match && Number(match[1]) >= SHORTCUT_THRESHOLD) {
 			const candidateId = Number(match[1]);
-			if (getShortcutAppById(candidateId)) return String(candidateId);
 			if (trimmedTitle) {
 				const ids = findShortcutAppIdsByName(trimmedTitle);
 				if (ids.includes(candidateId)) return String(candidateId);
+				const app = getShortcutAppById(candidateId);
+				const name = String(app?.display_name || app?.m_strDisplayName || '').trim();
+				if (name && (looseMatchTitle(name, trimmedTitle) || normalizeTitle(name) === normalizeTitle(trimmedTitle))) {
+					return String(candidateId);
+				}
+				// Candidate belongs to another game: skip this stale route URL
+				continue;
 			}
+			if (getShortcutAppById(candidateId)) return String(candidateId);
 			return match[1];
 		}
 	}

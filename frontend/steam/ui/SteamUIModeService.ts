@@ -16,6 +16,7 @@ class SteamUIModeService {
 	private currentModeNumber: number = 7;
 	private listeners = new Set<UIModeListener>();
 	private unregisterNative: (() => void) | null = null;
+	private pollTimer: ReturnType<typeof setInterval> | null = null;
 	private initialized = false;
 
 	public initialize(): void {
@@ -46,9 +47,20 @@ class SteamUIModeService {
 
 		// 2. Initial surface check
 		this.detectFromEnvironment();
+
+		// 3. Periodic fallback poll to detect mode transitions when native callbacks miss
+		if (!this.pollTimer) {
+			this.pollTimer = setInterval(() => {
+				this.checkCurrentMode();
+			}, 1000);
+		}
 	}
 
 	public dispose(): void {
+		if (this.pollTimer) {
+			clearInterval(this.pollTimer);
+			this.pollTimer = null;
+		}
 		if (this.unregisterNative) {
 			try { this.unregisterNative(); } catch {}
 			this.unregisterNative = null;
@@ -104,12 +116,32 @@ class SteamUIModeService {
 		}
 	}
 
+	public checkCurrentMode(): void {
+		try {
+			const steamUi = (window as any).SteamClient?.UI;
+			if (typeof steamUi?.GetUIMode === 'function') {
+				void steamUi.GetUIMode().then((mode: number | undefined) => {
+					if (mode !== undefined) {
+						this.handleModeNumberChange(Number(mode));
+					}
+				}).catch(() => {
+					this.detectFromEnvironment();
+				});
+			} else {
+				this.detectFromEnvironment();
+			}
+		} catch {
+			this.detectFromEnvironment();
+		}
+	}
+
 	private detectFromEnvironment(): void {
 		if (typeof document !== 'undefined') {
-			if (this.isDocumentGamepadSurface(document)) {
-				this.currentMode = 'gamepad';
-				this.currentModeNumber = 4;
-				return;
+			const isGamepad = this.isDocumentGamepadSurface(document);
+			if (isGamepad && this.currentMode !== 'gamepad') {
+				this.handleModeNumberChange(4);
+			} else if (!isGamepad && this.currentMode !== 'desktop') {
+				this.handleModeNumberChange(7);
 			}
 		}
 	}
