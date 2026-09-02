@@ -316,11 +316,14 @@ Si NativeGameLink for Steam ha mejorado tu Biblioteca, puedes apoyar su desarrol
 
 ---
 
-## 💖 Créditos y Agradecimientos
+## 💖 Créditos y Agradecimientos Especiales
 
-- [retrotoolsdev-wq/game-data-linker](https://github.com/retrotoolsdev-wq/game-data-linker): Un agradecimiento especial al proyecto y autores originales por ser pioneros en el concepto de vincular datos de Steam a accesos directos en Millennium.
-- [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager): Un agradecimiento especial a Rick (Gibbed) y a los colaboradores de SteamAchievementManager por su trabajo fundamental e investigación histórica en la gestión de estadísticas y logros de Steam.
-- [xan105/Achievement-Watcher](https://github.com/xan105/Achievement-Watcher): Un agradecimiento especial a xan105 por inspirar ideas en la lectura de archivos de logros locales y notificaciones en tiempo real.
+NativeGameLink for Steam se apoya en el trabajo pionero, el espíritu de código abierto y la dedicación de desarrolladores excepcionales de la comunidad. Un agradecimiento sincero y muy especial a:
+
+- **[retrotoolsdev-wq/game-data-linker](https://github.com/retrotoolsdev-wq/game-data-linker):** Por crear la visión original del proyecto y ser los primeros en demostrar que era posible integrar metadatos oficiales de Steam, ilustraciones y centros comunitarios en accesos directos dentro de Millennium. Su trabajo sentó las bases de esta evolución.
+- **[gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) (Rick / Gibbed y colaboradores):** Por su legendaria investigación en la arquitectura interna de estadísticas y logros del cliente de Steam (`ISteamUserStats`). Su labor ha sido el estándar de oro en la gestión de logros de Steam durante más de una década.
+- **[xan105/Achievement-Watcher](https://github.com/xan105/Achievement-Watcher) (xan105):** Por su brillante e innovador enfoque en el análisis en tiempo real de archivos de logros locales, la deduplicación de eventos y las notificaciones emergentes con sonido oficial. Ha sido una enorme fuente de inspiración técnica para el ecosistema.
+- **[k0d13/steam-non-steam-playtimes](https://github.com/k0d13/steam-non-steam-playtimes) (k0d13):** Por idear y perfeccionar soluciones inteligentes para el seguimiento y persistencia local de horas de juego en aplicaciones No-Steam, resolviendo una de las funciones más solicitadas por la comunidad de PC.
 
 ---
 

@@ -302,9 +302,12 @@ If NativeGameLink for Steam has improved your library, you can support its conti
 
 ## 💖 Credits & Special Thanks
 
-- [retrotoolsdev-wq/game-data-linker](https://github.com/retrotoolsdev-wq/game-data-linker): Special thanks to the original project and creators for pioneering the concept of linking non-Steam games to real Steam game metadata in Millennium.
-- [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager): Special thanks to Rick (Gibbed) and contributors for their foundational work and research on Steam client statistics and achievement management.
-- [xan105/Achievement-Watcher](https://github.com/xan105/Achievement-Watcher): Special thanks to xan105 for inspiring ideas in local achievement file parsing and real-time notification tracking.
+NativeGameLink for Steam is built upon the ingenuity, open-source spirit, and foundational work of exceptional developers across the community. A sincere and heartfelt thank you to:
+
+- **[retrotoolsdev-wq/game-data-linker](https://github.com/retrotoolsdev-wq/game-data-linker):** For creating the original project vision and pioneering the concept of bridging real Steam metadata, artwork, and community hubs to non-Steam shortcuts via Millennium. Their foundational codebase established the path for this evolution.
+- **[gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) (Rick / Gibbed & contributors):** For their legendary research into Steam's client statistics and achievement architecture (`ISteamUserStats`). Their work has been the gold standard for Steam achievement tooling for over a decade.
+- **[xan105/Achievement-Watcher](https://github.com/xan105/Achievement-Watcher) (xan105):** For a brilliant, forward-thinking approach to local achievement file parsing, state change deduplication, and sound-enabled overlay toast notifications. A major source of technical inspiration for modern achievement UX.
+- **[k0d13/steam-non-steam-playtimes](https://github.com/k0d13/steam-non-steam-playtimes) (k0d13):** For designing clever, resilient session tracking and local storage persistence for non-Steam playtime, addressing one of the most requested features in the Steam ecosystem.
 
 ---
 
