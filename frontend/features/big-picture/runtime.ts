@@ -281,12 +281,36 @@ function setBigPicturePlaytimeField(target: any, key: BigPicturePlaytimeKey, val
 	}
 }
 
-function hideBigPictureShortcutTab(doc: Document): void {
-	const style = doc.getElementById('gdl-big-picture-hide-shortcut-tab');
-	if (style) style.remove();
-	for (const el of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-hidden-shortcut-tab="1"]'))) {
-		delete el.dataset.gdlHiddenShortcutTab;
-		el.style.removeProperty('display');
+const NON_STEAM_TAB_PATTERNS = ['no de steam', 'non-steam', 'non steam', 'no steam', 'shortcuts', 'accesos directos', 'hors steam', 'steam-fremd', 'fora do steam', 'não steam', 'nao steam', 'не из steam', '非steam', '비 steam'];
+
+function isNonSteamTabElement(el: HTMLElement): boolean {
+	const raw = el.textContent || '';
+	const clean = raw.replace(/\d+/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+	if (clean && NON_STEAM_TAB_PATTERNS.some(pat => clean === pat || clean.startsWith(pat) || clean.includes(pat))) return true;
+	const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+	if (aria && NON_STEAM_TAB_PATTERNS.some(pat => aria === pat || aria.includes(pat))) return true;
+	for (const key of Object.keys(el)) {
+		if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
+			let fiber = (el as any)[key];
+			for (let depth = 0; fiber && depth < 8; depth += 1, fiber = fiber.return) {
+				const props = fiber.memoizedProps || fiber.pendingProps;
+				const tabId = String(props?.tab?.id || props?.id || props?.filter || props?.key || '').toLowerCase();
+				if (tabId.includes('shortcut') || tabId.includes('nonsteam')) return true;
+			}
+		}
+	}
+	return false;
+}
+
+export function hideBigPictureShortcutTab(doc: Document): void {
+	if (!doc.body) return;
+	const selector = '[role="tab"], [class*="TabItem"], [class*="tabItem"], [class*="LibraryTab"], [class*="FilterTab"], [class*="tab_"], [class*="Tab_"], [class*="TopBar"] button, [class*="TabBar"] button';
+	for (const el of Array.from(doc.querySelectorAll<HTMLElement>(selector))) {
+		if (isNonSteamTabElement(el)) {
+			el.style.setProperty('display', 'none', 'important');
+			el.dataset.gdlHiddenShortcutTab = '1';
+			el.setAttribute('aria-hidden', 'true');
+		}
 	}
 }
 
@@ -427,6 +451,13 @@ export function activateBigPicture(doc: Document): void {
 }
 
 export function deactivateBigPicture(): void {
+	if (gdlBigPictureDoc?.body) {
+		for (const el of Array.from(gdlBigPictureDoc.querySelectorAll<HTMLElement>('[data-gdl-hidden-shortcut-tab="1"]'))) {
+			delete el.dataset.gdlHiddenShortcutTab;
+			el.style.removeProperty('display');
+			el.removeAttribute('aria-hidden');
+		}
+	}
 	disposeBigPictureShortcutDetails(gdlBigPictureDoc);
 	disposeBigPictureAchievementCards(gdlBigPictureDoc);
 	gdlBigPictureActive = false;

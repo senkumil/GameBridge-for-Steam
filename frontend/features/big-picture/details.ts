@@ -1,51 +1,38 @@
-import type {
-	CommunityContentItem,
-	LocalAchievementData,
-	LocalAchievementItem,
-	NewsItem,
-	SteamCommunityItemsCatalog,
-	SteamGameData,
-} from '../../domain/types';
 import { backendLog } from '../../api/backend';
 import { getCachedGameData, getGameData } from '../../core/game-data';
-import { steamStringList } from '../../core/steam-game-data';
-import { steamGameMainPageUrl } from '../../core/steam-links';
-import { escapeAttr, escapeHtml, normalizeTitle } from '../../core/text';
-import { gdlText, loc, steamIntlLocale, steamLanguageSync } from '../../steam/localization';
-import { findMappingForTitle } from '../../core/mappings';
-import { getMappedShortcuts, getSteamAppStore, findShortcutAppIdByName, getShortcutAppById, toSignedShortcutAppId } from '../../steam/shortcuts';
+import { normalizeTitle } from '../../core/text';
+import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
+import { getMappedShortcuts, getSteamAppStore, getShortcutAppById, toSignedShortcutAppId } from '../../steam/shortcuts';
 import { findMappingForShortcut } from '../shortcuts/registry';
 import { getCachedLocalAchievementsForGame } from '../achievements/cache';
 import { fetchLocalAchievementData } from '../achievements/service';
-import { compareEarnedAchievementsForDisplay, compareLockedAchievementsForDisplay, highlightedAchievementNames } from '../achievements/rarity';
+import { openBigPictureAchievementsScreen } from './achievements-view';
 import { getCachedOfficialCommunityItems, getOfficialCommunityItems } from '../library/community-items';
-import {
-	getCachedCommunityContent,
-	getCachedNews,
-	getCommunityContent,
-	getNews,
-	eventTypeLabel,
-	isPatchNoteItem,
-	newsExcerpt,
-} from '../library/news';
-import { type LocalActivityPost, loadLocalActivityPosts } from '../library/social/feed';
-import { ensureNativePanelRoot, removeBigPictureFallbackPanel } from './panel-mount';
+import { getCachedCommunityContent, getCachedNews, getCommunityContent, getNews } from '../library/news';
+import { type LocalActivityPost, saveLocalActivityPost, getCurrentSteamUser } from '../library/social/feed';
+import { ensureNativePanelRoot, hideBigPictureNonSteamNotices, removeBigPictureFallbackPanel } from './panel-mount';
 import { ensureBigPictureDetailsStyles } from './styles';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
 import { gamepadFeatureFlags } from '../gamepad/flags';
 import { mountSingleNativeAchievement } from '../gamepad/achievements/SingleNativeAchievement';
-import { getFocusableElements, installBigPictureGamepadNavigation } from './gamepad-nav';
-
-type MappedShortcut = { id: number; title: string; steamAppId: string };
-type BigPictureTab = 'activity' | 'stuff' | 'community' | 'info';
-
-interface BigPictureDetailData {
-	game: SteamGameData | null;
-	achievements: LocalAchievementData | null;
-	news: NewsItem[];
-	community: CommunityContentItem[];
-	cards: SteamCommunityItemsCatalog | null;
-}
+import { getFocusableElements, installBigPictureGamepadNavigation, disposeBigPictureGamepadNavigation } from './gamepad-nav';
+import { syncBigPicturePlaybarEnhancements, removeBigPicturePlaybarEnhancements } from './playbar';
+import { getCachedFriendData, getFriendData } from '../library/social/friends';
+import { cachePersona, hasCachedPersona } from '../library/social/personas';
+import { fetchFriendPersonasBackend } from '../../api/backend';
+import { linkedShortcutPortrait } from '../library/artwork';
+import { openBigPictureCardModal, openBigPictureNewsModal } from './news-modal';
+import {
+	renderActivity,
+	renderAchievements,
+	renderCards,
+	renderMediaAndNotes,
+	renderCommunity,
+	renderInfo,
+	type BigPictureDetailData,
+	type BigPictureTab,
+	type MappedShortcut,
+} from './tab-renderers';
 
 interface BigPictureDetailState {
 	shortcut: MappedShortcut;
@@ -145,12 +132,17 @@ function isNativeSteamGameActive(doc: Document): boolean {
 		shortcutIds.add(String(unsigned));
 	}
 
-	const stores = [
-		(doc.defaultView as any)?.appStore,
-		getSteamAppStore(),
-	].filter(Boolean);
+	const domAppId = findActiveAppIdFromDOM(doc);
+	if (domAppId && domAppId > 0 && domAppId < 2147483648 && !shortcutIds.has(String(domAppId))) return true;
 
-	for (const store of stores) {
+	for (const el of Array.from(doc.querySelectorAll<HTMLElement>('[data-appid],[data-app-id],[data-app-id-value],a[href*="/app/"]'))) {
+		if (el.closest('#gdl-bp-detail-root, #gdl-bp-detail-fallback-panel')) continue;
+		const raw = el.getAttribute('data-appid') || el.getAttribute('data-app-id') || el.getAttribute('data-app-id-value') || el.getAttribute('href')?.match(/\/app\/(\d+)/)?.[1];
+		const num = Number(raw);
+		if (Number.isFinite(num) && num > 0 && num < 2147483648 && !shortcutIds.has(String(num))) return true;
+	}
+
+	for (const store of [(doc.defaultView as any)?.appStore, getSteamAppStore()].filter(Boolean)) {
 		for (const key of Object.keys(store || {})) {
 			if (!/(selected|current|active|focused).*(app|game)|(?:app|game).*(selected|current|active|focused)/i.test(key)) continue;
 			let value: any;
@@ -160,16 +152,10 @@ function isNativeSteamGameActive(doc: Document): boolean {
 			if (Number.isFinite(rawAppId)) {
 				const unsignedAppId = rawAppId < 0 ? (rawAppId >>> 0) : rawAppId;
 				const signedAppId = rawAppId > 2147483647 ? toSignedShortcutAppId(rawAppId) : rawAppId;
-				if (shortcutIds.has(String(rawAppId)) || shortcutIds.has(String(unsignedAppId)) || shortcutIds.has(String(signedAppId))) {
-					return false;
-				}
+				if (shortcutIds.has(String(rawAppId)) || shortcutIds.has(String(unsignedAppId)) || shortcutIds.has(String(signedAppId))) return false;
 			}
 			if (Number.isFinite(rawAppId) && rawAppId > 0 && rawAppId < 2147483648) {
-				const isShortcut = Boolean(
-					Number(value.app_type || 0) === 1073741824 ||
-					(typeof value.BIsShortcut === 'function' && value.BIsShortcut()) ||
-					shortcutIds.has(String(rawAppId))
-				);
+				const isShortcut = Boolean(Number(value.app_type || 0) === 1073741824 || (typeof value.BIsShortcut === 'function' && value.BIsShortcut()) || shortcutIds.has(String(rawAppId)));
 				if (!isShortcut) return true;
 			}
 		}
@@ -177,19 +163,12 @@ function isNativeSteamGameActive(doc: Document): boolean {
 
 	const href = decodeURIComponent(String(doc.defaultView?.location?.href || doc.location?.href || '')).toLocaleLowerCase();
 	const appMatch = href.match(/(?:\/app\/|\/details\/|appid=|\/game\/)(\d+)/);
-	if (appMatch) {
-		const num = Number(appMatch[1]);
-		if (num > 0 && num < 2147483648 && !shortcutIds.has(String(num))) {
-			return true;
-		}
-	}
-
-	return false;
+	return Boolean(appMatch && Number(appMatch[1]) > 0 && Number(appMatch[1]) < 2147483648 && !shortcutIds.has(String(Number(appMatch[1]))));
 }
 
 function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
+	if (!doc.body || isNativeSteamGameActive(doc)) return null;
 	const shortcuts = getMappedShortcuts();
-	if (!doc.body) return null;
 
 	// 1. Authoritative AppID from DOM / React Fiber / Route
 	const activeDomAppId = findActiveAppIdFromDOM(doc);
@@ -198,6 +177,7 @@ function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
 		const signed = activeDomAppId > 2147483647 ? toSignedShortcutAppId(activeDomAppId) : activeDomAppId;
 		const match = shortcuts.find(s => s.id === activeDomAppId || s.id === unsigned || s.id === signed);
 		if (match) return match;
+		if (activeDomAppId > 0 && activeDomAppId < 2147483648) return null;
 
 		const app = getShortcutAppById(activeDomAppId);
 		const title = String(app?.display_name || app?.m_strDisplayName || '').trim();
@@ -205,6 +185,7 @@ function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
 		if (mappedAppId && /^\d+$/.test(mappedAppId)) {
 			return { id: unsigned, title: title || `App ${unsigned}`, steamAppId: mappedAppId };
 		}
+		return null;
 	}
 
 	const byLongestTitle = [...shortcuts].sort((a, b) => b.title.length - a.title.length);
@@ -229,14 +210,9 @@ function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
 		if (!alt) continue;
 		for (const shortcut of byLongestTitle) {
 			const sTitle = normalizeTitle(shortcut.title);
-			if (sTitle && (alt === sTitle || alt.includes(sTitle) || sTitle.includes(alt))) {
+			if (sTitle && alt === sTitle) {
 				return shortcut;
 			}
-		}
-		const mappedAppId = findMappingForTitle(rawAlt);
-		if (mappedAppId) {
-			const numAppId = findShortcutAppIdByName(rawAlt) || 0;
-			return { id: numAppId, title: rawAlt, steamAppId: mappedAppId };
 		}
 	}
 
@@ -251,14 +227,9 @@ function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
 		if (!headingText) continue;
 		for (const shortcut of byLongestTitle) {
 			const sTitle = normalizeTitle(shortcut.title);
-			if (sTitle && (headingText === sTitle || headingText.includes(sTitle) || sTitle.includes(headingText))) {
+			if (sTitle && headingText === sTitle) {
 				return shortcut;
 			}
-		}
-		const mappedAppId = findMappingForTitle(rawText);
-		if (mappedAppId) {
-			const numAppId = findShortcutAppIdByName(rawText) || 0;
-			return { id: numAppId, title: rawText, steamAppId: mappedAppId };
 		}
 	}
 
@@ -391,6 +362,7 @@ function cachedBigPictureDetailData(shortcut: MappedShortcut, language: string):
 		news: getCachedNews(shortcut.steamAppId, language)?.data || [],
 		community: getCachedCommunityContent(shortcut.steamAppId, language)?.data || [],
 		cards: getCachedOfficialCommunityItems(shortcut.steamAppId, language)?.data || null,
+		friends: getCachedFriendData(shortcut.steamAppId)?.data || null,
 	};
 }
 
@@ -424,242 +396,42 @@ function startDetailHydration(doc: Document, state: BigPictureDetailState): void
 	applyResource('news', getNews(state.shortcut.steamAppId, state.language));
 	applyResource('community', getCommunityContent(state.shortcut.steamAppId, state.language));
 	applyResource('cards', getOfficialCommunityItems(doc, state.shortcut.steamAppId, state.language));
-}
-
-function wrenchToolSvg(): string {
-	return `<svg viewBox="0 0 48 48" width="36" height="36" aria-hidden="true" style="display:block;color:#8f98a0;flex-shrink:0;"><path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M14.6 4.2a8.5 8.5 0 0 0-7.2 12.3l-5 5a2.5 2.5 0 0 0 0 3.5l3.5 3.5a2.5 2.5 0 0 0 3.5 0l5-5a8.5 8.5 0 0 0 12.3-7.2c0-1.4-.3-2.7-.9-3.8l-4.5 4.5-3.2-.8-.8-3.2 4.5-4.5a8.4 8.4 0 0 0-7.7-4.3Zm18.8 18.8a8.5 8.5 0 0 0-3.8.9l4.5 4.5-.8 3.2-3.2.8-4.5-4.5a8.5 8.5 0 0 0-7.2 12.3l-5 5a2.5 2.5 0 0 0 0 3.5l3.5 3.5a2.5 2.5 0 0 0 3.5 0l5-5a8.5 8.5 0 0 0 12.3-7.2 8.4 8.4 0 0 0-4.3-7.7Z"/></svg>`;
-}
-
-function completionMedalSvg(): string {
-	return `<svg width="40" height="40" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:block;"><path stroke="url(#gdl-bp-medal-grad)" fill="url(#gdl-bp-medal-grad)" d="M10.18 10.03L10.39 9.81V5.53H14.6l.22-.22L18 2.07l3.18 3.24.22.22h4.21v4.28l.21.22 2.74 2.78-2.74 2.78-.21.22v4.28h-4.21l-.22.22L18 23.54l-3.18-3.23-.22-.23H10.39v-4.28l-.21-.22-2.74-2.78 2.74-2.8zM14.74 28.03L11.56 33.42 9.85 29.95l-.2-.42H6.29l2.39-4.17h3.43l2.63 2.67zm12.08 1.5l-.2-.42-1.71 3.48-3.18-5.39 2.63-2.67h3.43l2.39 4.17h-3.36z" stroke-width="1.5"/><circle stroke="#FFAB2C" fill="#FFC82C" cx="18" cy="13" r="5.5"/><defs><linearGradient id="gdl-bp-medal-grad" x1="7.08" y1="3.72" x2="33.67" y2="25.07" gradientUnits="userSpaceOnUse"><stop stop-color="#0056D6"/><stop offset="1" stop-color="#1A9FFF"/></linearGradient></defs></svg>`;
-}
-
-function featureSvg(kind: 'person' | 'achievement' | 'cloud' | 'family' | 'controller'): string {
-	switch (kind) {
-		case 'person': return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
-		case 'achievement': return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z"/></svg>';
-		case 'cloud': return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/></svg>';
-		case 'family': return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>';
-		case 'controller': default: return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H9v2H8v-2H6v-1h2v-2h1v2h2v1zm4.5 2c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm3-3c-.83 0-1.5-.67-1.5-1.5S17.67 9 18.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>';
-	}
-}
-
-function formatBigPictureFeedDate(ts: number): string {
-	if (!ts || ts <= 0) return gdlText('recent', 'Recent').toUpperCase();
-	const d = new Date(ts * 1000);
-	const now = new Date();
-	if (d.toDateString() === now.toDateString()) return gdlText('today', 'Today').toUpperCase();
-	const yesterday = new Date(now);
-	yesterday.setDate(now.getDate() - 1);
-	if (d.toDateString() === yesterday.toDateString()) return gdlText('yesterday', 'Yesterday').toUpperCase();
-	const isCurrentYear = d.getFullYear() === now.getFullYear();
-	try {
-		const formatted = new Intl.DateTimeFormat(steamIntlLocale(), isCurrentYear
-			? { day: 'numeric', month: 'long' }
-			: { day: 'numeric', month: 'short', year: 'numeric' }
-		).format(d);
-		return formatted.replace(/\./g, '').trim().toUpperCase();
-	} catch {
-		return d.toLocaleDateString(steamIntlLocale()).toUpperCase();
-	}
-}
-
-type BigPictureFeedItem =
-	| { type: 'post'; post: LocalActivityPost; date: number }
-	| { type: 'news'; item: NewsItem; date: number };
-
-function renderActivity(data: BigPictureDetailData, shortcut: MappedShortcut, hydrationStarted = false): string {
-	const localPosts = loadLocalActivityPosts(shortcut.steamAppId, String(shortcut.id));
-	const sortedNews = (Array.isArray(data.news) ? [...data.news] : [])
-		.filter(item => item && item.title && Number(item.date || 0) > 0)
-		.sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
-
-	const allItems: BigPictureFeedItem[] = [
-		...localPosts.map(p => ({ type: 'post' as const, post: p, date: p.timestamp })),
-		...sortedNews.slice(0, 16).map(item => ({ type: 'news' as const, item, date: Number(item.date || 0) })),
-	].sort((a, b) => b.date - a.date);
-
-	if (allItems.length === 0) {
-		if (!hydrationStarted) return `<div class="gdl-bp-loading">${escapeHtml(loc('Loading', 'Loading…'))}</div>`;
-		return `<div class="gdl-bp-empty">${escapeHtml(loc('AppActivity_NoActivity', gdlText('no_recent_activity', 'No recent activity.')))}</div>`;
-	}
-
-	const groups: { dateLabel: string; items: BigPictureFeedItem[] }[] = [];
-	const map = new Map<string, BigPictureFeedItem[]>();
-	for (const entry of allItems) {
-		const label = formatBigPictureFeedDate(entry.date);
-		if (!map.has(label)) {
-			map.set(label, []);
-			groups.push({ dateLabel: label, items: map.get(label)! });
-		}
-		map.get(label)!.push(entry);
-	}
-
-	let feedHtml = '';
-	for (const group of groups) {
-		feedHtml += `<div class="gdl-bp-feed-group">
-			<div class="gdl-bp-date-heading">${escapeHtml(group.dateLabel)}</div>
-			<div class="gdl-bp-feed-list">`;
-		for (const entry of group.items) {
-			if (entry.type === 'post') {
-				const p = entry.post;
-				feedHtml += `
-					<div class="gdl-bp-feed-card Focusable" tabindex="0" role="button" data-focusable="true">
-						<div class="gdl-bp-feed-icon-wrap"><img class="gdl-bp-feed-avatar" src="${escapeAttr(p.user_avatar)}" alt="" /></div>
-						<div class="gdl-bp-feed-body">
-							<div class="gdl-bp-feed-eyebrow">${escapeHtml(gdlText('user_status', 'Status Post').toUpperCase())}</div>
-							<div class="gdl-bp-feed-title">${escapeHtml(p.user_name)}</div>
-							<div class="gdl-bp-feed-desc">${escapeHtml(p.text)}</div>
-						</div>
-					</div>`;
-			} else {
-				const item = entry.item;
-				const eventType = Number(item.event_type || 0);
-				const isPatch = eventType === 0 && isPatchNoteItem(item);
-				const label = eventType > 0
-					? eventTypeLabel(eventType)
-					: (isPatch ? loc('AppActivity_MinorUpdate', 'ACTUALIZACIÓN MENOR / NOTAS DE PARCHE') : (item.feedlabel || gdlText('feed_news', 'NOTICIAS')));
-				const preview = newsExcerpt(item.contents || '', 220);
-				const thumbUrl = item.image || data.game?.header_image || data.game?.background || data.game?.background_raw || '';
-				const comments = Number((item as any).commentcount || (item as any).comments || 0);
-				const upvotes = Number((item as any).upvotes || (item as any).votes || 0);
-				const statsHtml = (comments > 0 || upvotes > 0)
-					? `<div class="gdl-bp-feed-meta">${comments > 0 ? `<span>${comments.toLocaleString(steamIntlLocale())} 💬</span>` : ''}${upvotes > 0 ? `<span>${upvotes.toLocaleString(steamIntlLocale())} 👍</span>` : ''}</div>`
-					: '';
-
-				feedHtml += `
-					<a class="gdl-bp-feed-card Focusable" href="${escapeAttr(item.url || '#')}" ${item.url ? 'data-gdl-bp-external="1"' : ''} tabindex="0" role="button" data-focusable="true">
-						${thumbUrl
-							? `<div class="gdl-bp-feed-thumb-wrap"><img class="gdl-bp-feed-thumb" src="${escapeAttr(thumbUrl)}" alt="" loading="lazy" /></div>`
-							: `<div class="gdl-bp-feed-icon-wrap">${wrenchToolSvg()}</div>`
-						}
-						<div class="gdl-bp-feed-body">
-							<div class="gdl-bp-feed-eyebrow">${escapeHtml(label.toUpperCase())}</div>
-							<div class="gdl-bp-feed-title">${escapeHtml(item.title)}</div>
-							${preview ? `<div class="gdl-bp-feed-desc">${escapeHtml(preview)}</div>` : ''}
-							${statsHtml}
-						</div>
-					</a>`;
+	applyResource('friends', getFriendData(state.shortcut.steamAppId).then(async res => {
+		const friendData = res.data;
+		if (friendData && friendData.totalCount > 0) {
+			const visibleIds = [
+				...friendData.recentlyPlayed.map(f => f.steamid),
+				...friendData.previouslyPlayed.map(f => f.steamid),
+				...(friendData.wishlisted || []).map(f => f.steamid),
+			];
+			const idsToFetch = [...new Set(visibleIds)].filter(id => !hasCachedPersona(id)).slice(0, 24);
+			if (idsToFetch.length > 0) {
+				try {
+					const raw = await fetchFriendPersonasBackend({ steam_ids_csv: idsToFetch.join(',') });
+					const personas = JSON.parse(raw);
+					if (Array.isArray(personas)) {
+						for (const p of personas) cachePersona(p);
+					}
+				} catch {}
 			}
 		}
-		feedHtml += '</div></div>';
-	}
-
-	return `<div class="gdl-bp-activity-feed">${feedHtml}</div>`;
+		return friendData;
+	}));
 }
-
-function renderAchievements(data: LocalAchievementData | null): string {
-	const title = escapeHtml(loc('AppDetails_SectionTitle_Achievements', gdlText('achievements_label', 'Achievements')));
-	if (!data) return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${title}</h2><div class="gdl-bp-empty">${escapeHtml(loc('Loading', 'Loading…'))}</div></section>`;
-	if (data.total <= 0) return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${title}</h2><div class="gdl-bp-empty">${escapeHtml(gdlText('no_achievements', 'No achievements found.'))}</div></section>`;
-	const pct = Math.max(0, Math.min(100, Math.round((data.unlocked * 100) / Math.max(1, data.total))));
-	const complete = data.unlocked >= data.total;
-	const earned = data.achievements.filter(item => item.earned).sort(compareEarnedAchievementsForDisplay);
-	const locked = data.achievements.filter(item => !item.earned).sort(compareLockedAchievementsForDisplay);
-	const ordered = [...earned, ...locked];
-	const featured = ordered[0] || null;
-	const strip = ordered.filter(item => item !== featured).slice(0, 9);
-	const highlightedNames = highlightedAchievementNames(earned);
-	const isHighlighted = (item: LocalAchievementItem): boolean => item.earned && highlightedNames.has(String(item.name));
-	const progressLabel = complete
-		? gdlText('all_achievements_unlocked', 'You have unlocked all achievements! {unlocked}/{total}', { unlocked: data.unlocked, total: data.total })
-		: loc('AppDetails_PlayerUnlockedPercent', 'You have unlocked %1$s/%2$s').replace('%1$s', String(data.unlocked)).replace('%2$s', String(data.total));
-	return `<section class="gdl-bp-section">
-		<h2 class="gdl-bp-section-title">${title}</h2>
-		<div class="gdl-bp-achievements-shell">
-			<div class="gdl-bp-ach-progress">
-				${complete ? `<div class="gdl-bp-medal">${completionMedalSvg()}</div>` : '<div></div>'}
-				<div class="gdl-bp-ach-progress-copy"><div class="gdl-bp-ach-progress-label"><strong>${escapeHtml(progressLabel)}</strong> <span>(${pct}%)</span></div><div class="gdl-bp-progress-track"><div class="gdl-bp-progress-fill" style="width:${pct}%"></div></div></div>
-			</div>
-			<div class="gdl-bp-ach-strip">
-				${featured ? `<div class="gdl-bp-ach-featured Focusable${isHighlighted(featured) ? ' is-rare' : ''}" tabindex="0" role="button" data-focusable="true"><div class="gdl-bp-ach-img-frame${isHighlighted(featured) ? ' is-rare' : ''}"><div class="gdl-bp-ach-rare-glow"></div><div class="gdl-bp-ach-rare-ring"></div><div class="gdl-bp-ach-rare-beam"></div><img class="gdl-bp-ach-img" src="${escapeAttr(featured.earned ? featured.icon : (featured.icon_gray || featured.icon))}" alt=""></div><div><strong>${escapeHtml(featured.display_name || featured.name)}</strong><p>${escapeHtml(featured.description || '')}</p><p>${Number(featured.global_percent || 0).toFixed(1)}% ${escapeHtml(gdlText('players_have_achievement', 'of players have this achievement'))}</p></div></div>` : '<div></div>'}
-				<div id="gdl-bp-native-achievement-mount" class="gdl-bp-native-achievement-mount"></div>
-				<div class="gdl-bp-ach-icons">${strip.map(item => `<div class="gdl-bp-ach-icon-frame Focusable${isHighlighted(item) ? ' is-rare' : ''}" tabindex="0" role="button" data-focusable="true" title="${escapeAttr(item.display_name || item.name)}"><div class="gdl-bp-ach-rare-glow"></div><div class="gdl-bp-ach-rare-ring"></div><div class="gdl-bp-ach-rare-beam"></div><img class="gdl-bp-ach-icon${!item.earned ? ' is-locked' : ''}" src="${escapeAttr(item.earned ? item.icon : (item.icon_gray || item.icon))}" alt=""></div>`).join('')}</div>
-			</div>
-		</div>
-	</section>`;
-}
-
-function renderCards(catalog: SteamCommunityItemsCatalog | null): string {
-	if (!catalog?.cards?.length) return '';
-	const badge = catalog.foil_badge || catalog.badges?.[0] || null;
-	return `<section class="gdl-bp-section">
-		<h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_TradingCards', gdlText('trading_cards', 'Trading Cards')))}</h2>
-		<div class="gdl-bp-cards-shell">
-			<div class="gdl-bp-badge-row">${badge?.image ? `<img class="gdl-bp-badge-img" src="${escapeAttr(badge.image)}" alt="">` : '<div class="gdl-bp-badge-img"></div>'}<div class="gdl-bp-badge-copy">${escapeHtml(badge?.title || gdlText('trading_cards', 'Trading Cards'))}<br>${escapeHtml(String((badge?.level || 0) * 100 || 100))} EXP</div></div>
-			<div class="gdl-bp-card-count">${catalog.cards.length} ${escapeHtml(loc('AppDetails_CardsToCollect', 'cards to collect'))}</div>
-			<div class="gdl-bp-card-row">${catalog.cards.slice(0, 10).map(card => `<img src="${escapeAttr(card.image)}" title="${escapeAttr(card.title || '')}" alt="">`).join('')}</div>
-		</div>
-	</section>`;
-}
-
-function renderMediaAndNotes(): string {
-	return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_Media', 'Media'))}</h2><div class="gdl-bp-media-box"><div class="gdl-bp-media-copy">${escapeHtml(loc('AppDetails_ScreenshotHint_Gamepad', 'You can take a screenshot while playing from the Steam overlay.'))}</div><button class="gdl-bp-action-button Focusable" type="button" tabindex="0" data-focusable="true">${escapeHtml(loc('AppDetails_GoToMediaLibrary', 'Go to my media library'))}</button></div></section>
-	<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_GameNotes', 'Notes'))}</h2><div class="gdl-bp-notes-box"><button class="gdl-bp-action-button Focusable" type="button" tabindex="0" data-focusable="true">✎ ${escapeHtml(loc('AppDetails_CreateNewNote', 'New note'))}</button></div></section>`;
-}
-
 function renderStuff(data: BigPictureDetailData): string {
 	return `${renderAchievements(data.achievements)}${renderCards(data.cards)}${renderMediaAndNotes()}`;
 }
 
-function fallbackCommunity(data: BigPictureDetailData): CommunityContentItem[] {
-	if (data.community.length) return data.community;
-	return (data.game?.screenshots || []).slice(0, 8).map((shot, index) => ({
-		type: 'screenshot',
-		label: loc('AppDetails_Community_Screenshot', 'Screenshot'),
-		image: shot.path_full || shot.path_thumbnail,
-		title: data.game?.name || `Screenshot ${index + 1}`,
-	}));
-}
-
-function renderCommunity(data: BigPictureDetailData): string {
-	const items = fallbackCommunity(data).filter(item => item.image).slice(0, 12);
-	if (items.length === 0) return `<div class="gdl-bp-empty">${escapeHtml(loc('AppDetails_Community_NoContent', 'No community content is available.'))}</div>`;
-	return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_Community', gdlText('community_content', 'Community Content')))}</h2><div class="gdl-bp-community-grid">${items.map(item => `<a class="gdl-bp-community-card Focusable" href="${escapeAttr(item.link || '#')}" ${item.link ? 'data-gdl-bp-external="1"' : ''} tabindex="0" role="button" data-focusable="true"><img class="gdl-bp-community-media" src="${escapeAttr(item.image)}" alt=""><div class="gdl-bp-community-title">${escapeHtml(item.title || item.label || '')}</div><div class="gdl-bp-community-author">${item.author_avatar ? `<img src="${escapeAttr(item.author_avatar)}" alt="">` : ''}<span>${escapeHtml(item.author_name || item.label || '')}</span></div></a>`).join('')}</div></section>`;
-}
-
-function hasCategory(game: SteamGameData | null, id: number): boolean {
-	return Boolean(Array.isArray(game?.categories) && game.categories.some(category => Number(category.id) === id));
-}
-
-function renderInfo(data: BigPictureDetailData, shortcut: MappedShortcut): string {
-	const game = data.game;
-	if (!game) return `<div class="gdl-bp-empty">${escapeHtml(loc('AppDetails_GameInfo', 'Game information'))}</div>`;
-	const developer = steamStringList(game.developers).join(', ');
-	const publisher = steamStringList(game.publishers).join(', ');
-	const franchise = steamStringList(game.franchises).join(', ');
-	const release = game.release_date?.date || '';
-	const portrait = game.capsule_image || game.capsule_imagev5 || game.header_image || '';
-	const features: Array<{ icon: 'person' | 'achievement' | 'cloud' | 'family' | 'controller'; label: string }> = [];
-	if (hasCategory(game, 2) || !hasCategory(game, 1)) features.push({ icon: 'person', label: loc('AppDetails_Feature_SinglePlayer', gdlText('single_player', 'Single-player')) });
-	if ((data.achievements?.total || game.achievements?.total || 0) > 0) features.push({ icon: 'achievement', label: loc('AppDetails_SectionTitle_Achievements', gdlText('achievements_label', 'Achievements')) });
-	features.push({ icon: 'cloud', label: loc('AppDetails_Feature_SteamCloud', gdlText('cloud_saves', 'Cloud saves')) });
-	features.push({ icon: 'family', label: loc('AppDetails_Feature_FamilySharing', gdlText('family_sharing', 'Family Sharing')) });
-	features.push({ icon: 'controller', label: loc('AppDetails_Feature_FullController', gdlText('full_controller', 'Full controller support')) });
-	const links = [
-		[loc('AppDetails_Links_Store', gdlText('store_page', 'Store page')), steamGameMainPageUrl(shortcut.steamAppId, game.is_delisted === true)],
-		[loc('AppDetails_Links_DLC', gdlText('dlc_links', 'DLC')), `https://store.steampowered.com/dlc/${shortcut.steamAppId}`],
-		[loc('AppDetails_Links_Community', gdlText('community_hub', 'Community hub')), `https://steamcommunity.com/app/${shortcut.steamAppId}`],
-		[loc('AppDetails_Links_PointsShop', gdlText('points_shop', 'Points Shop')), `https://store.steampowered.com/points/shop/app/${shortcut.steamAppId}`],
-		[loc('AppDetails_Link_Discussions', gdlText('discussions', 'Discussions')), `https://steamcommunity.com/app/${shortcut.steamAppId}/discussions/`],
-		[loc('AppDetails_Link_Guides', gdlText('guides', 'Guides')), `https://steamcommunity.com/app/${shortcut.steamAppId}/guides/`],
-		[loc('AppDetails_Link_Support', gdlText('support', 'Support')), `https://help.steampowered.com/en/wizard/HelpWithGame/?appid=${shortcut.steamAppId}`],
-	];
-	return `<section class="gdl-bp-section"><div class="gdl-bp-info-grid"><img class="gdl-bp-info-portrait" src="${escapeAttr(portrait)}" alt=""><div><div class="gdl-bp-info-description">${escapeHtml(game.short_description || '')}</div><div class="gdl-bp-info-meta">${developer ? `${escapeHtml(loc('AppDetails_Developer', gdlText('developer', 'Developer')))}: <strong>${escapeHtml(developer)}</strong><br>` : ''}${publisher ? `${escapeHtml(loc('AppDetails_Publisher', gdlText('publisher', 'Publisher')))}: <strong>${escapeHtml(publisher)}</strong><br>` : ''}${franchise ? `${escapeHtml(loc('AppDetails_Franchise', gdlText('franchise', 'Franchise')))}: <strong>${escapeHtml(franchise)}</strong><br>` : ''}${release ? `<br>${escapeHtml(loc('AppDetails_ReleaseDate', gdlText('release_date', 'Release date')))}: <strong>${escapeHtml(release)}</strong>` : ''}</div></div><div>${features.map(feature => `<div class="gdl-bp-feature">${featureSvg(feature.icon)}<span>${escapeHtml(feature.label)}</span></div>`).join('')}</div></div><div class="gdl-bp-info-links">${links.map(([label, url]) => `<a class="gdl-bp-info-link Focusable" href="${escapeAttr(url)}" data-gdl-bp-external="1" tabindex="0" role="button" data-focusable="true">${escapeHtml(label)}</a>`).join('')}</div></section>`;
-}
-
 function markupSignature(tab: BigPictureTab, markup: string): string {
 	let hash = 2166136261;
-	for (let index = 0; index < markup.length; index += 1) {
-		hash ^= markup.charCodeAt(index);
-		hash = Math.imul(hash, 16777619);
-	}
+	for (let i = 0; i < markup.length; i++) hash = Math.imul(hash ^ markup.charCodeAt(i), 16777619);
 	return `${tab}:${markup.length}:${(hash >>> 0).toString(16)}`;
 }
 
 function renderRoot(state: BigPictureDetailState): void {
 	const root = state.root;
 	try { steamWebpackRuntime.captureRuntime(root.ownerDocument); } catch {}
+	hideBigPictureNonSteamNotices(root.ownerDocument);
 	let markup = '<div class="gdl-bp-loading">Steam</div>';
 	if (state.data) {
 		switch (state.activeTab) {
@@ -680,6 +452,149 @@ function renderRoot(state: BigPictureDetailState): void {
 		if (nativeMount && featured) {
 			try { mountSingleNativeAchievement(nativeMount, featured); } catch {}
 		}
+	}
+	if (state.activeTab === 'stuff' && state.data?.achievements) {
+		const ach = state.data.achievements;
+		const portrait = linkedShortcutPortrait(state.shortcut.id, state.shortcut.steamAppId)
+			|| (state.shortcut.steamAppId ? `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${state.shortcut.steamAppId}/library_600x900_2x.jpg` : '')
+			|| state.data.game?.capsule_image || state.data.game?.header_image || '';
+
+		const openAchievements = () => {
+			openBigPictureAchievementsScreen(
+				root.ownerDocument,
+				ach,
+				state.data?.game?.name || state.shortcut.title,
+				portrait,
+				state.shortcut.id
+			);
+		};
+
+		root.querySelectorAll<HTMLElement>('.gdl-bp-open-ach-trigger, #gdl-bp-ach-featured-preview, .gdl-bp-ach-progress').forEach(el => {
+			el.addEventListener('click', openAchievements);
+		});
+
+		const previewCard = root.querySelector<HTMLElement>('#gdl-bp-ach-featured-preview');
+		root.querySelectorAll<HTMLElement>('.gdl-bp-ach-icon-frame').forEach(iconEl => {
+			iconEl.addEventListener('click', openAchievements);
+			const onFocus = () => {
+				if (!previewCard) return;
+				const title = iconEl.dataset.achTitle || '';
+				const desc = iconEl.dataset.achDesc || '';
+				const pct = iconEl.dataset.achPct || '';
+				const img = iconEl.dataset.achImg || '';
+				const titleEl = previewCard.querySelector('.gdl-bp-ach-featured-title');
+				const descEl = previewCard.querySelector('.gdl-bp-ach-featured-desc');
+				const pctEl = previewCard.querySelector('.gdl-bp-ach-featured-pct');
+				const imgEl = previewCard.querySelector<HTMLImageElement>('.gdl-bp-ach-img');
+				if (titleEl && title) titleEl.textContent = title;
+				if (descEl && desc) descEl.textContent = desc;
+				if (pctEl && pct) pctEl.textContent = `${pct}% ${gdlText('players_have_achievement', 'de los jugadores tienen este logro')}`;
+				if (imgEl && img) imgEl.src = img;
+			};
+			iconEl.addEventListener('focus', onFocus);
+			iconEl.addEventListener('mouseenter', onFocus);
+		});
+	}
+	if (state.activeTab === 'stuff' && state.data?.cards?.cards?.length) {
+		const catalog = state.data.cards;
+		const cards = catalog.cards || [];
+		const badge = catalog.foil_badge || catalog.badges?.[0] || null;
+		root.querySelectorAll<HTMLElement>('.gdl-bp-card-item[data-gdl-card-idx]').forEach(cardEl => {
+			const idx = Number(cardEl.dataset.gdlCardIdx);
+			const item = cards[idx];
+			if (item) {
+				cardEl.addEventListener('click', () => {
+					openBigPictureCardModal(root.ownerDocument, {
+						title: item.title || state.shortcut.title,
+						image: item.image,
+						artwork: item.artwork,
+						foil: item.foil,
+						badgeTitle: badge?.title ? `${badge.title} • ${(badge.level || 1) * 100} EXP` : undefined,
+						gameName: state.data?.game?.name || state.shortcut.title,
+					});
+				});
+			}
+		});
+	}
+	if (state.activeTab === 'activity') {
+		const postInput = root.querySelector<HTMLInputElement>('.gdl-bp-feed-post-input');
+		if (postInput) {
+			const triggerKeyboard = () => {
+				try {
+					const steamSystem = (window as any).SteamClient?.System;
+					if (typeof steamSystem?.ShowGamepadTextInput === 'function') {
+						steamSystem.ShowGamepadTextInput(0, 0, loc('AppActivity_PostPlaceholder', 'Diles algo sobre este juego a tus amigos...'), 500, postInput.value || '');
+					}
+				} catch {}
+			};
+			postInput.addEventListener('click', triggerKeyboard);
+			postInput.addEventListener('focus', triggerKeyboard);
+			postInput.addEventListener('keydown', (e: KeyboardEvent) => {
+				if (e.key === 'Enter' && postInput.value.trim()) {
+					e.preventDefault();
+					const text = postInput.value.trim();
+					const user = getCurrentSteamUser(root.ownerDocument);
+					const newPost: LocalActivityPost = {
+						id: `post_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+						text,
+						timestamp: Math.floor(Date.now() / 1000),
+						user_name: user.name || 'Tú',
+						user_avatar: user.avatar || '',
+					};
+					saveLocalActivityPost(state.shortcut.steamAppId, newPost, String(state.shortcut.id));
+					postInput.value = '';
+					state.renderSignature = '';
+					renderRoot(state);
+				}
+			});
+		}
+
+		const jumpBtn = root.querySelector<HTMLElement>('.gdl-bp-feed-jump-news');
+		if (jumpBtn) {
+			jumpBtn.addEventListener('click', () => {
+				const firstCard = root.querySelector<HTMLElement>('.gdl-bp-feed-card[data-gdl-news-gid]');
+				if (firstCard) {
+					firstCard.focus();
+					firstCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				}
+			});
+		}
+
+		const loadMoreBtn = root.querySelector<HTMLElement>('.gdl-bp-feed-load-more-btn');
+		if (loadMoreBtn) {
+			loadMoreBtn.addEventListener('click', () => {
+				loadMoreBtn.textContent = loc('AppActivity_NoMoreActivity', 'No hay más actividad');
+			});
+		}
+
+		if (state.data?.news) {
+			const newsList = state.data.news;
+			root.querySelectorAll<HTMLElement>('.gdl-bp-feed-card[data-gdl-news-gid]').forEach(card => {
+				const gid = card.dataset.gdlNewsGid;
+				const item = newsList.find(n => n.gid === gid || n.url === gid);
+				if (item) {
+					card.addEventListener('click', event => {
+						event.preventDefault();
+						event.stopPropagation();
+						openBigPictureNewsModal(root.ownerDocument, item, state.data?.game?.name || state.shortcut.title, state.data?.game?.header_image || state.data?.game?.capsule_image || '');
+					});
+				}
+			});
+		}
+	}
+	if (state.activeTab === 'community') {
+		root.querySelectorAll<HTMLElement>('.gdl-bp-community-video-card').forEach(cardEl => {
+			cardEl.addEventListener('click', e => {
+				const ytId = cardEl.dataset.gdlYtId;
+				const wrap = cardEl.querySelector<HTMLElement>('.gdl-bp-community-media-wrap');
+				if (wrap && ytId && !cardEl.classList.contains('is-playing')) {
+					e.preventDefault();
+					e.stopPropagation();
+					wrap.innerHTML = `<iframe class="gdl-bp-inline-video" src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytId)}?autoplay=1&enablejsapi=1" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
+					cardEl.classList.add('is-playing');
+				}
+			});
+		});
 	}
 	for (const link of Array.from(root.querySelectorAll<HTMLAnchorElement>('[data-gdl-bp-external="1"]'))) {
 		link.addEventListener('click', event => {
@@ -741,7 +656,13 @@ function bindTabs(
 					if (first) {
 						event.preventDefault();
 						event.stopPropagation();
-						first.focus();
+						root.querySelectorAll<HTMLElement>('.gpfocus, [data-focus="true"]').forEach(el => {
+							el.classList.remove('gpfocus');
+							delete el.dataset.focus;
+						});
+						first.classList.add('gpfocus');
+						first.dataset.focus = 'true';
+						first.focus({ preventScroll: true });
 						first.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 					}
 				}
@@ -785,6 +706,7 @@ function removeBigPictureDetailsNodes(doc: Document): void {
 		el.remove();
 	}
 	removeBigPictureFallbackPanel(doc);
+	removeBigPicturePlaybarEnhancements(doc);
 }
 
 export async function refreshBigPictureShortcutDetails(doc: Document): Promise<void> {
@@ -858,6 +780,7 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 
 	bindTabs(doc, tabs.strip, tabs.controls);
 	installBigPictureGamepadNavigation(doc, nodes.root, tabs.strip, tabs.controls);
+	syncBigPicturePlaybarEnhancements(doc, tabs.strip, state?.data?.achievements || coldCached?.achievements || null, shortcut.id);
 }
 
 export function disposeBigPictureShortcutDetails(doc: Document | null): void {
@@ -875,5 +798,6 @@ export function disposeBigPictureShortcutDetails(doc: Document | null): void {
 	detailRetryCounts.delete(doc);
 	detailTabObservers.get(doc)?.observer.disconnect();
 	detailTabObservers.delete(doc);
+	disposeBigPictureGamepadNavigation(doc);
 	removeBigPictureDetailsNodes(doc);
 }

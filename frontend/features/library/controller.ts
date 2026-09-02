@@ -1,10 +1,8 @@
 import { backendLog } from '../../api/backend';
 import { escapeHtml } from '../../core/text';
-import { ACH_CLASSES, PLAYBAR_CLASSES } from '../../steam/css';
+import { ACH_CLASSES } from '../../steam/css';
 import { gdlText, loc } from '../../steam/localization';
-import { isRenderedElement } from '../../steam/native-dom';
 import type { NativeLibraryLayout } from './layout';
-import { buildNativeSidebarSection } from './layout';
 
 export type ControllerType = 'xbox' | 'playstation' | 'switch' | 'generic';
 
@@ -14,8 +12,22 @@ export interface ConnectedControllerInfo {
 	type: ControllerType;
 }
 
-export function detectConnectedController(doc?: Document): ConnectedControllerInfo {
-	// 1. Check Web Gamepad API
+function isSteamControllerConnected(ctrl: any): boolean {
+	if (!ctrl || typeof ctrl !== 'object') return false;
+	if (ctrl.bConnected === false || ctrl.connected === false || ctrl.bIsConnected === false || ctrl.bActive === false) {
+		return false;
+	}
+	if (ctrl.bConnected === true || ctrl.connected === true || ctrl.bIsConnected === true || ctrl.bActive === true) {
+		return true;
+	}
+	if (typeof ctrl.nControllerIndex === 'number' && ctrl.nControllerIndex < 0) {
+		return false;
+	}
+	return false;
+}
+
+export function detectConnectedController(_doc?: Document): ConnectedControllerInfo {
+	// 1. Check Web Gamepad API (direct Chromium / hardware detection)
 	try {
 		const gamepads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : [];
 		for (const gp of gamepads) {
@@ -36,50 +48,26 @@ export function detectConnectedController(doc?: Document): ConnectedControllerIn
 		}
 	} catch {}
 
-	// 2. Check Steam Client DOM signal in PlayBar (Steam's native ControllerConfigButton)
-	try {
-		const targetDoc = doc || document;
-		const playbarClasses = PLAYBAR_CLASSES();
-		const controllerBtn = targetDoc.querySelector(
-			`[class*="ControllerConfigButton"], [class*="controllerConfigButton"], .${playbarClasses.ControllerConfigButton || 'ControllerConfigButton'}`
-		) as HTMLElement | null;
-
-		if (controllerBtn && isRenderedElement(targetDoc, controllerBtn)) {
-			return { connected: true, name: 'Steam Controller', type: 'xbox' };
-		}
-
-		const appButtons = targetDoc.querySelector(`[class*="AppButtonsContainer"], .${playbarClasses.AppButtonsContainer || ''}`);
-		if (appButtons) {
-			const buttons = Array.from(appButtons.querySelectorAll<HTMLElement>('button, [role="button"]'));
-			for (const btn of buttons) {
-				const label = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase();
-				const hasControllerClass = btn.className.toLowerCase().includes('controller');
-				if (hasControllerClass || label.includes('controller') || label.includes('control') || label.includes('mando')) {
-					if (isRenderedElement(targetDoc, btn)) {
-						return { connected: true, name: 'Steam Controller', type: 'xbox' };
-					}
-				}
-			}
-		}
-	} catch {}
-
-	// 3. Check SteamClient.Input
+	// 2. Check SteamClient.Input (Steam's internal controller service)
 	try {
 		const steamInput = (window as any).SteamClient?.Input;
 		if (typeof steamInput?.GetControllers === 'function') {
 			const list = steamInput.GetControllers();
 			if (Array.isArray(list) && list.length > 0) {
-				const first = list[0];
-				const eType = Number(first?.eControllerType || 0);
-				let type: ControllerType = 'xbox';
-				if (eType === 33 || eType === 34 || eType === 45 || eType === 48) {
-					type = 'playstation';
-				} else if (eType === 38 || eType === 39 || eType === 40 || eType === 41 || eType === 42) {
-					type = 'switch';
-				} else {
-					type = 'xbox';
+				const active = list.filter(isSteamControllerConnected);
+				if (active.length > 0) {
+					const first = active[0];
+					const eType = Number(first?.eControllerType || 0);
+					let type: ControllerType = 'xbox';
+					if (eType === 33 || eType === 34 || eType === 45 || eType === 48) {
+						type = 'playstation';
+					} else if (eType === 38 || eType === 39 || eType === 40 || eType === 41 || eType === 42) {
+						type = 'switch';
+					} else {
+						type = 'xbox';
+					}
+					return { connected: true, name: first?.strName || 'Controller', type };
 				}
-				return { connected: true, name: first?.strName || 'Controller', type };
 			}
 		}
 	} catch {}
@@ -148,7 +136,7 @@ function controllerLinkText(): string {
 	return loc('AppControllerConfiguration_Link', gdlText('controller_settings_link', 'View controller settings'));
 }
 
-function controllerSectionHeader(): string {
+export function controllerSectionHeader(): string {
 	return loc('AppDetails_SectionTitle_Controller', gdlText('controller_section_title', 'Controller'));
 }
 
@@ -183,150 +171,23 @@ export function openControllerConfig(steamAppId: string, shortcutAppId: string |
 
 export function syncControllerSidebarSection(
 	doc: Document,
-	layout: NativeLibraryLayout,
-	steamAppId: string,
-	shortcutAppId: string | null,
+	_layout: NativeLibraryLayout,
+	_steamAppId: string,
+	_shortcutAppId: string | null,
 ): HTMLElement | null {
-	const { sidebarColumn } = layout;
-	if (!sidebarColumn || !sidebarColumn.isConnected) return null;
-
-	const controllerInfo = detectConnectedController(doc);
-	let section = doc.getElementById('gdl-controller-section');
-
-	if (!controllerInfo.connected) {
-		if (section) {
-			section.remove();
-		}
-		return null;
-	}
-
-	if (section) {
-		const inner = doc.getElementById('gdl-controller-content');
-		if (inner && inner.dataset.controllerType !== controllerInfo.type) {
-			inner.dataset.controllerType = controllerInfo.type;
-			inner.innerHTML = renderControllerSidebarHtml(controllerInfo);
-		}
-		return section;
-	}
-
-	const node = buildNativeSidebarSection(doc, layout, {
-		sectionId: 'gdl-controller-section',
-		headerText: controllerSectionHeader(),
-		innerId: 'gdl-controller-content',
-		innerHtml: renderControllerSidebarHtml(controllerInfo),
-		cloneInnerClass: false,
-	});
-
-	if (!node) return null;
-
-	const inner = node.querySelector('#gdl-controller-content') as HTMLElement | null;
-	if (inner) inner.dataset.controllerType = controllerInfo.type;
-
-	const clickHandler = (event: Event) => {
-		event.preventDefault();
-		event.stopPropagation();
-		openControllerConfig(steamAppId, shortcutAppId);
-	};
-	node.addEventListener('click', clickHandler);
-
-	const firstTarget = doc.getElementById('gdl-friends-section')
-		|| doc.getElementById('gdl-achievements-section')
-		|| sidebarColumn.firstChild;
-
-	if (firstTarget && firstTarget !== node) {
-		sidebarColumn.insertBefore(node, firstTarget);
-	} else {
-		sidebarColumn.appendChild(node);
-	}
-
-	return node;
-}
-
-
-const CONTROLLER_SCROLL_TRANSLUCENCY_THRESHOLD = 2;
-
-function currentControllerScrollTop(doc: Document, section: HTMLElement | null): number {
-	if (!section?.isConnected) return 0;
-	const view = doc.defaultView;
-	let top = Math.max(0, view?.scrollY || 0);
-	const scrolling = doc.scrollingElement;
-	if (scrolling instanceof HTMLElement) top = Math.max(top, Math.max(0, scrolling.scrollTop || 0));
-
-	let current: HTMLElement | null = section;
-	while (current && current !== doc.body && current !== doc.documentElement) {
-		const style = view?.getComputedStyle(current);
-		const overflowY = style?.overflowY || '';
-		const scrollable = current.scrollHeight > current.clientHeight + 8
-			&& (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay' || current.scrollTop > 0);
-		if (scrollable) top = Math.max(top, Math.max(0, current.scrollTop || 0));
-		current = current.parentElement;
-	}
-
-	return top;
-}
-
-function updateControllerScrollState(doc: Document, section: HTMLElement | null): void {
-	if (!section?.isConnected) return;
-	const top = currentControllerScrollTop(doc, section);
-	const wasScrolled = section.dataset.gdlControllerScrolled === '1';
-	// Enter almost immediately, but only leave at the true top. This prevents
-	// sub-pixel scroll oscillation from making the card flash while scrolling.
-	const scrolled = wasScrolled ? top > 0.25 : top >= CONTROLLER_SCROLL_TRANSLUCENCY_THRESHOLD;
-	section.dataset.gdlControllerScrolled = scrolled ? '1' : '0';
-}
-
-function setupControllerScrollTranslucencyWatcher(
-	doc: Document,
-	layout: NativeLibraryLayout,
-	steamAppId: string,
-	shortcutAppId: string | null,
-	isCurrent: () => boolean,
-): () => void {
-	let frame = 0;
-	let disconnected = false;
-
-	const schedule = () => {
-		if (disconnected || frame) return;
-		const view = doc.defaultView;
-		if (!view) return;
-		frame = view.requestAnimationFrame(() => {
-			frame = 0;
-			if (disconnected || !isCurrent()) return;
-			const section = syncControllerSidebarSection(doc, layout, steamAppId, shortcutAppId);
-			updateControllerScrollState(doc, section);
-		});
-	};
-
-	const onScroll = () => schedule();
-	const onResize = () => schedule();
-	window.addEventListener('scroll', onScroll, { passive: true, capture: true });
-	window.addEventListener('resize', onResize, { passive: true });
-	schedule();
-
-	return () => {
-		disconnected = true;
-		window.removeEventListener('scroll', onScroll, true);
-		window.removeEventListener('resize', onResize);
-		if (frame && doc.defaultView) doc.defaultView.cancelAnimationFrame(frame);
-	};
+	doc.getElementById('gdl-controller-section')?.remove();
+	return null;
 }
 
 export function setupControllerSidebarWatcher(
 	doc: Document,
-	layout: NativeLibraryLayout,
-	steamAppId: string,
-	shortcutAppId: string | null,
-	isCurrent: () => boolean,
+	_layout: NativeLibraryLayout,
+	_steamAppId: string,
+	_shortcutAppId: string | null,
+	_isCurrent: () => boolean,
 ): () => void {
-	const scrollCleanup = setupControllerScrollTranslucencyWatcher(doc, layout, steamAppId, shortcutAppId, isCurrent);
-	const unsubscribe = subscribeControllerChanges(doc, () => {
-		if (!isCurrent()) return;
-		const section = syncControllerSidebarSection(doc, layout, steamAppId, shortcutAppId);
-		updateControllerScrollState(doc, section);
-	});
-
+	doc.getElementById('gdl-controller-section')?.remove();
 	return () => {
-		scrollCleanup();
-		unsubscribe();
+		doc.getElementById('gdl-controller-section')?.remove();
 	};
 }

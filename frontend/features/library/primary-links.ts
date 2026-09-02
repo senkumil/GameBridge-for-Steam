@@ -122,10 +122,30 @@ export function insertPrimaryLinksBar(
 	layout: NativeLibraryLayout,
 	activityWrapper: HTMLElement,
 ): void {
-	if (layout.twoColumnRow?.parentElement) {
-		layout.twoColumnRow.parentElement.insertBefore(bar, layout.twoColumnRow);
+	const doc = bar.ownerDocument;
+	const playbar = doc.querySelector<HTMLElement>('[class*="PlayBar"], [class*="playbar"], button[class*="Play"]')
+		?.closest<HTMLElement>('[class*="PlayBar"], [class*="playbar"]');
+
+	// If a valid twoColumnRow is present and does NOT contain the playbar, insert right before it
+	if (layout.twoColumnRow?.parentElement && (!playbar || (!layout.twoColumnRow.contains(playbar) && layout.twoColumnRow !== playbar))) {
+		const playbarTop = playbar?.getBoundingClientRect().top ?? -Infinity;
+		const twoColumnTop = layout.twoColumnRow.getBoundingClientRect().top;
+		if (!playbar || twoColumnTop >= playbarTop) {
+			layout.twoColumnRow.parentElement.insertBefore(bar, layout.twoColumnRow);
+			return;
+		}
+	}
+
+	// If playbar is found, anchor directly after the playbar container
+	if (playbar && playbar.parentElement) {
+		if (playbar.nextElementSibling) {
+			playbar.parentElement.insertBefore(bar, playbar.nextElementSibling);
+		} else {
+			playbar.parentElement.appendChild(bar);
+		}
 		return;
 	}
+
 	if (!bar.isConnected && activityWrapper.parentElement) {
 		activityWrapper.parentElement.insertBefore(bar, activityWrapper);
 	}

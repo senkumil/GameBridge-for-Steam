@@ -175,20 +175,23 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 					if (el.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"]')) return true;
 					return false;
 				};
-				const siblings = Array.from(parent.children).filter(c => c !== cur) as HTMLElement[];
-				const validSiblings = siblings.filter(s => !isPlaybarOrHeader(s));
-				const foundSidebar = validSiblings.find(s => {
-					const txt = (s.textContent || '').toLowerCase();
-					return txt.includes('nota') || txt.includes('note') || txt.includes('captura') || txt.includes('screenshot') || s.querySelector('[role="region"]');
-				}) || (validSiblings.length === 1 ? validSiblings[0] : null);
-				if (foundSidebar && !isPlaybarOrHeader(parent)) {
-					twoColumnRow = parent;
-					contentColumn = cur;
-					sidebarColumn = foundSidebar;
-					if (!anchorRegion) {
-						anchorRegion = (foundSidebar.querySelector('[role="region"]') || foundSidebar.firstElementChild || foundSidebar) as HTMLElement;
+				const hasInnerPlaybar = Boolean(parent.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"]'));
+				if (!isPlaybarOrHeader(parent) && !hasInnerPlaybar) {
+					const siblings = Array.from(parent.children).filter(c => c !== cur) as HTMLElement[];
+					const validSiblings = siblings.filter(s => !isPlaybarOrHeader(s));
+					const foundSidebar = validSiblings.find(s => {
+						const txt = (s.textContent || '').toLowerCase();
+						return txt.includes('nota') || txt.includes('note') || txt.includes('captura') || txt.includes('screenshot') || s.querySelector('[role="region"]');
+					});
+					if (foundSidebar) {
+						twoColumnRow = parent;
+						contentColumn = cur;
+						sidebarColumn = foundSidebar;
+						if (!anchorRegion) {
+							anchorRegion = (foundSidebar.querySelector('[role="region"]') || foundSidebar.firstElementChild || foundSidebar) as HTMLElement;
+						}
+						break;
 					}
-					break;
 				}
 			}
 			cur = parent;

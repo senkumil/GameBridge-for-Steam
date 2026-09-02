@@ -380,7 +380,7 @@ function M.fetch_library_assets(request_json)
         appid = appid,
         source = "steamcmd_appinfo",
         portrait = library_asset_url(appid, pick_library_asset(assets.library_capsule, language, true)),
-        hero = library_asset_url(appid, pick_library_asset(assets.library_hero, language, false)),
+        hero = library_asset_url(appid, pick_library_asset(assets.library_hero, language, true)),
         logo = library_asset_url(appid, pick_library_asset(assets.library_logo, language, true)),
         wide = library_asset_url(appid, pick_library_asset(assets.library_header, language, true)),
         legacy_header = legacy_header, legacy_logo = legacy_logo,

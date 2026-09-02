@@ -51,7 +51,12 @@ function updateAchievementMedal(
 		|| stat.querySelector<HTMLElement>('.gdl-lp-icon')
 		|| stat.querySelector<HTMLElement>('svg, img')?.parentElement
 		|| null;
-	if (iconHost) iconHost.innerHTML = achievementMedalSvg(classes.AchievementSVG || '', isComplete);
+	if (iconHost) {
+		const targetStatus = isComplete ? 'complete' : 'in-progress';
+		if (iconHost.dataset.gdlMedalStatus === targetStatus && iconHost.firstElementChild) return;
+		iconHost.dataset.gdlMedalStatus = targetStatus;
+		iconHost.innerHTML = achievementMedalSvg(classes.AchievementSVG || '', isComplete);
+	}
 }
 
 export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData): HTMLElement | null {
@@ -97,12 +102,15 @@ export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData
 				|| elementsWithCssModuleClass(stat, classes.AchievementCountLabel)[0]
 				|| Array.from(stat.querySelectorAll<HTMLElement>('div,span')).find(element => /^\s*\d+\s*\/\s*\d+\s*$/.test(element.textContent || ''))
 				|| null;
-			if (count) count.textContent = progressText;
+			if (count && count.textContent !== progressText) count.textContent = progressText;
 			const fill = stat.querySelector<HTMLElement>('.gdl-lp-fill')
 				|| elementsWithCssModuleClass(stat, classes.DetailsProgressBar)[0]
 				|| null;
-			if (fill) fill.style.width = `${pct}%`;
-			stat.classList.toggle('is-complete', isComplete);
+			const targetWidth = `${pct}%`;
+			if (fill && fill.style.width !== targetWidth) fill.style.width = targetWidth;
+			if (stat.classList.contains('is-complete') !== isComplete) {
+				stat.classList.toggle('is-complete', isComplete);
+			}
 			updateAchievementMedal(stat, classes, isComplete);
 			applyNativePlaybarTypography(stat, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
 			lastStat = stat;

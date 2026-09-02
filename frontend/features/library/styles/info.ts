@@ -13,10 +13,11 @@ export function ensureInfoPanelStyles(doc: Document): void {
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback svg { width:24px;height:24px;display:block; }
 
 		#gdl-game-info-panel {
-			transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease-in-out, transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+			transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.28s ease-in-out, transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
 			overflow: hidden !important;
+			box-sizing: border-box !important;
 		}
-		#gdl-game-info-panel:not(.gdl-info-expanded) {
+		#gdl-game-info-panel.gdl-info-collapsed {
 			height: 0px !important;
 			max-height: 0px !important;
 			opacity: 0 !important;
@@ -26,10 +27,12 @@ export function ensureInfoPanelStyles(doc: Document): void {
 			margin-top: 0 !important;
 			margin-bottom: 0 !important;
 		}
+		#gdl-game-info-panel.gdl-info-collapsing {
+			pointer-events: none !important;
+			overflow: hidden !important;
+		}
 		#gdl-game-info-panel.gdl-info-expanded {
-			height: auto !important;
-			max-height: none !important;
-			opacity: 1 !important;
+			opacity: 1;
 			pointer-events: auto !important;
 		}
 
@@ -112,7 +115,7 @@ export function ensureInfoPanelStyles(doc: Document): void {
 			height:0;opacity:0;overflow:hidden;box-sizing:border-box;
 			background:linear-gradient(90deg,rgba(24,25,30,.92),rgba(31,28,33,.84));
 			border-bottom:1px solid rgba(255,255,255,.035);
-			transition:height .22s ease,opacity .18s ease;
+			transition:height 0.3s cubic-bezier(0.4, 0, 0.2, 1),opacity 0.28s ease-in-out;
 		}
 		#gdl-game-info-panel[data-gdl-native-layout="0"].gdl-info-expanded { opacity:1; }
 		#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-game-info-container {

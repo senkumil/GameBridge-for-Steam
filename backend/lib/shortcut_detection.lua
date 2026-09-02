@@ -427,6 +427,17 @@ local function detection_direct_result(appid, source, request, language, launche
             end
         end
     end
+    if source == "maintained_alias" and data and data.name and fallback_name and fallback_name ~= "" then
+        local fetched_norm = detection_normalize(data.name):gsub("%s+", "")
+        local fallback_norm = detection_normalize(fallback_name):gsub("%s+", "")
+        local title_norm = detection_normalize(request.title or ""):gsub("%s+", "")
+        local matches_alias = fetched_norm:find(fallback_norm, 1, true) or fallback_norm:find(fetched_norm, 1, true)
+        local matches_title = title_norm ~= "" and (fetched_norm:find(title_norm, 1, true) or title_norm:find(fetched_norm, 1, true))
+        if not matches_alias and not matches_title and validation_source ~= "maintained_alias_catalogue" then
+            logger:warn("Maintained alias " .. tostring(fallback_name) .. " (AppID " .. tostring(appid) .. ") name mismatch with Store name '" .. tostring(data.name) .. "', rejecting direct match")
+            return nil
+        end
+    end
     if (not data or not data.name or data.name == "") and fallback_name and fallback_name ~= "" then
         data = { name = fallback_name }
         validation_source = "maintained_alias_catalogue"

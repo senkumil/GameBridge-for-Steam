@@ -95,7 +95,7 @@ class SteamUIModeService {
 
 	private handleModeNumberChange(modeNumber: number): void {
 		this.currentModeNumber = modeNumber;
-		// Steam UI Modes: 4 = GamepadUI (Big Picture / Steam Deck), 7 = Desktop, 0/1 = Standard
+		// Steam UI Modes: 4 = GamepadUI (Big Picture), 7 = Desktop, 0/1 = Standard
 		const newMode: SteamUIModeType = modeNumber === 4 ? 'gamepad' : 'desktop';
 		if (newMode !== this.currentMode) {
 			this.currentMode = newMode;

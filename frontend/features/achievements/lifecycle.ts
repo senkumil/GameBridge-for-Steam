@@ -188,7 +188,16 @@ export function installLocalAchievementUI(doc: Document): void {
 	doc.addEventListener('click', intercept, true);
 	doc.addEventListener('keydown', onKeyDown, true);
 	doc.addEventListener('visibilitychange', syncPolling);
-	state.observer = new MutationObserver(schedulePollingSync);
+	state.observer = new MutationObserver(mutations => {
+		const isExternalMutation = mutations.some(m => {
+			const target = m.target as HTMLElement | null;
+			if (target?.closest?.('[data-gdl-playbar-achievements], #gdl-library-injected, #gdl-achievements-content, #gdl-playbar-achievements')) {
+				return false;
+			}
+			return true;
+		});
+		if (isExternalMutation) schedulePollingSync();
+	});
 	state.observer.observe(doc.body, { childList: true, subtree: true });
 	const unsubscribeData = subscribeLocalAchievementData(update => {
 		const appid = detectLinkedSteamAppId(doc);

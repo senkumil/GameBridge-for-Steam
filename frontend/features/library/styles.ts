@@ -45,17 +45,7 @@ export function ensureNativeGameInfoStyles(doc: Document): void {
 			max-height: 100% !important;
 			object-fit: contain !important;
 		}
-		[class*="HeaderContainer"], [class*="headerContainer"],
-		[class*="HeroContainer"], [class*="heroContainer"],
-		[class*="TopCapsule"], [class*="topCapsule"] {
-			overflow: hidden !important;
-		}
-		[class*="HeaderImage"], [class*="headerImage"],
-		[class*="HeroImage"], [class*="heroImage"] {
-			object-fit: cover !important;
-			width: 100% !important;
-			height: 100% !important;
-		}
+
 		@media (max-width: 900px) {
 			[class*="LogoContainer"], [class*="logoContainer"] {
 				max-width: 48% !important;

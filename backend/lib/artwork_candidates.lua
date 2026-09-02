@@ -61,6 +61,7 @@ local QUALITY = {
     portrait = { min_width = 300, min_height = 400, min_ratio = 0.50, max_ratio = 0.85 },
     hero = { min_width = 1280, min_height = 400, min_ratio = 2.35, max_ratio = 3.65 },
     wide = { min_width = 800, min_height = 350, min_ratio = 1.8, max_ratio = 2.65 },
+    icon = { min_width = 32, min_height = 32 },
 }
 
 local function candidates(body, slot)
@@ -107,8 +108,9 @@ local function retired_profile(appid)
     local no_packages = type(data) == "table"
         and (type(data.packages) ~= "table" or #data.packages == 0)
         and (type(data.package_groups) ~= "table" or #data.package_groups == 0)
+    local is_coming_soon = type(data) == "table" and type(data.release_date) == "table" and data.release_date.coming_soon == true
     local unavailable = type(app_data) == "table" and (app_data.success == false
-        or (type(data) == "table" and data.is_free ~= true and data.price_overview == nil and no_packages))
+        or (type(data) == "table" and data.is_free ~= true and data.price_overview == nil and no_packages and not is_coming_soon))
     -- Cache only a conclusive Store response. A network or parse failure must
     -- remain retryable in the same Steam session.
 	if type(app_data) ~= "table" then return nil end
@@ -170,6 +172,7 @@ function M.fetch(request_json)
     local hero = candidates(request("heroes/game/" .. id, api_key), "hero")
     local logo = candidates(request("logos/game/" .. id, api_key), "logo")
     local wide = candidates(request("grids/game/" .. id .. "?dimensions=920x430", api_key), "wide")
+    local icons = candidates(request("icons/game/" .. id, api_key), "icon")
     return cjson.encode({
         eligible = true, title = profile.title, source = "steamgriddb",
         defaults = {
@@ -177,8 +180,9 @@ function M.fetch(request_json)
             hero = default_id(hero, profile.hero_id, profile.hero_rank),
             logo = default_id(logo, profile.logo_id, profile.logo_rank),
             wide = default_id(wide, profile.wide_id, profile.wide_rank),
+            icon = default_id(icons, profile.icon_id, profile.icon_rank),
         },
-        slots = { portrait = portrait, hero = hero, logo = logo, wide = wide },
+        slots = { portrait = portrait, hero = hero, logo = logo, wide = wide, icon = icons },
     })
 end
 

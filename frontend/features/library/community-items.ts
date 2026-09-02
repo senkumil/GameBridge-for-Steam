@@ -28,6 +28,8 @@ export function normalizeCommunityAssetUrl(raw: unknown): string {
 	if (value.startsWith('//')) value = 'https:' + value;
 	else if (value.startsWith('/')) value = 'https://steamcommunity.com' + value;
 	else if (value.startsWith('http://')) value = 'https://' + value.slice(7);
+	else if (value.startsWith('economy/image/')) value = 'https://community.cloudflare.steamstatic.com/' + value;
+	else if (/^[-_a-zA-Z0-9]{30,}$/.test(value)) value = 'https://community.cloudflare.steamstatic.com/economy/image/' + value;
 	if (!value.startsWith('https://')) return '';
 	try {
 		const url = new URL(value);

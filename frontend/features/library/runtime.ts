@@ -5,7 +5,7 @@ import { mappings, loadMappings, saveMappingChecked, shortcutMappingKey } from '
 import { perfMark, perfMeasure } from '../../core/perf';
 import { steamLanguageSync } from '../../steam/localization';
 import { installSteamNavigation } from '../../steam/navigation';
-import { findActiveShortcutAppId, findShortcutAppIdByName, findShortcutAppIdsByName, getShortcutAppById, looseMatchTitle } from '../../steam/shortcuts';
+import { findActiveShortcutAppId, findShortcutAppIdByName, findShortcutAppIdsByName, getShortcutAppById, getSteamAppStore, looseMatchTitle } from '../../steam/shortcuts';
 import { normalizeTitle } from '../../core/text';
 import { GDL_INJECTED } from './constants';
 import { getCachedCommunityContent, getCachedNews } from './news';
@@ -299,6 +299,11 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 	const resolvedShortcutAppId = activeShortcutAppId;
 	if (!steamAppId || !/^\d+$/.test(steamAppId)) {
 		cancelLinkedShortcutLoading(doc, navigationGeneration);
+		const appStore = getSteamAppStore();
+		const appStoreReady = Boolean(appStore?.m_mapApps && appStore.m_mapApps.size > 0);
+		if (!appStoreReady) {
+			scheduleNavigationRetry(doc, navigationGeneration, 280);
+		}
 		let visibleShortcutId = normalizedShortcutAppId(activeShortcutAppId) || findShortcutAppIdByName(gameTitle);
 		if (!visibleShortcutId) {
 			let hash = 0;

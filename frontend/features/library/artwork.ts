@@ -623,7 +623,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, gameT
 		// Logo (2) and Hero (1) first for immediate library header rendering
 		const sources: { urls: string[]; imageType: number; label: string }[] = [
 			{
-		urls: [
+				urls: [
 					userCommunity?.logo?.url || '',
 					preferredCommunity?.logo || '',
 					modern?.logo || '',
@@ -641,8 +641,8 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, gameT
 					userCommunity?.hero?.url || '',
 					preferredCommunity?.hero || '',
 					modern?.hero || '',
-					`${fastlyBase}/library_hero.jpg`,
 					`${fastlyBase}/library_hero_2x.jpg`,
+					`${fastlyBase}/library_hero.jpg`,
 					`${cfBase}/library_hero.jpg`,
 					`${cfCdnBase}/library_hero.jpg`,
 					`${cdnBase}/library_hero.jpg`,
@@ -655,9 +655,15 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, gameT
 					userCommunity?.portrait?.url || '',
 					preferredCommunity?.portrait || '',
 					modern?.portrait || '',
-					`${fastlyBase}/library_600x900_2x.jpg`, `${fastlyBase}/library_600x900.jpg`,
-					`${cfBase}/library_600x900.jpg`, `${cfCdnBase}/library_600x900.jpg`, `${cdnBase}/library_600x900.jpg`,
-					`${fastlyBase}/portrait.png`, `${cfBase}/portrait.png`, `${cfCdnBase}/portrait.png`, `${cdnBase}/portrait.png`,
+					`${fastlyBase}/library_600x900_2x.jpg`,
+					`${fastlyBase}/library_600x900.jpg`,
+					`${cfBase}/library_600x900.jpg`,
+					`${cfCdnBase}/library_600x900.jpg`,
+					`${cdnBase}/library_600x900.jpg`,
+					`${fastlyBase}/portrait.png`,
+					`${cfBase}/portrait.png`,
+					`${cfCdnBase}/portrait.png`,
+					`${cdnBase}/portrait.png`,
 				],
 				imageType: 0,
 				label: 'Portrait Grid',

@@ -160,11 +160,14 @@ export function ensureNativePanelRoot(
 		root.dataset.gdlBigPictureDetails = '1';
 	}
 	root.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important; width: 100%; min-height: 350px;';
-	for (const previous of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-native-panel="1"]'))) {
-		if (previous !== panel) delete previous.dataset.gdlBpNativePanel;
-	}
 	panel.dataset.gdlBpNativePanel = '1';
 	if (root.parentElement !== panel) panel.appendChild(root);
+	if (panel.firstChild !== root) panel.insertBefore(root, panel.firstChild);
+	Array.from(panel.children).forEach(child => {
+		if (child !== root && child.id !== 'gdl-bp-detail-root') {
+			(child as HTMLElement).style.display = 'none';
+		}
+	});
 	const fallback = doc.getElementById('gdl-bp-detail-fallback-panel');
 	if (nativePanel && fallback && fallback !== panel) fallback.remove();
 	return { panel, root };
@@ -173,3 +176,20 @@ export function ensureNativePanelRoot(
 export function removeBigPictureFallbackPanel(doc: Document): void {
 	doc.getElementById('gdl-bp-detail-fallback-panel')?.remove();
 }
+
+export function hideBigPictureNonSteamNotices(doc: Document): void {
+	if (!doc.body) return;
+	const anchors = ['no es un juego de steam', 'no es un juego o mod', 'non-steam game', 'nicht von steam', "n'est pas un jeu steam", 'não é um juego steam', 'не из steam', 'juegos instalados localmente', 'installed locally'];
+	for (const el of Array.from(doc.querySelectorAll<HTMLElement>('div, p, section, [class*="Collection"], [class*="Shelf"], [class*="Notice"], [class*="Description"]'))) {
+		if (el.closest('#gdl-bp-detail-root, #gdl-bp-cloud-divider')) continue;
+		const text = (el.textContent || '').trim().toLowerCase();
+		if (text && anchors.some(anchor => text.includes(anchor))) {
+			const container = (el.closest('[class*="Section"], [class*="Container"], [class*="Shelf"], [class*="Panel"]') as HTMLElement) || el;
+			if (!container.contains(doc.getElementById('gdl-bp-detail-root')!)) {
+				container.style.setProperty('display', 'none', 'important');
+				container.setAttribute('aria-hidden', 'true');
+			}
+		}
+	}
+}
+

@@ -87,7 +87,7 @@ export function localAchievementRequestJson(
 		// Never enable the test fallback implicitly. It is enabled only when the
 		// user has enabled both developer mode and simulated progress; callers may
 		// still explicitly disable it for a particular request.
-		allow_simulated: options.allowSimulated !== false && simulatedAchievementsEnabled(),
+		allow_simulated: options.allowSimulated === true || (options.allowSimulated !== false && simulatedAchievementsEnabled()),
 		// Full completion is intentionally per-game only.
 		simulate_unlock_all: false,
 		unlock_online: preferences.unlockOnlineAchievements,

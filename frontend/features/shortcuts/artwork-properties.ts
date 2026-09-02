@@ -2,7 +2,10 @@ import { backendLog, fetchCommunityArtworkCandidatesBackend } from '../../api/ba
 import { getPreferences, steamGridDbApiKeyCandidates } from '../../core/preferences';
 import { escapeHtml } from '../../core/text';
 import {
+	deleteCustomUploadedArtwork,
+	getCustomUploadedArtwork,
 	getSavedCommunityArtworkSelection,
+	saveCustomUploadedArtwork,
 	type CommunityArtworkChoice,
 	type CommunityArtworkSelection,
 	type CommunityArtworkSlot,
@@ -83,19 +86,25 @@ function openArtworkModal(context: ShortcutArtworkSettingsContext, data: Artwork
 	const steamAppId = context.steamAppId();
 	if (!shortcutAppId || !/^\d+$/.test(steamAppId) || !data.slots) return;
 
-	const slots: CommunityArtworkSlot[] = ['portrait', 'hero', 'logo', 'wide'];
+	const slots: CommunityArtworkSlot[] = ['portrait', 'hero', 'logo', 'wide', 'icon'];
 	const labels: Record<CommunityArtworkSlot, string> = {
 		portrait: gdlText('game_artwork_slot_portrait', 'Vertical cover'),
 		hero: gdlText('game_artwork_slot_hero', 'Wide background'),
 		logo: gdlText('game_artwork_slot_logo', 'Logo'),
 		wide: gdlText('game_artwork_slot_wide', 'Horizontal capsule'),
+		icon: gdlText('game_artwork_slot_icon', 'Icon'),
 	};
-	const available = Object.fromEntries(slots.map(slot => [slot, Array.isArray(data.slots?.[slot]) ? data.slots![slot]! : []])) as Record<CommunityArtworkSlot, CommunityArtworkChoice[]>;
+	const customUploads = getCustomUploadedArtwork(steamAppId);
+	const getSlotItems = (slot: CommunityArtworkSlot): CommunityArtworkChoice[] => [
+		...(customUploads[slot] || []),
+		...(Array.isArray(data.slots?.[slot]) ? data.slots![slot]! : []),
+	];
+
 	const saved = getSavedCommunityArtworkSelection(shortcutAppId, steamAppId);
 	const defaults: CommunityArtworkSelection = {};
 	const selected: CommunityArtworkSelection = {};
 	for (const slot of slots) {
-		const choices = available[slot];
+		const choices = getSlotItems(slot);
 		const defaultId = String(data.defaults?.[slot] ?? '');
 		const defaultChoice = choices.find(item => String(item.id) === defaultId) || choices[0];
 		if (defaultChoice) defaults[slot] = defaultChoice;
@@ -118,7 +127,13 @@ function openArtworkModal(context: ShortcutArtworkSettingsContext, data: Artwork
 				<div style="min-width:0;"><div style="font-size:16px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(context.gameTitle())} — ${escapeHtml(gdlText('game_artwork_picker_title', 'Library artwork'))}</div><div style="margin-top:4px;font-size:12px;color:#8f98a0;">${escapeHtml(gdlText('game_artwork_picker_modal_desc', 'Select one image for each Steam library slot. The blue border marks the image that will be applied.'))}</div></div>
 				<button class="gdl-art-close" type="button" aria-label="${escapeHtml(gdlText('close', 'Close'))}" style="width:30px;height:30px;border:0;border-radius:2px;background:transparent;color:#8f98a0;font-size:22px;cursor:pointer;">×</button>
 			</div>
-			<div class="gdl-art-tabs" style="display:flex;gap:6px;padding:10px 20px;background:#161d27;border-bottom:1px solid rgba(255,255,255,.06);"></div>
+			<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 20px;background:#161d27;border-bottom:1px solid rgba(255,255,255,.06);">
+				<div class="gdl-art-tabs" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+				<button class="gdl-art-upload-btn" type="button" style="padding:6px 13px;background:#2a475e;border:1px solid #1a9fff;border-radius:2px;color:#66c0f4;font-size:11.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;">
+					<span>📁</span><span>${escapeHtml(gdlText('game_artwork_upload_btn', 'Upload image'))}</span>
+				</button>
+				<input type="file" class="gdl-art-file-input" accept="image/png,image/jpeg,image/webp,image/x-icon,image/bmp,image/svg+xml" style="display:none;" />
+			</div>
 			<div class="gdl-art-grid" style="flex:1;min-height:0;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));align-content:start;gap:12px;padding:18px 20px;background:#121820;"></div>
 			<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 20px;background:#1e2837;border-top:1px solid rgba(255,255,255,.08);">
 				<div class="gdl-art-summary" style="font-size:11.5px;color:#8f98a0;"></div>
@@ -135,35 +150,104 @@ function openArtworkModal(context: ShortcutArtworkSettingsContext, data: Artwork
 	const gridEl = overlay.querySelector<HTMLElement>('.gdl-art-grid')!;
 	const summaryEl = overlay.querySelector<HTMLElement>('.gdl-art-summary')!;
 	const applyBtn = overlay.querySelector<HTMLButtonElement>('.gdl-art-apply')!;
+	const uploadBtn = overlay.querySelector<HTMLButtonElement>('.gdl-art-upload-btn')!;
+	const fileInput = overlay.querySelector<HTMLInputElement>('.gdl-art-file-input')!;
 	const close = (): void => overlay.remove();
+
+	uploadBtn.addEventListener('click', () => fileInput.click());
+	fileInput.addEventListener('change', () => {
+		const file = fileInput.files?.[0];
+		if (!file) return;
+		const reader = new FileReader();
+		reader.onload = () => {
+			const dataUrl = String(reader.result || '');
+			if (!dataUrl) return;
+			const img = new Image();
+			img.onload = () => {
+				const choice: CommunityArtworkChoice = {
+					id: `custom_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+					url: dataUrl,
+					thumb: dataUrl,
+					width: img.naturalWidth || img.width || 0,
+					height: img.naturalHeight || img.height || 0,
+					isCustom: true,
+				};
+				saveCustomUploadedArtwork(steamAppId, activeSlot, choice);
+				if (!customUploads[activeSlot]) customUploads[activeSlot] = [];
+				customUploads[activeSlot]!.unshift(choice);
+				selected[activeSlot] = choice;
+				fileInput.value = '';
+				render();
+			};
+			img.src = dataUrl;
+		};
+		reader.readAsDataURL(file);
+	});
 
 	const render = (): void => {
 		tabsEl.replaceChildren();
 		for (const slot of slots) {
+			const items = getSlotItems(slot);
 			const tab = doc.createElement('button');
 			tab.type = 'button';
 			tab.className = 'gdl-art-tab';
-			tab.textContent = `${labels[slot]} (${available[slot].length})`;
+			tab.textContent = `${labels[slot]} (${items.length})`;
 			tab.style.cssText = `padding:7px 11px;border-radius:2px;border:1px solid ${slot === activeSlot ? '#1a9fff' : 'rgba(255,255,255,.09)'};background:${slot === activeSlot ? 'rgba(26,159,255,.18)' : '#242c38'};color:${slot === activeSlot ? '#66c0f4' : '#acb2b8'};font-size:11.5px;font-weight:500;cursor:pointer;`;
 			tab.addEventListener('click', () => { activeSlot = slot; render(); });
 			tabsEl.appendChild(tab);
 		}
 
+		const currentItems = getSlotItems(activeSlot);
 		gridEl.replaceChildren();
-		for (const item of available[activeSlot]) {
+		for (const item of currentItems) {
 			const chosen = String(selected[activeSlot]?.id ?? '') === String(item.id);
 			const card = doc.createElement('button');
 			card.type = 'button';
 			card.className = 'gdl-art-card';
 			card.style.cssText = `position:relative;min-width:0;padding:8px;border-radius:3px;border:2px solid ${chosen ? '#1a9fff' : 'rgba(255,255,255,.08)'};background:${chosen ? 'rgba(26,159,255,.13)' : 'rgba(0,0,0,.22)'};color:#dcdedf;text-align:left;cursor:pointer;`;
-			const frameHeight = activeSlot === 'portrait' ? 230 : activeSlot === 'logo' ? 120 : 104;
-			card.innerHTML = `<div style="height:${frameHeight}px;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:2px;background:${activeSlot === 'logo' ? 'repeating-conic-gradient(#303946 0 25%,#222b36 0 50%) 50%/16px 16px' : '#0c1117'};"><img src="${escapeHtml(item.thumb || item.url)}" alt="" loading="lazy" style="display:block;width:100%;height:100%;object-fit:${activeSlot === 'logo' ? 'contain' : 'cover'};" /></div><div style="display:flex;justify-content:space-between;gap:8px;margin-top:7px;font-size:10.5px;color:#8f98a0;"><span>${escapeHtml(`${item.width || '?'}×${item.height || '?'}`)}</span><span>#${escapeHtml(String(item.id))}</span></div>${chosen ? '<div style="position:absolute;top:13px;right:13px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:#1a9fff;color:#fff;font-size:14px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.6);">✓</div>' : ''}`;
+			const frameHeight = activeSlot === 'portrait' ? 230 : activeSlot === 'logo' ? 120 : activeSlot === 'icon' ? 110 : 104;
+			const isTransparentBg = activeSlot === 'logo' || activeSlot === 'icon';
+			const objectFit = activeSlot === 'logo' || activeSlot === 'icon' ? 'contain' : 'cover';
+
+			const tagLabel = item.isCustom
+				? `<span style="background:rgba(102,192,244,.15);border:1px solid #1a9fff;color:#66c0f4;padding:1px 5px;border-radius:2px;font-size:10px;">${escapeHtml(gdlText('game_artwork_upload_custom_tag', 'Uploaded'))}</span>`
+				: `<span>#${escapeHtml(String(item.id))}</span>`;
+
+			const deleteButtonHtml = item.isCustom
+				? `<button class="gdl-art-del-btn" type="button" title="${escapeHtml(gdlText('game_artwork_delete_custom_tooltip', 'Delete custom image'))}" style="position:absolute;top:12px;left:12px;width:22px;height:22px;border:none;border-radius:50%;background:rgba(217,65,38,.88);color:#fff;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,.6);">✕</button>`
+				: '';
+
+			card.innerHTML = `
+				${deleteButtonHtml}
+				<div style="height:${frameHeight}px;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:2px;background:${isTransparentBg ? 'repeating-conic-gradient(#303946 0 25%,#222b36 0 50%) 50%/16px 16px' : '#0c1117'};">
+					<img src="${escapeHtml(item.thumb || item.url)}" alt="" loading="lazy" style="display:block;width:100%;height:100%;object-fit:${objectFit};" />
+				</div>
+				<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:7px;font-size:10.5px;color:#8f98a0;">
+					<span>${escapeHtml(`${item.width || '?'}×${item.height || '?'}`)}</span>
+					${tagLabel}
+				</div>
+				${chosen ? '<div style="position:absolute;top:13px;right:13px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:#1a9fff;color:#fff;font-size:14px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.6);z-index:2;">✓</div>' : ''}
+			`;
+
 			card.querySelector('img')?.addEventListener('error', event => { (event.currentTarget as HTMLElement).style.visibility = 'hidden'; }, { once: true });
+			if (item.isCustom) {
+				const delBtn = card.querySelector<HTMLButtonElement>('.gdl-art-del-btn');
+				delBtn?.addEventListener('click', (e) => {
+					e.stopPropagation();
+					deleteCustomUploadedArtwork(steamAppId, activeSlot, item.id);
+					customUploads[activeSlot] = (customUploads[activeSlot] || []).filter((c: CommunityArtworkChoice) => String(c.id) !== String(item.id));
+					if (String(selected[activeSlot]?.id) === String(item.id)) {
+						selected[activeSlot] = getSlotItems(activeSlot)[0] || defaults[activeSlot];
+					}
+					render();
+				});
+			}
+
 			card.addEventListener('click', () => { selected[activeSlot] = item; render(); });
 			gridEl.appendChild(card);
 		}
-		if (!available[activeSlot].length) gridEl.innerHTML = `<div style="grid-column:1/-1;padding:50px 20px;text-align:center;color:#8f98a0;">${escapeHtml(gdlText('game_artwork_picker_empty', 'No compatible artwork was found for this slot.'))}</div>`;
-		const selectableSlots = slots.filter(slot => available[slot].length > 0);
+		if (!currentItems.length) gridEl.innerHTML = `<div style="grid-column:1/-1;padding:50px 20px;text-align:center;color:#8f98a0;">${escapeHtml(gdlText('game_artwork_picker_empty', 'No compatible artwork was found for this slot.'))}</div>`;
+		const selectableSlots = slots.filter(slot => getSlotItems(slot).length > 0);
 		const selectedCount = selectableSlots.filter(slot => Boolean(selected[slot])).length;
 		summaryEl.textContent = gdlText('game_artwork_picker_summary', '{selected} of {total} slots selected · Source: SteamGridDB', { selected: selectedCount, total: selectableSlots.length });
 		applyBtn.disabled = selectableSlots.length === 0 || selectedCount !== selectableSlots.length;

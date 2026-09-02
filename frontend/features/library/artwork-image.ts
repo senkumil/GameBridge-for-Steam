@@ -44,14 +44,18 @@ export async function normalizeCommunityArtworkDataUrl(dataUrl: string, imageTyp
 		2: { width: 1280, height: 720, fit: 'contain' },
 		3: { width: 920, height: 430, fit: 'cover' },
 	};
-	const target = targetByType[imageType];
-	if (!target) return dataUrl;
+	const baseTarget = targetByType[imageType];
+	if (!baseTarget) return dataUrl;
 	return await new Promise(resolve => {
 		const image = new Image();
 		image.onload = () => {
 			try {
-				const sourceWidth = Math.max(1, image.naturalWidth || image.width || target.width);
-				const sourceHeight = Math.max(1, image.naturalHeight || image.height || target.height);
+				const sourceWidth = Math.max(1, image.naturalWidth || image.width || baseTarget.width);
+				const sourceHeight = Math.max(1, image.naturalHeight || image.height || baseTarget.height);
+				const is2x = sourceWidth >= baseTarget.width * 1.4 || sourceHeight >= baseTarget.height * 1.4;
+				const target = is2x
+					? { width: baseTarget.width * 2, height: baseTarget.height * 2, fit: baseTarget.fit }
+					: baseTarget;
 				const scale = target.fit === 'cover'
 					? Math.max(target.width / sourceWidth, target.height / sourceHeight)
 					: Math.min(target.width / sourceWidth, target.height / sourceHeight);

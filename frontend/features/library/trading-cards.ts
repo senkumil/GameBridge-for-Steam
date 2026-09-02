@@ -40,11 +40,12 @@ export function disposeResponsiveTradingCardGrids(doc: Document): void {
 	}
 }
 
-function openTradingCardPreview(doc: Document, imageUrl: string, gameName: string): void {
-	if (!doc.body || !imageUrl) return;
+function openTradingCardPreview(doc: Document, imageUrl: string, gameName: string, fallbackUrl?: string): void {
+	if (!doc.body || (!imageUrl && !fallbackUrl)) return;
 	disposeTradingCardPreview(doc);
 	resetTradingCardTilts(doc);
 
+	const initialUrl = imageUrl || fallbackUrl || '';
 	const overlay = doc.createElement('div');
 	overlay.id = 'gdl-trading-card-preview';
 	overlay.setAttribute('role', 'dialog');
@@ -53,7 +54,7 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 	overlay.innerHTML = `
 		<div class="gdl-trading-card-preview-panel">
 			<button type="button" class="gdl-trading-card-preview-x" aria-label="${escapeHtml(gdlText('close', 'Close'))}">×</button>
-			<img class="gdl-trading-card-preview-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(gameName)}" />
+			<img class="gdl-trading-card-preview-image" src="${escapeHtml(initialUrl)}" alt="${escapeHtml(gameName)}" />
 			<button type="button" class="gdl-trading-card-preview-close">${escapeHtml(gdlText('close', 'Close'))}</button>
 		</div>`;
 
@@ -61,6 +62,8 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 	const image = overlay.querySelector<HTMLImageElement>('.gdl-trading-card-preview-image');
 	let closed = false;
 	let previewRevealed = false;
+	let triedFallback = false;
+
 	const fitPreviewToImage = (): void => {
 		if (!panel || !image || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
 		const view = doc.defaultView;
@@ -83,14 +86,28 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 	};
 	const revealPreview = (): void => {
 		if (closed || previewRevealed) return;
+		if (!image || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
 		fitPreviewToImage();
 		previewRevealed = true;
 		const view = doc.defaultView;
 		if (view) view.requestAnimationFrame(() => overlay.classList.add('is-visible'));
 		else overlay.classList.add('is-visible');
 	};
-	const onImageLoad = (): void => revealPreview();
-	const onImageError = (): void => revealPreview();
+	const onImageLoad = (): void => {
+		if (image && image.naturalWidth > 0 && image.naturalHeight > 0) {
+			revealPreview();
+		} else {
+			onImageError();
+		}
+	};
+	const onImageError = (): void => {
+		if (!triedFallback && fallbackUrl && image && image.src !== fallbackUrl) {
+			triedFallback = true;
+			image.src = fallbackUrl;
+			return;
+		}
+		dismiss();
+	};
 	image?.addEventListener('load', onImageLoad);
 	image?.addEventListener('error', onImageError);
 	const onWindowResize = (): void => fitPreviewToImage();
@@ -402,9 +419,11 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			reset();
 			resetTradingCardTilts(card.ownerDocument);
 			const image = card.querySelector<HTMLImageElement>('img');
-			const imageUrl = card.dataset.gdlFullImage || image?.currentSrc || image?.src || '';
-			const gameName = root.querySelector<HTMLElement>('.gdl-trading-badge')?.title || '';
-			openTradingCardPreview(card.ownerDocument, imageUrl, gameName);
+			const thumbnailUrl = image?.currentSrc || image?.src || '';
+			const fullArtworkUrl = card.dataset.gdlFullImage || '';
+			const cardTitle = card.getAttribute('aria-label') || root.querySelector<HTMLElement>('.gdl-trading-badge')?.title || '';
+			const preferredUrl = fullArtworkUrl || thumbnailUrl;
+			openTradingCardPreview(card.ownerDocument, preferredUrl, cardTitle, thumbnailUrl);
 		};
 		card.addEventListener('click', event => {
 			event.preventDefault();

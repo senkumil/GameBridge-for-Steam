@@ -528,15 +528,31 @@ function updateNativeInfoPanelInPlace(doc: Document, panel: HTMLElement, model: 
 function nativeInfoPanelHeight(panel: HTMLElement): number {
 	const content = panel.firstElementChild as HTMLElement | null;
 	if (!content) return 1;
-	return Math.max(1, content.scrollHeight, content.offsetHeight);
+	const view = panel.ownerDocument?.defaultView;
+	const contentStyle = view?.getComputedStyle(content);
+	const panelStyle = view?.getComputedStyle(panel);
+	const marginTop = parseFloat(contentStyle?.marginTop || '0') || 0;
+	const marginBottom = parseFloat(contentStyle?.marginBottom || '0') || 0;
+	const padTop = parseFloat(panelStyle?.paddingTop || '0') || 0;
+	const padBottom = parseFloat(panelStyle?.paddingBottom || '0') || 0;
+	const base = Math.max(content.scrollHeight, content.offsetHeight);
+	return Math.max(1, Math.ceil(base + marginTop + marginBottom + padTop + padBottom));
 }
 
+let infoAnimationTimer: any = null;
+
 function resizeFallbackInfoPanel(panel: HTMLElement): void {
-	if (panel.dataset.gdlNativeLayout === '1' || panel.dataset.expanded !== '1') return;
+	if (panel.dataset.expanded !== '1' || infoAnimationTimer) return;
 	panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
 }
 
-function setNativeInfoExpanded(doc: Document, key: string, expanded: boolean, persist = false): void {
+function setNativeInfoExpanded(
+	doc: Document,
+	key: string,
+	expanded: boolean,
+	persist = false,
+	animate = true,
+): void {
 	if (persist) {
 		setPersistentInfoExpanded(expanded);
 	}
@@ -544,18 +560,94 @@ function setNativeInfoExpanded(doc: Document, key: string, expanded: boolean, pe
 	const outerModule = GAME_INFO_OUTER_CLASS_MODULE();
 	if (panel && panel.dataset.gameKey === key) {
 		const nativeLayout = panel.dataset.gdlNativeLayout === '1' && outerModule.native;
+		const isCurrentlyExpanded = panel.dataset.expanded === '1';
+
+		if (expanded === isCurrentlyExpanded && panel.classList.contains(expanded ? 'gdl-info-expanded' : 'gdl-info-collapsed')) {
+			if (expanded && !infoAnimationTimer) {
+				panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
+			}
+			return;
+		}
+
 		panel.dataset.expanded = expanded ? '1' : '0';
-		panel.classList.toggle('gdl-info-expanded', expanded);
-		if (nativeLayout) {
-			removeCssModuleClass(panel, expanded ? outerModule.classes.AppDetailsCollapsed : outerModule.classes.AppDetailsExpanded);
-			addCssModuleClass(panel, expanded ? outerModule.classes.AppDetailsExpanded : outerModule.classes.AppDetailsCollapsed);
+
+		if (infoAnimationTimer) {
+			clearTimeout(infoAnimationTimer);
+			infoAnimationTimer = null;
 		}
-		if (expanded) {
-			panel.style.removeProperty('height');
+
+		if (!animate) {
+			panel.classList.toggle('gdl-info-expanded', expanded);
+			panel.classList.toggle('gdl-info-collapsed', !expanded);
+			panel.classList.remove('gdl-info-collapsing');
+			if (nativeLayout) {
+				removeCssModuleClass(panel, expanded ? outerModule.classes.AppDetailsCollapsed : outerModule.classes.AppDetailsExpanded);
+				addCssModuleClass(panel, expanded ? outerModule.classes.AppDetailsExpanded : outerModule.classes.AppDetailsCollapsed);
+			}
+			if (expanded) {
+				panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
+				panel.style.opacity = '1';
+			} else {
+				panel.style.height = '0px';
+				panel.style.opacity = '0';
+			}
+			panel.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+		} else if (expanded) {
+			// Expansion: animate smoothly from current height to full content height
+			panel.classList.remove('gdl-info-collapsed', 'gdl-info-collapsing');
+			panel.classList.add('gdl-info-expanded');
+			if (nativeLayout) {
+				removeCssModuleClass(panel, outerModule.classes.AppDetailsCollapsed);
+				addCssModuleClass(panel, outerModule.classes.AppDetailsExpanded);
+			}
+			panel.setAttribute('aria-hidden', 'false');
+
+			const startHeight = Math.max(0, panel.getBoundingClientRect().height || 0);
+			panel.style.height = `${startHeight}px`;
+			panel.style.opacity = startHeight > 0 ? (panel.style.opacity || '0.5') : '0';
+
+			const targetHeight = nativeInfoPanelHeight(panel);
+
+			// Force reflow
+			void panel.offsetHeight;
+
+			panel.style.height = `${targetHeight}px`;
+			panel.style.opacity = '1';
+
+			infoAnimationTimer = setTimeout(() => {
+				infoAnimationTimer = null;
+				if (panel.isConnected && panel.dataset.expanded === '1') {
+					panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
+				}
+			}, 320);
 		} else {
+			// Collapse: animate smoothly from current height down to 0px
+			panel.classList.remove('gdl-info-expanded');
+			panel.classList.add('gdl-info-collapsing');
+			if (nativeLayout) {
+				removeCssModuleClass(panel, outerModule.classes.AppDetailsExpanded);
+				addCssModuleClass(panel, outerModule.classes.AppDetailsCollapsed);
+			}
+
+			const currentHeight = Math.max(1, panel.getBoundingClientRect().height || panel.offsetHeight || nativeInfoPanelHeight(panel));
+			panel.style.height = `${currentHeight}px`;
+			panel.style.opacity = '1';
+
+			// Force reflow so browser commits starting height
+			void panel.offsetHeight;
+
 			panel.style.height = '0px';
+			panel.style.opacity = '0';
+
+			infoAnimationTimer = setTimeout(() => {
+				infoAnimationTimer = null;
+				if (panel.isConnected && panel.dataset.expanded === '0') {
+					panel.classList.remove('gdl-info-collapsing');
+					panel.classList.add('gdl-info-collapsed');
+					panel.setAttribute('aria-hidden', 'true');
+				}
+			}, 320);
 		}
-		panel.setAttribute('aria-hidden', expanded ? 'false' : 'true');
 	}
 	for (const button of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-game-info-button="1"]'))) {
 		if (button.dataset.gameKey !== key) continue;
@@ -575,6 +667,10 @@ function setNativeInfoExpanded(doc: Document, key: string, expanded: boolean, pe
 }
 
 export function removeNativeInfoPanel(doc: Document, _preserveExpansion = false): void {
+	if (infoAnimationTimer) {
+		clearTimeout(infoAnimationTimer);
+		infoAnimationTimer = null;
+	}
 	const panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
 	if (!panel) return;
 	nativeInfoResizeObservers.get(panel)?.disconnect();
@@ -615,20 +711,22 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 		const content = panel.firstElementChild as HTMLElement | null;
 		if (typeof ResizeObserverCtor === 'function' && content) {
 			const observer = new ResizeObserverCtor(() => {
-				if (panel?.dataset.expanded === '1') {
-					panel.style.removeProperty('height');
+				if (panel?.dataset.expanded === '1' && !infoAnimationTimer) {
+					panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
 				}
 			});
 			observer.observe(content);
 			nativeInfoResizeObservers.set(panel, observer);
 		}
 		panel.querySelector('img')?.addEventListener('load', () => {
-			if (panel?.dataset.expanded === '1') panel.style.removeProperty('height');
+			if (panel?.dataset.expanded === '1' && !infoAnimationTimer) {
+				panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
+			}
 		});
 	}
 	const linkBar = doc.getElementById('gdl-link-bar');
 	if (linkBar?.parentElement && panel.nextElementSibling !== linkBar) linkBar.parentElement.insertBefore(panel, linkBar);
-	setNativeInfoExpanded(doc, model.key, getPersistentInfoExpanded(), false);
+	setNativeInfoExpanded(doc, model.key, getPersistentInfoExpanded(), false, false);
 	return panel;
 }
 
@@ -688,7 +786,7 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 					}
 					const key = button!.dataset.gameKey || '';
 					const nextState = !getPersistentInfoExpanded();
-					setNativeInfoExpanded(doc, key, nextState, true);
+					setNativeInfoExpanded(doc, key, nextState, true, true);
 				});
 				let favorite = elementsWithCssModuleClass(container, classes.FavoriteButton)[0] || null;
 				while (favorite && favorite.parentElement !== container) favorite = favorite.parentElement;
@@ -702,7 +800,7 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 
 	syncButtons();
 	installInfoButtonScrollBehavior(doc, playbarModule.native ? (classes.DotDotDot || '') : '', syncButtons);
-	setNativeInfoExpanded(doc, model.key, getPersistentInfoExpanded(), false);
+	setNativeInfoExpanded(doc, model.key, getPersistentInfoExpanded(), false, false);
 }
 
 export function removeNativeInfoButton(doc: Document): void {

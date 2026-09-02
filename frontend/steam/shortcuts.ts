@@ -1,5 +1,5 @@
 import { backendLog } from '../api/backend';
-import { findMappingForTitle } from '../core/mappings';
+import { findMappingForTitle, mappings, shortcutMappingKey } from '../core/mappings';
 import { normalizeTitle } from '../core/text';
 
 export const SHORTCUT_THRESHOLD = 2147483648;
@@ -64,7 +64,7 @@ export function toSignedShortcutAppId(shortcutAppId: number): number {
 	return shortcutAppId >= SHORTCUT_THRESHOLD ? shortcutAppId - 4294967296 : shortcutAppId;
 }
 
-function canonicalizeGameTitle(value: string): string {
+export function canonicalizeGameTitle(value: string): string {
 	let text = normalizeTitle(value)
 		.replace(/\.(?:exe|com|bat|cmd|lnk|appimage)$/i, '')
 		.replace(/\[[^\]]*\]/g, ' ')
@@ -103,7 +103,9 @@ export function looseMatchTitle(a: string, b: string): boolean {
 	return cleanA !== '' && cleanA === cleanB;
 }
 
-export function getSteamAppStore(): any | null {
+export function getSteamAppStore(doc?: Document): any | null {
+	if (doc?.defaultView && (doc.defaultView as any).appStore?.m_mapApps) return (doc.defaultView as any).appStore;
+	if (doc?.defaultView && (doc.defaultView as any).AppStore?.m_mapApps) return (doc.defaultView as any).AppStore;
 	if ((window as any).appStore?.m_mapApps) return (window as any).appStore;
 	if ((window as any).AppStore?.m_mapApps) return (window as any).AppStore;
 	if (typeof document !== 'undefined' && (document.defaultView as any)?.appStore?.m_mapApps) {
@@ -193,8 +195,20 @@ export function findActiveShortcutAppId(doc: Document, title: string): string | 
 				].filter(Boolean).join(' ');
 				for (const match of values.matchAll(idPattern)) {
 					const candidateId = Number(match[1]);
-					if (candidateId < SHORTCUT_THRESHOLD || !getShortcutAppById(candidateId)) continue;
+					if (candidateId < SHORTCUT_THRESHOLD) continue;
+					const signed = candidateId > 2147483647 ? candidateId - 4294967296 : candidateId;
 					const app = getShortcutAppById(candidateId);
+					if (!app) {
+						// On Steam startup, appStore.m_mapApps may still be hydrating.
+						// If this candidateId already exists in our saved mappings, resolve it immediately.
+						const isKnown = Boolean(
+							mappings[shortcutMappingKey(candidateId)]
+							|| mappings[shortcutMappingKey(signed)]
+							|| (trimmedTitle && findMappingForTitle(trimmedTitle, candidateId))
+						);
+						if (isKnown) return String(candidateId);
+						continue;
+					}
 					const name = String(app?.display_name || app?.m_strDisplayName || '').trim();
 					if (!trimmedTitle || !name || looseMatchTitle(name, trimmedTitle) || normalizeTitle(name) === normalizeTitle(trimmedTitle)) {
 						return String(candidateId);
@@ -330,20 +344,19 @@ export async function getShortcutPlaytimeMinutes(shortcutAppId: number): Promise
 	return retryable;
 }
 
-export function getMappedShortcuts(): Array<{ id: number; title: string; steamAppId: string }> {
-	const appStore = getSteamAppStore();
-	if (!appStore?.m_mapApps) return [];
+export function getMappedShortcuts(doc?: Document): Array<{ id: number; title: string; steamAppId: string }> {
+	const appStore = getSteamAppStore(doc);
 	const result: Array<{ id: number; title: string; steamAppId: string }> = [];
+	const seen = new Set<number>();
 	const entries: Array<[unknown, any]> = [];
 	try {
-		if (appStore.m_mapApps instanceof Map || typeof appStore.m_mapApps?.[Symbol.iterator] === 'function') {
+		if (appStore?.m_mapApps instanceof Map || typeof appStore?.m_mapApps?.[Symbol.iterator] === 'function') {
 			for (const [id, app] of appStore.m_mapApps) entries.push([id, app]);
-		} else if (appStore.m_mapApps && typeof appStore.m_mapApps === 'object') {
+		} else if (appStore?.m_mapApps && typeof appStore.m_mapApps === 'object') {
 			for (const [id, app] of Object.entries(appStore.m_mapApps)) entries.push([id, app]);
 		}
 	} catch {}
-	try { for (const app of Array.from(appStore.allApps || []) as any[]) entries.push([app?.appid, app]); } catch {}
-	const seen = new Set<number>();
+	try { for (const app of Array.from(appStore?.allApps || []) as any[]) entries.push([app?.appid, app]); } catch {}
 	for (const [id, app] of entries) {
 		const rawId = Number(id);
 		const shortcutId = rawId < 0 ? (rawId >>> 0) : rawId;
@@ -354,6 +367,15 @@ export function getMappedShortcuts(): Array<{ id: number; title: string; steamAp
 			result.push({ id: shortcutId, title, steamAppId: String(steamAppId) });
 			seen.add(shortcutId);
 		}
+	}
+	for (const [key, steamAppId] of Object.entries(mappings)) {
+		if (!key.startsWith('shortcut:') || !/^\d+$/.test(steamAppId)) continue;
+		const shortcutId = Number(key.slice('shortcut:'.length));
+		if (!Number.isFinite(shortcutId) || shortcutId < SHORTCUT_THRESHOLD || seen.has(shortcutId)) continue;
+		const app = getShortcutAppById(shortcutId);
+		const title = String(app?.display_name || app?.m_strDisplayName || app?.name || '').trim();
+		result.push({ id: shortcutId, title: title || `Shortcut ${shortcutId}`, steamAppId });
+		seen.add(shortcutId);
 	}
 	return result;
 }
