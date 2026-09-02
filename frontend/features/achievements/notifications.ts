@@ -360,7 +360,7 @@ function detectNewLocalAchievementUnlocks(
 		backendLog(`Achievement notification baseline created for ${data.appid}: ${baseline.earned.size} already unlocked`);
 	} else {
 		// The persisted earned-name set is the authoritative transition signal.
-		// Emulator JSON timestamps are optional and frequently use stale or
+		// Local JSON timestamps are optional and frequently use stale or
 		// incompatible clocks, so they must not suppress a real locked -> earned
 		// change observed between two polls.
 		newlyUnlocked = currentlyEarned.filter(achievement => !baseline!.earned.has(String(achievement.name)));
@@ -371,7 +371,7 @@ function detectNewLocalAchievementUnlocks(
 		persistLocalAchievementToastBaseline(key, baseline);
 	}
 
-	// A new emulator file can be created with its first achievement already
+	// A new achievement file can be created with its first achievement already
 	// earned before the overlay's six-second readiness window ends. In that case
 	// no locked snapshot ever reaches the normal transition detector. Recover
 	// achievements timestamped within this running session as a positive signal;

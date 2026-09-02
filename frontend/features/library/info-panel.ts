@@ -550,7 +550,11 @@ function setNativeInfoExpanded(doc: Document, key: string, expanded: boolean, pe
 			removeCssModuleClass(panel, expanded ? outerModule.classes.AppDetailsCollapsed : outerModule.classes.AppDetailsExpanded);
 			addCssModuleClass(panel, expanded ? outerModule.classes.AppDetailsExpanded : outerModule.classes.AppDetailsCollapsed);
 		}
-		panel.style.height = expanded ? `${nativeInfoPanelHeight(panel)}px` : '0px';
+		if (expanded) {
+			panel.style.removeProperty('height');
+		} else {
+			panel.style.height = '0px';
+		}
 		panel.setAttribute('aria-hidden', expanded ? 'false' : 'true');
 	}
 	for (const button of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-game-info-button="1"]'))) {
@@ -607,16 +611,20 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 		if (linkBar?.parentElement) linkBar.parentElement.insertBefore(panel, linkBar);
 		else return null;
 
-		if (!nativeLayout) {
-			const ResizeObserverCtor = doc.defaultView?.ResizeObserver;
-			const content = panel.firstElementChild as HTMLElement | null;
-			if (typeof ResizeObserverCtor === 'function' && content) {
-				const observer = new ResizeObserverCtor(() => resizeFallbackInfoPanel(panel!));
-				observer.observe(content);
-				nativeInfoResizeObservers.set(panel, observer);
-			}
-			panel.querySelector('img')?.addEventListener('load', () => resizeFallbackInfoPanel(panel!));
+		const ResizeObserverCtor = doc.defaultView?.ResizeObserver;
+		const content = panel.firstElementChild as HTMLElement | null;
+		if (typeof ResizeObserverCtor === 'function' && content) {
+			const observer = new ResizeObserverCtor(() => {
+				if (panel?.dataset.expanded === '1') {
+					panel.style.removeProperty('height');
+				}
+			});
+			observer.observe(content);
+			nativeInfoResizeObservers.set(panel, observer);
 		}
+		panel.querySelector('img')?.addEventListener('load', () => {
+			if (panel?.dataset.expanded === '1') panel.style.removeProperty('height');
+		});
 	}
 	const linkBar = doc.getElementById('gdl-link-bar');
 	if (linkBar?.parentElement && panel.nextElementSibling !== linkBar) linkBar.parentElement.insertBefore(panel, linkBar);

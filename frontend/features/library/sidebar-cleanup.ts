@@ -25,8 +25,7 @@ function extractAppIdFromElement(element: HTMLElement): number | null {
 
 /**
  * Filter ghost / duplicate unowned Steam app entries spawned in the sidebar
- * by local Steam emulators (steam_api.dll / Goldberg / CODEX / FLT) during
- * shortcut execution.
+ * during non-Steam shortcut execution.
  */
 export function cleanupGhostSidebarEntries(doc: Document): void {
 	try {
@@ -41,7 +40,7 @@ export function cleanupGhostSidebarEntries(doc: Document): void {
 			if (!mappedShortcutId) continue;
 			const view = doc.defaultView as any;
 			const overview = view?.appStore?.GetAppOverviewByAppID?.(id);
-			// Emulator-created overviews can temporarily report installed/running even
+			// Non-Steam overviews can temporarily report installed/running even
 			// though the account does not own the app. Subscription is the ownership
 			// boundary; treating an absent subscription flag as owned allowed the ghost
 			// row to survive until Steam rebuilt its library on restart.
@@ -75,12 +74,42 @@ export function tryRedirectUnownedMappedGame(doc: Document): boolean {
 	return false;
 }
 
+const NON_STEAM_COLLECTION_REGEX = /(?:^|\b)(?:no\s+de\s+steam|non-?steam|nicht-?steam|jeux\s+non-?steam|giochi\s+non-?steam|não\s+(?:são\s+do\s+)?steam|не\s+из\s+steam|非\s*steam|비\s*steam)(?:\b|$)/i;
+
+/**
+ * Permanently hide "Non-Steam" collection headers, filter pills, and category tabs
+ * across all views so shortcuts seamlessly integrate into standard game collections.
+ */
+export function cleanupNonSteamPillsAndHeaders(doc: Document): void {
+	try {
+		if (!doc?.body) return;
+		const candidates = doc.querySelectorAll<HTMLElement>(
+			'[class*="FilterOption"], [class*="filterOption"], [class*="SavedFilter"], [class*="savedFilter"], [class*="CollectionHeader"], [class*="collectionHeader"], [class*="SectionHeader"], [class*="sectionHeader"], [class*="Collections"], [class*="collections"], [class*="allcollections_"], [class*="libraryhome_"], [class*="Filter"], [class*="filter"], [class*="Pill"], [class*="pill"], [role="tab"], [role="button"]'
+		);
+		for (const el of Array.from(candidates)) {
+			const text = el.textContent?.trim() || '';
+			if (!text || text.length > 45) continue;
+			if (NON_STEAM_COLLECTION_REGEX.test(text)) {
+				const target = (el.closest('[class*="FilterOption"], [class*="SavedFilter"], [class*="CollectionHeader"], [class*="SectionHeader"], [class*="Pill"], [class*="pill"], [role="tab"]') as HTMLElement) || el;
+				if (target.style.display !== 'none') {
+					target.style.setProperty('display', 'none', 'important');
+					target.style.setProperty('visibility', 'hidden', 'important');
+					target.style.setProperty('pointer-events', 'none', 'important');
+					target.dataset.gdlNonsteam = '1';
+				}
+			}
+		}
+	} catch {}
+}
+
 export function installGhostSidebarCleanup(doc: Document): () => void {
 	cleanupGhostSidebarEntries(doc);
+	cleanupNonSteamPillsAndHeaders(doc);
 	const Observer = doc.defaultView?.MutationObserver;
 	if (!Observer) return () => {};
 	const observer = new Observer(() => {
 		cleanupGhostSidebarEntries(doc);
+		cleanupNonSteamPillsAndHeaders(doc);
 	});
 	try {
 		if (doc.body) {

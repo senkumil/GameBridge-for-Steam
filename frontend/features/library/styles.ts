@@ -13,7 +13,59 @@ import { ensureHistoricalSidebarStyles } from './styles/historical-sidebar';
  */
 export function ensureNativeGameInfoStyles(doc: Document): void {
 	if (doc.getElementById('gdl-library-style-sentinel')) return;
-	injectLibraryStyle(doc, 'gdl-library-style-sentinel', '[data-gdl-playbar-achievements="1"] .gdl-lp-fill{background:#2d73ff!important;}');
+	injectLibraryStyle(doc, 'gdl-library-style-sentinel', `
+		[data-gdl-playbar-achievements="1"] .gdl-lp-fill{background:#2d73ff!important;}
+		[class*="GameStatsSection"], [class*="gameStatsSection"] {
+			min-width: 0 !important;
+			flex-shrink: 1 !important;
+			gap: 8px !important;
+		}
+		[class*="GameStat"], [class*="gameStat"] {
+			min-width: 0 !important;
+			overflow: visible !important;
+		}
+		[class*="PlayBarLabel"], [class*="playBarLabel"], [class*="GameStat"] [class*="PlayBarLabel"] {
+			white-space: nowrap !important;
+			overflow: visible !important;
+			text-overflow: clip !important;
+			font-size: 11px !important;
+			letter-spacing: 0.3px !important;
+		}
+		[class*="PlayBarDetailLabel"], [class*="playBarDetailLabel"] {
+			white-space: nowrap !important;
+			overflow: visible !important;
+		}
+		[class*="LogoContainer"], [class*="logoContainer"] {
+			max-width: 55% !important;
+			max-height: 55% !important;
+			transition: max-width 0.2s ease, max-height 0.2s ease !important;
+		}
+		[class*="LogoContainer"] img, [class*="logoContainer"] img {
+			max-width: 100% !important;
+			max-height: 100% !important;
+			object-fit: contain !important;
+		}
+		[class*="HeaderContainer"], [class*="headerContainer"],
+		[class*="HeroContainer"], [class*="heroContainer"],
+		[class*="TopCapsule"], [class*="topCapsule"] {
+			overflow: hidden !important;
+		}
+		[class*="HeaderImage"], [class*="headerImage"],
+		[class*="HeroImage"], [class*="heroImage"] {
+			object-fit: cover !important;
+			width: 100% !important;
+			height: 100% !important;
+		}
+		@media (max-width: 900px) {
+			[class*="LogoContainer"], [class*="logoContainer"] {
+				max-width: 48% !important;
+				max-height: 48% !important;
+			}
+			[class*="PlayBarLabel"], [class*="playBarLabel"] {
+				font-size: 10.5px !important;
+			}
+		}
+	`);
 	ensureInfoPanelStyles(doc);
 	ensurePrimaryLinksStyles(doc);
 	ensureActivityStyles(doc);

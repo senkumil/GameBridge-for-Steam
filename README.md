@@ -16,9 +16,9 @@ Once linked, an external game no longer feels like an empty shortcut: it receive
 
 - **Delisted & Removed Steam Games Support:** Full support for delisted, retired, or unlisted Steam games (e.g. *Mortal Kombat Komplete Edition*, *Pro Evolution Soccer 2013*) with resilient metadata and official artwork resolution.
 - **Direct Artwork Management in Game Properties:** Choose, preview, and apply custom hero backgrounds, logos, capsules, and icons directly from the *Customization* tab in Properties.
-- **Steam Achievement Manager (SAM) Integration:** Inspect, unlock, lock, or modify achievement progress for your official Steam games directly from your library interface.
+- **Steam Achievement Management Tools:** Inspect, unlock, lock, or modify achievement progress for your official Steam games directly from your library interface.
 - **Steam Trading Card Farming & Simulation:** Interactive trading card showcase with 3D animated cards, foil holographic reflection, badge level progression, and remaining card tracking.
-- **Simplified Non-Steam Achievement Simulation:** Easily configure achievement simulation per-game (100% instant completion, progressive simulation, or manual tracking) with emulator and launcher compatibility.
+- **Simplified Non-Steam Achievement Simulation:** Easily configure achievement simulation per-game (100% instant completion, progressive simulation, or manual tracking) with local file compatibility.
 - **Big Picture & Steam Deck UI Integration:** Renders official hero backgrounds, logos, and synced playtime natively in Big Picture mode.
 
 ---
@@ -94,7 +94,7 @@ These captures show the visual difference between an unlinked shortcut and a lin
 
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/bb057d46-3946-4b83-842c-0f7171bf9fc2" />
 
-### 7. Integration with SAM
+### 7. Official Achievement Management Tools
 
 <img width="2558" height="1356" alt="image" src="https://github.com/user-attachments/assets/d25978a0-7b77-4695-890c-03a4560d618d" />
 
@@ -163,43 +163,27 @@ This is a local UI integration. It does not convert the shortcut into an owned S
 
 ## 🏆 Non-Steam Achievements and Native Notifications
 
-NativeGameLink brings a full achievement experience to your linked non-Steam games by combining official Steam achievement metadata and icons with a local achievement file or simulated progression.
+NativeGameLink brings a full achievement experience to your linked non-Steam games by combining official Steam achievement metadata and icons with local tracking or simulated progression:
 
-Available achievement features include:
+### 💡 Non-Steam Achievement System
 
-- Total and unlocked counters in the play bar and sidebar.
-- Progress bars, unlocked and locked groups, icons, descriptions, and unlock dates.
-- Full achievement modal with native-style filtering and global unlock percentages when available.
-- Live monitoring of local progress files.
-- Achievement unlock toast and sound using Steam's native notification system.
-- A settings button for testing achievement notifications.
-- Optional deterministic test achievements for interface testing when no progress file exists; disabled by default.
+NativeGameLink's achievement system is **integrated directly into Steam's interface**, featuring:
+- **Real-time local tracking:** Automatically detects and reads local `achievements.json` progress files in your configured directory or game folder.
+- **Native notifications with sound:** Displays authentic Steam achievement popup notifications with official sound upon unlock.
+- **Built-in simulation & customization:** Easily configure non-Steam achievement progress per-game (100% instant completion, progressive simulation, or manual tracking from Game Properties).
 
-### 💡 How Non-Steam Achievements Work (Achievement Watcher Style)
+You can configure the achievement source in three ways:
 
-Basically, the plugin **only reads achievement JSON files that have already been generated**, similar to how *Achievement Watcher* works. The main difference is that with NativeGameLink for Steam, the achievement system is **integrated directly into Steam's interface** and displays **Steam's native achievement notifications with sound**.
+1. **Automatic discovery by AppID (Default):** Automatically searches `%APPDATA%\SteamAchievements\<AppID>\` and configured local folders.
+2. **Global folder:** Open NativeGameLink settings and select your root achievements folder.
+3. **Per-game custom path:** Right-click the shortcut → **Properties** → **Linked Game** and select a specific `achievements.json` file or its parent directory.
 
-> [!IMPORTANT]
-> **Complete Independence from SteamAutoCrack and External Generators:**
-> - **Generating achievement JSON files is completely separate from the plugin.**
-> - If a user wants to generate them using [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases) or Goldberg Emulator, SteamAutoCrack must be installed and used **independently**.
-> - SteamAutoCrack is **not** included, bundled, called, executed, or integrated in any way by NativeGameLink for Steam.
-> - **In short:** NativeGameLink for Steam does **not** depend on SteamAutoCrack and has **no integration** with it. The plugin can only read compatible achievement JSON files if the user already has them, regardless of how those files were generated.
+## 🎖️ Official Steam Achievement Management Tools
 
-### ⚙️ Externally Generated Files Are 100% Optional (Simulated Achievements)
-
-Using externally generated achievement JSON files is **entirely optional**. Users can link their non-Steam games without any external files and use the plugin's **built-in simulated achievement system** instead:
-
-- **Instant 100% Completion:** Mark all achievements as unlocked immediately.
-- **Progressive Simulation:** Simulate earning achievements gradually over time.
-- **Manual Tracking:** Adjust achievement progress and counts manually via sliders in Game Properties.
-
-## 🎖️ Steam Achievement Manager (SAM) for Official Steam Games
-
-What **is** integrated directly into the plugin is **Steam Achievement Manager (SAM)** functionality for managing achievements of **legitimately owned Steam games**:
+What **is** integrated directly into the plugin is advanced **Achievement Management** functionality for **legitimately owned Steam games**:
 
 - **Direct In-Client Management:** Inspect, unlock, lock, or modify achievement progress for your official Steam games directly from your Steam Library interface.
-- **No External Standalone Tools:** No need to download, configure, or run separate standalone SAM applications (`SAM.exe`).
+- **No External Tools Required:** No need to download, configure, or run separate third-party standalone tools.
 - **Instant Synchronization:** Changes synchronize immediately with Steam's backend and reflect live across your Steam client UI.
 
 ---
@@ -313,6 +297,14 @@ Backend changes under `backend/` take effect after restarting Steam.
 ## ☕ Support the Project
 
 If NativeGameLink for Steam has improved your library, you can support its continued development, testing, localization, and maintenance on [Ko-fi](https://ko-fi.com/senkumil). Every contribution is appreciated and helps keep the project moving forward.
+
+---
+
+## 💖 Credits & Special Thanks
+
+- [retrotoolsdev-wq/game-data-linker](https://github.com/retrotoolsdev-wq/game-data-linker): Special thanks to the original project and creators for pioneering the concept of linking non-Steam games to real Steam game metadata in Millennium.
+- [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager): Special thanks to Rick (Gibbed) and contributors for their foundational work and research on Steam client statistics and achievement management.
+- [xan105/Achievement-Watcher](https://github.com/xan105/Achievement-Watcher): Special thanks to xan105 for inspiring ideas in local achievement file parsing and real-time notification tracking.
 
 ---
 

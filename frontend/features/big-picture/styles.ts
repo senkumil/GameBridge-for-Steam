@@ -115,11 +115,17 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-card:hover,
-		#gdl-bp-detail-root .gdl-bp-feed-card:focus-visible {
-			background: rgba(255, 255, 255, 0.08);
-			border-color: rgba(255, 255, 255, 0.28);
-			box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
-			outline: none;
+		#gdl-bp-detail-root .gdl-bp-feed-card:focus,
+		#gdl-bp-detail-root .gdl-bp-feed-card:focus-visible,
+		#gdl-bp-detail-root .gdl-bp-feed-card.gpfocus,
+		#gdl-bp-detail-root .gdl-bp-feed-card.focus,
+		#gdl-bp-detail-root .gdl-bp-feed-card[data-focus="true"] {
+			background: rgba(255, 255, 255, 0.12) !important;
+			border-color: #ffffff !important;
+			box-shadow: 0 0 0 2px #ffffff, 0 6px 22px rgba(0, 0, 0, 0.6) !important;
+			transform: scale(1.015) !important;
+			outline: none !important;
+			z-index: 2;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-icon-wrap {
 			flex: 0 0 54px;
@@ -364,10 +370,42 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		#gdl-bp-detail-root .gdl-bp-action-button:hover,
 		#gdl-bp-detail-root .gdl-bp-info-link:hover,
 		#gdl-bp-detail-root .gdl-bp-action-button:focus,
-		#gdl-bp-detail-root .gdl-bp-info-link:focus { background:#5b6574;color:#fff;outline:none; }
+		#gdl-bp-detail-root .gdl-bp-action-button:focus-visible,
+		#gdl-bp-detail-root .gdl-bp-action-button.gpfocus,
+		#gdl-bp-detail-root .gdl-bp-action-button.focus,
+		#gdl-bp-detail-root .gdl-bp-info-link:focus,
+		#gdl-bp-detail-root .gdl-bp-info-link:focus-visible,
+		#gdl-bp-detail-root .gdl-bp-info-link.gpfocus,
+		#gdl-bp-detail-root .gdl-bp-info-link.focus {
+			background: #ffffff !important;
+			color: #12161c !important;
+			box-shadow: 0 0 0 2px #ffffff, 0 6px 20px rgba(0, 0, 0, 0.5) !important;
+			transform: scale(1.04) !important;
+			outline: none !important;
+		}
 		#gdl-bp-detail-root .gdl-bp-media-box .gdl-bp-action-button { position:absolute;left:14px;bottom:14px; }
 		#gdl-bp-detail-root .gdl-bp-community-grid { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;align-items:start; }
-		#gdl-bp-detail-root .gdl-bp-community-card { background:rgba(39,45,54,.94);overflow:hidden;min-width:0; }
+		#gdl-bp-detail-root .gdl-bp-community-card {
+			background:rgba(39,45,54,.94);
+			overflow:hidden;
+			min-width:0;
+			cursor:pointer;
+			border-radius:4px;
+			border: 1px solid transparent;
+			transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+		}
+		#gdl-bp-detail-root .gdl-bp-community-card:hover,
+		#gdl-bp-detail-root .gdl-bp-community-card:focus,
+		#gdl-bp-detail-root .gdl-bp-community-card:focus-visible,
+		#gdl-bp-detail-root .gdl-bp-community-card.gpfocus,
+		#gdl-bp-detail-root .gdl-bp-community-card.focus,
+		#gdl-bp-detail-root .gdl-bp-community-card[data-focus="true"] {
+			border-color: #ffffff !important;
+			box-shadow: 0 0 0 2px #ffffff, 0 8px 24px rgba(0, 0, 0, 0.6) !important;
+			transform: scale(1.03) !important;
+			outline: none !important;
+			z-index: 2;
+		}
 		#gdl-bp-detail-root .gdl-bp-community-card img.gdl-bp-community-media { display:block;width:100%;height:250px;object-fit:cover;background:#15191f; }
 		#gdl-bp-detail-root .gdl-bp-community-title { padding:10px 12px 0;font-size:16px;line-height:21px;color:#ddd; }
 		#gdl-bp-detail-root .gdl-bp-community-author { min-height:62px;padding:10px 12px;display:flex;gap:10px;align-items:center;font-size:15px;color:#f0f0f0; }

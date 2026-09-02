@@ -16,9 +16,9 @@ Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: reci
 
 - **Compatibilidad con Juegos Eliminados y Deslistados de Steam:** Soporte completo para títulos descatalogados o sin página de tienda activa en Steam (como *Mortal Kombat Komplete Edition*, *Pro Evolution Soccer 2013*, etc.), resolviendo metadatos e ilustraciones oficiales sin bloqueos.
 - **Gestión y Cambio de Artworks Directamente desde Propiedades:** Selector visual dentro de la pestaña *Personalización* en Propiedades para previsualizar, cambiar y aplicar fondos hero, logos, cápsulas e iconos en tiempo real.
-- **Modificación y Gestión de Logros en Juegos Originales de Steam (SAM Integrado):** Consulta, desbloquea, bloquea o edita el progreso de logros de tus juegos oficiales de Steam directamente desde la biblioteca.
+- **Gestión de Logros en Juegos Oficiales de Steam:** Consulta, desbloquea, bloquea o edita el progreso de logros de tus juegos oficiales de Steam directamente desde la biblioteca.
 - **Simulación y Farmeo de Cromos de Steam (Trading Cards):** Colección interactiva de tarjetas en 3D, seguimiento de cromos restantes, progreso de insignia y acceso directo a la comunidad.
-- **Simulador de Logros Simplificado para Juegos No-Steam:** Configuración ultra accesible por juego (100% completado, progreso simulado o manual), compatible con emuladores y lanzadores externos.
+- **Simulador de Logros Simplificado para Juegos No-Steam:** Configuración ultra accesible por juego (100% completado, progreso simulado o manual) con compatibilidad de archivos locales.
 - **Detección Automática Inteligente:** Evalúa evidencias reales de ejecutables, rutas de instalación y niveles de confianza con previsualización de carátulas.
 - **Integración con Big Picture & Steam Deck UI:** Renderizado oficial de fondos hero, logos y tiempo de juego sincronizado de forma nativa.
 
@@ -93,7 +93,7 @@ Estas capturas muestran la diferencia visual entre un acceso directo no vinculad
 
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/bb057d46-3946-4b83-842c-0f7171bf9fc2" />
 
-### 7. Integración con SAM
+### 7. Herramientas de Gestión de Logros Oficiales
 
 <img width="2558" height="1356" alt="image" src="https://github.com/user-attachments/assets/d25978a0-7b77-4695-890c-03a4560d618d" />
 
@@ -179,39 +179,27 @@ Incluye:
 - Botón de prueba de notificaciones en los ajustes del plugin.
 - Logros de prueba deterministas opcionales para revisar la interfaz sin un archivo local; desactivados por defecto.
 
-### 💡 Cómo funcionan los logros en juegos No-Steam (Estilo Achievement Watcher)
+### 💡 Sistema de Logros para Juegos No-Steam
 
-Básicamente, el plugin **únicamente lee archivos JSON de logros que ya hayan sido generados previamente**, de forma similar a como funciona *Achievement Watcher*. La principal diferencia es que, en este caso, el sistema de logros está **integrado directamente en la interfaz de Steam** y utiliza las **notificaciones y sonidos nativos de Steam**.
-
-> [!IMPORTANT]
-> **Independencia absoluta respecto a SteamAutoCrack y generadores externos:**
-> - **La generación de los archivos JSON de logros es un proceso totalmente independiente y externo al plugin.**
-> - Si un usuario desea generarlos utilizando herramientas como [SteamAutoCrack](https://github.com/SteamAutoCracks/Steam-auto-crack/releases) o Goldberg Emulator, SteamAutoCrack debe instalarse y ejecutarse de forma **independiente**.
-> - SteamAutoCrack **no** viene incluido, ni empaquetado, ni es llamado, ejecutado o integrado de ninguna manera por NativeGameLink for Steam.
-> - **En resumen:** NativeGameLink for Steam **no** depende de SteamAutoCrack y **no** tiene ninguna integración con él. El plugin únicamente puede leer archivos JSON compatibles si el usuario ya dispone de ellos en su equipo, independientemente de cómo hayan sido generados.
-
-### ⚙️ El uso de archivos externos es 100% Opcional (Logros Simulados)
-
-El uso de archivos JSON de logros generados externamente es **totalmente opcional**. Los usuarios pueden vincular sus juegos No-Steam sin necesidad de dichos archivos y utilizar en su lugar el **sistema de logros simulados integrado** en el plugin:
-
-- **100% completado instantáneo:** Marca todos los logros como desbloqueados de inmediato.
-- **Simulación progresiva:** Simula la obtención gradual de logros a medida que juegas.
-- **Seguimiento manual:** Ajusta el progreso y el número de logros manualmente mediante controles deslizantes en las Propiedades del juego.
+El sistema de logros de NativeGameLink for Steam está **integrado directamente en la interfaz de Steam**, con compatibilidad nativa para:
+- **Seguimiento local en tiempo real:** Detecta y lee el progreso de logros locales automáticamente en tu carpeta configurada o en la carpeta del juego.
+- **Notificaciones nativas con sonido:** Muestra las notificaciones emergentes de logros de Steam al desbloquearlos durante la partida con el sonido oficial.
+- **Simulación y personalización integrada:** Configura el progreso de logros de tus juegos No-Steam fácilmente (100% desbloqueado, simulación progresiva o ajuste manual desde Propiedades).
 
 Puedes configurar el origen de los logros de tres formas:
 
-1. **Búsqueda automática por AppID (Por defecto):** Busca automáticamente en `%APPDATA%\GSE Saves\<AppID>\`, ubicaciones compatibles de Goldberg y las carpetas globales configuradas.
-2. **Carpeta global:** Abre los ajustes de NativeGameLink y selecciona una carpeta raíz que contenga una subcarpeta por cada AppID de Steam.
+1. **Búsqueda automática por AppID (Por defecto):** Busca automáticamente en `%APPDATA%\SteamAchievements\<AppID>\` y en las carpetas locales configuradas.
+2. **Carpeta global:** Abre los ajustes de NativeGameLink y selecciona tu carpeta raíz de logros.
 3. **Ruta personalizada por juego:** Haz clic derecho en el acceso directo → **Propiedades** → **Juego vinculado** y selecciona un archivo `achievements.json` concreto o su carpeta contenedora.
 
 ---
 
-## 🎖️ Steam Achievement Manager (SAM Integrado) para Juegos Originales
+## 🎖️ Herramientas de Gestión de Logros para Juegos Oficiales de Steam
 
-Lo que **sí está integrado directamente** en el plugin es la funcionalidad de **Steam Achievement Manager (SAM)** para gestionar los logros de **juegos de Steam legítimos/originales**:
+El plugin incluye herramientas integradas de **Gestión de Logros** para tus **juegos oficiales de Steam**:
 
 - **Gestión directa en la biblioteca:** Consulta, desbloquea, bloquea o edita el progreso de logros de tus juegos oficiales de Steam directamente desde la interfaz de Steam.
-- **Sin herramientas externas independientes:** No necesitas descargar, configurar ni abrir aplicaciones externas como `SAM.exe`.
+- **Sin herramientas externas:** No necesitas descargar, configurar ni abrir ejecutables adicionales.
 - **Sincronización instantánea:** Los cambios se sincronizan de inmediato con el backend de Steam y se reflejan en tiempo real en la interfaz de la biblioteca.
 
 ---
@@ -325,6 +313,14 @@ Los cambios dentro de `backend/` se aplican después de reiniciar Steam.
 ## ☕ Apoya el proyecto
 
 Si NativeGameLink for Steam ha mejorado tu Biblioteca, puedes apoyar su desarrollo, pruebas, traducción y mantenimiento en [Ko-fi](https://ko-fi.com/senkumil). Cada contribución ayuda a que el proyecto siga avanzando.
+
+---
+
+## 💖 Créditos y Agradecimientos
+
+- [retrotoolsdev-wq/game-data-linker](https://github.com/retrotoolsdev-wq/game-data-linker): Un agradecimiento especial al proyecto y autores originales por ser pioneros en el concepto de vincular datos de Steam a accesos directos en Millennium.
+- [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager): Un agradecimiento especial a Rick (Gibbed) y a los colaboradores de SteamAchievementManager por su trabajo fundamental e investigación histórica en la gestión de estadísticas y logros de Steam.
+- [xan105/Achievement-Watcher](https://github.com/xan105/Achievement-Watcher): Un agradecimiento especial a xan105 por inspirar ideas en la lectura de archivos de logros locales y notificaciones en tiempo real.
 
 ---
 

@@ -34,6 +34,7 @@ import { ensureBigPictureDetailsStyles } from './styles';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
 import { gamepadFeatureFlags } from '../gamepad/flags';
 import { mountSingleNativeAchievement } from '../gamepad/achievements/SingleNativeAchievement';
+import { getFocusableElements, installBigPictureGamepadNavigation } from './gamepad-nav';
 
 type MappedShortcut = { id: number; title: string; steamAppId: string };
 type BigPictureTab = 'activity' | 'stuff' | 'community' | 'info';
@@ -503,7 +504,7 @@ function renderActivity(data: BigPictureDetailData, shortcut: MappedShortcut, hy
 			if (entry.type === 'post') {
 				const p = entry.post;
 				feedHtml += `
-					<div class="gdl-bp-feed-card" tabindex="0">
+					<div class="gdl-bp-feed-card Focusable" tabindex="0" role="button" data-focusable="true">
 						<div class="gdl-bp-feed-icon-wrap"><img class="gdl-bp-feed-avatar" src="${escapeAttr(p.user_avatar)}" alt="" /></div>
 						<div class="gdl-bp-feed-body">
 							<div class="gdl-bp-feed-eyebrow">${escapeHtml(gdlText('user_status', 'Status Post').toUpperCase())}</div>
@@ -527,7 +528,7 @@ function renderActivity(data: BigPictureDetailData, shortcut: MappedShortcut, hy
 					: '';
 
 				feedHtml += `
-					<a class="gdl-bp-feed-card" href="${escapeAttr(item.url || '#')}" ${item.url ? 'data-gdl-bp-external="1"' : ''} tabindex="0">
+					<a class="gdl-bp-feed-card Focusable" href="${escapeAttr(item.url || '#')}" ${item.url ? 'data-gdl-bp-external="1"' : ''} tabindex="0" role="button" data-focusable="true">
 						${thumbUrl
 							? `<div class="gdl-bp-feed-thumb-wrap"><img class="gdl-bp-feed-thumb" src="${escapeAttr(thumbUrl)}" alt="" loading="lazy" /></div>`
 							: `<div class="gdl-bp-feed-icon-wrap">${wrenchToolSvg()}</div>`
@@ -571,9 +572,9 @@ function renderAchievements(data: LocalAchievementData | null): string {
 				<div class="gdl-bp-ach-progress-copy"><div class="gdl-bp-ach-progress-label"><strong>${escapeHtml(progressLabel)}</strong> <span>(${pct}%)</span></div><div class="gdl-bp-progress-track"><div class="gdl-bp-progress-fill" style="width:${pct}%"></div></div></div>
 			</div>
 			<div class="gdl-bp-ach-strip">
-				${featured ? `<div class="gdl-bp-ach-featured${isHighlighted(featured) ? ' is-rare' : ''}"><div class="gdl-bp-ach-img-frame${isHighlighted(featured) ? ' is-rare' : ''}"><div class="gdl-bp-ach-rare-glow"></div><div class="gdl-bp-ach-rare-ring"></div><div class="gdl-bp-ach-rare-beam"></div><img class="gdl-bp-ach-img" src="${escapeAttr(featured.earned ? featured.icon : (featured.icon_gray || featured.icon))}" alt=""></div><div><strong>${escapeHtml(featured.display_name || featured.name)}</strong><p>${escapeHtml(featured.description || '')}</p><p>${Number(featured.global_percent || 0).toFixed(1)}% ${escapeHtml(gdlText('players_have_achievement', 'of players have this achievement'))}</p></div></div>` : '<div></div>'}
+				${featured ? `<div class="gdl-bp-ach-featured Focusable${isHighlighted(featured) ? ' is-rare' : ''}" tabindex="0" role="button" data-focusable="true"><div class="gdl-bp-ach-img-frame${isHighlighted(featured) ? ' is-rare' : ''}"><div class="gdl-bp-ach-rare-glow"></div><div class="gdl-bp-ach-rare-ring"></div><div class="gdl-bp-ach-rare-beam"></div><img class="gdl-bp-ach-img" src="${escapeAttr(featured.earned ? featured.icon : (featured.icon_gray || featured.icon))}" alt=""></div><div><strong>${escapeHtml(featured.display_name || featured.name)}</strong><p>${escapeHtml(featured.description || '')}</p><p>${Number(featured.global_percent || 0).toFixed(1)}% ${escapeHtml(gdlText('players_have_achievement', 'of players have this achievement'))}</p></div></div>` : '<div></div>'}
 				<div id="gdl-bp-native-achievement-mount" class="gdl-bp-native-achievement-mount"></div>
-				<div class="gdl-bp-ach-icons">${strip.map(item => `<div class="gdl-bp-ach-icon-frame${isHighlighted(item) ? ' is-rare' : ''}" title="${escapeAttr(item.display_name || item.name)}"><div class="gdl-bp-ach-rare-glow"></div><div class="gdl-bp-ach-rare-ring"></div><div class="gdl-bp-ach-rare-beam"></div><img class="gdl-bp-ach-icon${!item.earned ? ' is-locked' : ''}" src="${escapeAttr(item.earned ? item.icon : (item.icon_gray || item.icon))}" alt=""></div>`).join('')}</div>
+				<div class="gdl-bp-ach-icons">${strip.map(item => `<div class="gdl-bp-ach-icon-frame Focusable${isHighlighted(item) ? ' is-rare' : ''}" tabindex="0" role="button" data-focusable="true" title="${escapeAttr(item.display_name || item.name)}"><div class="gdl-bp-ach-rare-glow"></div><div class="gdl-bp-ach-rare-ring"></div><div class="gdl-bp-ach-rare-beam"></div><img class="gdl-bp-ach-icon${!item.earned ? ' is-locked' : ''}" src="${escapeAttr(item.earned ? item.icon : (item.icon_gray || item.icon))}" alt=""></div>`).join('')}</div>
 			</div>
 		</div>
 	</section>`;
@@ -593,8 +594,8 @@ function renderCards(catalog: SteamCommunityItemsCatalog | null): string {
 }
 
 function renderMediaAndNotes(): string {
-	return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_Media', 'Media'))}</h2><div class="gdl-bp-media-box"><div class="gdl-bp-media-copy">${escapeHtml(loc('AppDetails_ScreenshotHint_Gamepad', 'You can take a screenshot while playing from the Steam overlay.'))}</div><button class="gdl-bp-action-button" type="button" tabindex="0">${escapeHtml(loc('AppDetails_GoToMediaLibrary', 'Go to my media library'))}</button></div></section>
-	<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_GameNotes', 'Notes'))}</h2><div class="gdl-bp-notes-box"><button class="gdl-bp-action-button" type="button" tabindex="0">✎ ${escapeHtml(loc('AppDetails_CreateNewNote', 'New note'))}</button></div></section>`;
+	return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_Media', 'Media'))}</h2><div class="gdl-bp-media-box"><div class="gdl-bp-media-copy">${escapeHtml(loc('AppDetails_ScreenshotHint_Gamepad', 'You can take a screenshot while playing from the Steam overlay.'))}</div><button class="gdl-bp-action-button Focusable" type="button" tabindex="0" data-focusable="true">${escapeHtml(loc('AppDetails_GoToMediaLibrary', 'Go to my media library'))}</button></div></section>
+	<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_GameNotes', 'Notes'))}</h2><div class="gdl-bp-notes-box"><button class="gdl-bp-action-button Focusable" type="button" tabindex="0" data-focusable="true">✎ ${escapeHtml(loc('AppDetails_CreateNewNote', 'New note'))}</button></div></section>`;
 }
 
 function renderStuff(data: BigPictureDetailData): string {
@@ -614,7 +615,7 @@ function fallbackCommunity(data: BigPictureDetailData): CommunityContentItem[] {
 function renderCommunity(data: BigPictureDetailData): string {
 	const items = fallbackCommunity(data).filter(item => item.image).slice(0, 12);
 	if (items.length === 0) return `<div class="gdl-bp-empty">${escapeHtml(loc('AppDetails_Community_NoContent', 'No community content is available.'))}</div>`;
-	return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_Community', gdlText('community_content', 'Community Content')))}</h2><div class="gdl-bp-community-grid">${items.map(item => `<a class="gdl-bp-community-card" href="${escapeAttr(item.link || '#')}" ${item.link ? 'data-gdl-bp-external="1"' : ''}><img class="gdl-bp-community-media" src="${escapeAttr(item.image)}" alt=""><div class="gdl-bp-community-title">${escapeHtml(item.title || item.label || '')}</div><div class="gdl-bp-community-author">${item.author_avatar ? `<img src="${escapeAttr(item.author_avatar)}" alt="">` : ''}<span>${escapeHtml(item.author_name || item.label || '')}</span></div></a>`).join('')}</div></section>`;
+	return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${escapeHtml(loc('AppDetails_SectionTitle_Community', gdlText('community_content', 'Community Content')))}</h2><div class="gdl-bp-community-grid">${items.map(item => `<a class="gdl-bp-community-card Focusable" href="${escapeAttr(item.link || '#')}" ${item.link ? 'data-gdl-bp-external="1"' : ''} tabindex="0" role="button" data-focusable="true"><img class="gdl-bp-community-media" src="${escapeAttr(item.image)}" alt=""><div class="gdl-bp-community-title">${escapeHtml(item.title || item.label || '')}</div><div class="gdl-bp-community-author">${item.author_avatar ? `<img src="${escapeAttr(item.author_avatar)}" alt="">` : ''}<span>${escapeHtml(item.author_name || item.label || '')}</span></div></a>`).join('')}</div></section>`;
 }
 
 function hasCategory(game: SteamGameData | null, id: number): boolean {
@@ -644,7 +645,7 @@ function renderInfo(data: BigPictureDetailData, shortcut: MappedShortcut): strin
 		[loc('AppDetails_Link_Guides', gdlText('guides', 'Guides')), `https://steamcommunity.com/app/${shortcut.steamAppId}/guides/`],
 		[loc('AppDetails_Link_Support', gdlText('support', 'Support')), `https://help.steampowered.com/en/wizard/HelpWithGame/?appid=${shortcut.steamAppId}`],
 	];
-	return `<section class="gdl-bp-section"><div class="gdl-bp-info-grid"><img class="gdl-bp-info-portrait" src="${escapeAttr(portrait)}" alt=""><div><div class="gdl-bp-info-description">${escapeHtml(game.short_description || '')}</div><div class="gdl-bp-info-meta">${developer ? `${escapeHtml(loc('AppDetails_Developer', gdlText('developer', 'Developer')))}: <strong>${escapeHtml(developer)}</strong><br>` : ''}${publisher ? `${escapeHtml(loc('AppDetails_Publisher', gdlText('publisher', 'Publisher')))}: <strong>${escapeHtml(publisher)}</strong><br>` : ''}${franchise ? `${escapeHtml(loc('AppDetails_Franchise', gdlText('franchise', 'Franchise')))}: <strong>${escapeHtml(franchise)}</strong><br>` : ''}${release ? `<br>${escapeHtml(loc('AppDetails_ReleaseDate', gdlText('release_date', 'Release date')))}: <strong>${escapeHtml(release)}</strong>` : ''}</div></div><div>${features.map(feature => `<div class="gdl-bp-feature">${featureSvg(feature.icon)}<span>${escapeHtml(feature.label)}</span></div>`).join('')}</div></div><div class="gdl-bp-info-links">${links.map(([label, url]) => `<a class="gdl-bp-info-link" href="${escapeAttr(url)}" data-gdl-bp-external="1">${escapeHtml(label)}</a>`).join('')}</div></section>`;
+	return `<section class="gdl-bp-section"><div class="gdl-bp-info-grid"><img class="gdl-bp-info-portrait" src="${escapeAttr(portrait)}" alt=""><div><div class="gdl-bp-info-description">${escapeHtml(game.short_description || '')}</div><div class="gdl-bp-info-meta">${developer ? `${escapeHtml(loc('AppDetails_Developer', gdlText('developer', 'Developer')))}: <strong>${escapeHtml(developer)}</strong><br>` : ''}${publisher ? `${escapeHtml(loc('AppDetails_Publisher', gdlText('publisher', 'Publisher')))}: <strong>${escapeHtml(publisher)}</strong><br>` : ''}${franchise ? `${escapeHtml(loc('AppDetails_Franchise', gdlText('franchise', 'Franchise')))}: <strong>${escapeHtml(franchise)}</strong><br>` : ''}${release ? `<br>${escapeHtml(loc('AppDetails_ReleaseDate', gdlText('release_date', 'Release date')))}: <strong>${escapeHtml(release)}</strong>` : ''}</div></div><div>${features.map(feature => `<div class="gdl-bp-feature">${featureSvg(feature.icon)}<span>${escapeHtml(feature.label)}</span></div>`).join('')}</div></div><div class="gdl-bp-info-links">${links.map(([label, url]) => `<a class="gdl-bp-info-link Focusable" href="${escapeAttr(url)}" data-gdl-bp-external="1" tabindex="0" role="button" data-focusable="true">${escapeHtml(label)}</a>`).join('')}</div></section>`;
 }
 
 function markupSignature(tab: BigPictureTab, markup: string): string {
@@ -731,7 +732,20 @@ function bindTabs(
 		control.addEventListener('click', () => scheduleTabSync(doc, tab));
 		control.addEventListener('focusin', () => scheduleTabSync(doc, tab));
 		control.addEventListener('keydown', event => {
-			if (event.key === 'Enter' || event.key === ' ') scheduleTabSync(doc, tab);
+			if (event.key === 'Enter' || event.key === ' ') {
+				scheduleTabSync(doc, tab);
+			} else if (event.key === 'ArrowDown' || event.key === 'Down') {
+				const root = doc.getElementById('gdl-bp-detail-root');
+				if (root) {
+					const first = getFocusableElements(root)[0];
+					if (first) {
+						event.preventDefault();
+						event.stopPropagation();
+						first.focus();
+						first.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+					}
+				}
+			}
 		});
 	}
 	const current = detailTabObservers.get(doc);
@@ -843,6 +857,7 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 	}
 
 	bindTabs(doc, tabs.strip, tabs.controls);
+	installBigPictureGamepadNavigation(doc, nodes.root, tabs.strip, tabs.controls);
 }
 
 export function disposeBigPictureShortcutDetails(doc: Document | null): void {

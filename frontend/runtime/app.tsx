@@ -139,7 +139,7 @@ function windowCreated(context: any): void {
 		lifecycle.listen(popupWin, 'beforeunload', onBpmClose, { once: true });
 		lifecycle.listen(popupWin, 'unload', onBpmClose, { once: true });
 		activateBigPicture(popupDoc);
-		// Keep the real-achievement watcher alive when the game was launched
+		// Keep achievement progress polling active when the game was launched
 		// from Big Picture. Persistent baselines suppress duplicate toasts if the
 		// desktop and Big Picture documents observe the same file change.
 		installLocalAchievementUI(popupDoc);

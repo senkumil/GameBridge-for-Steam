@@ -68,9 +68,9 @@ function canonicalizeGameTitle(value: string): string {
 	let text = normalizeTitle(value)
 		.replace(/\.(?:exe|com|bat|cmd|lnk|appimage)$/i, '')
 		.replace(/\[[^\]]*\]/g, ' ')
-		.replace(/\([^)]*(?:v\d|build|repack|gog|dodi|fitgirl|multi)[^)]*\)/gi, ' ')
+		.replace(/\([^)]*(?:v\d|build|multi)[^)]*\)/gi, ' ')
 		.replace(/\bv\d+(?:\.\d+)*\b/gi, ' ')
-		.replace(/\b(?:repack|flt|codex|goldberg|rune|skidrow|dodi|fitgirl|elamigos|gog)\b/gi, ' ')
+		.replace(/\b(?:edition|deluxe|ultimate|complete|remastered|goty|gog)\b/gi, ' ')
 		.replace(/[^a-z0-9]+/g, ' ')
 		.trim();
 

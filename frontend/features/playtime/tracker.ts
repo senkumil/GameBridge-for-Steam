@@ -333,7 +333,7 @@ async function pollRunningApps(): Promise<void> {
 		}
 	} catch {}
 
-	// 3. Steam emulators can transfer the native running identity away from the
+	// 3. External game launchers can transfer the native running identity away from the
 	// shortcut and omit the official AppID from SteamUIStore.RunningApps. The
 	// virtualized sidebar remains authoritative in that state.
 	for (const shortcut of getMappedShortcuts()) {

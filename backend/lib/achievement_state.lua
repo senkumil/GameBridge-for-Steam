@@ -1,4 +1,4 @@
--- Change-aware decoder for live emulator achievement state. Polling callers
+-- Change-aware decoder for live local achievement state. Polling callers
 -- reuse the decoded table until the JSON modification time changes.
 return function(deps)
 local cjson = deps.cjson

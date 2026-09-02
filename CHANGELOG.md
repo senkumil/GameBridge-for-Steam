@@ -1,4 +1,4 @@
-## v3.0.0 - Major Release: Delisted Games Support, Direct Artwork Management, SAM & Trading Card Farming (2026-08-31)
+## v3.0.0 - Major Release: Delisted Games Support, Direct Artwork Management, Achievement Management Tools & Trading Card Farming (2026-08-31)
 
 - **Comprehensive Support for Delisted & Removed Steam Games**:
   - Resilient metadata and official asset linking for retired or unlisted titles without an active Steam store page (e.g. *Mortal Kombat Komplete Edition*, *Transformers: Devastation*, etc.).
@@ -9,7 +9,7 @@
   - Allows live preview, selection, and download of hero backgrounds, vertical/horizontal logos, portrait capsules, and icons in real time.
   - Strict isolation: the selector is safely hidden outside the customization tab, and resetting assets preserves native Steam artwork without touching official games.
 
-- **Integrated Steam Achievement Manager (SAM)**:
+- **Integrated Steam Achievement Management Tools**:
   - Native integration to inspect, unlock, lock, or modify achievement progress for official Steam games directly from your library interface.
   - Immediate synchronization with the Steam client UI without needing external standalone tools.
 
@@ -19,7 +19,7 @@
 
 - **Simplified Non-Steam Achievement Simulation**:
   - Ultra-accessible configuration per shortcut: instant 100% completion, progressive simulated unlocking, or manual tracking.
-  - Direct compatibility with emulator-generated and external launcher achievement files.
+  - Direct compatibility with local JSON and external launcher achievement files.
   - Schema recognition with high-resolution icons and smooth in-game achievement unlock notifications.
 
 - **Strict Native Isolation, Zero-Flicker & Performance**:
@@ -35,7 +35,7 @@
 - Keeps an immediate, uncached 0/N achievement box visible when no local snapshot has been warmed yet, using Store highlight icons as locked previews and counting the unseen achievements in the +N tile until the real schema and progress replace it.
 - Replaces the activity feed's anonymous loading rectangles with a layout-stable Steam-like date, news-card and patch-card skeleton using a subtle shimmer animation and a reduced-motion fallback.
 - Extends localized game-metadata persistence to 30 days and immediately renders an already-visible linked shortcut on startup, while retaining the strict no-intervention boundary for actual native Steam game-detail routes.
-- Recovers a newly earned achievement when an emulator creates its first JSON with that achievement already unlocked before the overlay readiness delay completes, while deduplicating the recovery per running session and retaining timestamp-independent polling for normal transitions.
+- Recovers a newly earned achievement when a local JSON file is created with that achievement already unlocked before the overlay readiness delay completes, while deduplicating the recovery per running session and retaining timestamp-independent polling for normal transitions.
 - Displays non-Steam playtime in Big Picture's recently-played cards by merging Steam's often-empty shortcut response with NativeGameLink's canonical sessions, updating lifetime and two-week fields, and forcing the native card to rerender.
 - Displays the same canonical non-Steam playtime in Desktop Library Home's recently-played shelf and game-detail stat by hydrating Steam's native lifetime, two-week and last-played AppOverview fields without reducing any value Steam already knows; it invalidates stale stats after session writes, recovers history after local AppID regeneration, and avoids the global React rerender that could trigger Steam's `removeChild` rendering error.
 - Prevents controller-driven Steam play-bar rebuilds from replacing the linked-game information icon with an unrelated arrow by removing positional button capture and normalizing cloned native markup to the information SVG.

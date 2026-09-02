@@ -18,6 +18,7 @@ export function ensureInfoPanelStyles(doc: Document): void {
 		}
 		#gdl-game-info-panel:not(.gdl-info-expanded) {
 			height: 0px !important;
+			max-height: 0px !important;
 			opacity: 0 !important;
 			pointer-events: none !important;
 			padding-top: 0 !important;
@@ -26,6 +27,8 @@ export function ensureInfoPanelStyles(doc: Document): void {
 			margin-bottom: 0 !important;
 		}
 		#gdl-game-info-panel.gdl-info-expanded {
+			height: auto !important;
+			max-height: none !important;
 			opacity: 1 !important;
 			pointer-events: auto !important;
 		}
@@ -54,6 +57,26 @@ export function ensureInfoPanelStyles(doc: Document): void {
 			width:109px !important;min-width:109px !important;max-width:109px !important;
 			height:163px !important;min-height:163px !important;max-height:163px !important;
 			object-fit:cover !important;display:block !important;
+		}
+		@media (max-width: 900px) {
+			#gdl-game-info-panel .gdl-info-portrait,
+			#gdl-game-info-panel .gdl-info-portrait img {
+				width: 74px !important;
+				min-width: 74px !important;
+				max-width: 74px !important;
+				height: 111px !important;
+				min-height: 111px !important;
+				max-height: 111px !important;
+			}
+		}
+		div.NarrowWindow #gdl-game-info-panel .gdl-info-portrait,
+		div.NarrowWindow #gdl-game-info-panel .gdl-info-portrait img {
+			width: 74px !important;
+			min-width: 74px !important;
+			max-width: 74px !important;
+			height: 111px !important;
+			min-height: 111px !important;
+			max-height: 111px !important;
 		}
 		#gdl-game-info-panel .gdl-info-associations {
 			display: flex !important;

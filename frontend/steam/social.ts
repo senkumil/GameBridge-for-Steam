@@ -458,6 +458,125 @@ export async function fetchAuthenticatedCommunityActivity(
 	return events;
 }
 
+export async function getSteamCommunitySessionId(): Promise<string> {
+	try {
+		const anyWin = (window as any);
+		if (anyWin?.g_sessionID) return anyWin.g_sessionID;
+		const match = (document.cookie || '').match(/\bsessionid=([a-f0-9]+)\b/i);
+		if (match) return match[1];
+
+		const res = await fetch('https://steamcommunity.com/my/home/', { credentials: 'include' });
+		if (res.ok) {
+			const html = await res.text();
+			const m = html.match(/g_sessionID\s*=\s*"([a-f0-9]+)"/i);
+			if (m) return m[1];
+		}
+	} catch {}
+	return '';
+}
+
+export async function postStatusCommentToSteam(
+	ownerSteamId: string,
+	postId: string,
+	commentText: string
+): Promise<boolean> {
+	try {
+		const cleanPostId = postId.replace(/^post_/, '');
+		const sid = ownerSteamId || extractSteamIdFromValue((window as any)?.SteamClient?.User?.GetSteamID?.()) || '';
+
+		// 1. Try Protobuf RPC if available in client
+		try {
+			const protoComment = findProtoMessageClass('CCommunity_PostComment_Request')
+				|| findProtoMessageClass('CPlayer_PostComment_Request');
+			if (protoComment && messageWrapper) {
+				const transport = getServiceTransport();
+				const commService = findModuleExport((candidate: any) => typeof candidate?.PostComment === 'function');
+				if (transport && commService) {
+					const msg = messageWrapper.Init(protoComment);
+					if (typeof msg.Body().set_comment === 'function') msg.Body().set_comment(commentText);
+					if (typeof msg.Body().set_steamid === 'function') msg.Body().set_steamid(sid);
+					if (typeof msg.Body().set_post_id === 'function') msg.Body().set_post_id(cleanPostId);
+					const r = await commService.PostComment(transport, msg);
+					if (r?.GetEResult?.() === 1) return true;
+				}
+			}
+		} catch {}
+
+		// 2. Post directly to Steam Community endpoint
+		const sessionId = await getSteamCommunitySessionId();
+		const body = new URLSearchParams();
+		if (sessionId) body.append('sessionid', sessionId);
+		body.append('comment', commentText);
+		body.append('count', '6');
+
+		const targets = [
+			`https://steamcommunity.com/comment/UserStatus/post/${sid}/${cleanPostId}/`,
+			`https://steamcommunity.com/comment/UserStatus/post/${sid}/${postId}/`,
+		];
+
+		for (const url of targets) {
+			try {
+				const res = await fetch(url, {
+					method: 'POST',
+					credentials: 'include',
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+						'Accept': 'application/json, text/javascript, */*; q=0.01',
+					},
+					body: body.toString(),
+				});
+				if (res.ok) {
+					const json: any = await res.json().catch((): null => null);
+					backendLog(`Steam community post comment result: ${JSON.stringify(json)}`);
+					if (json && (json.success === true || json.success === 1 || json.comments_html)) {
+						return true;
+					}
+				}
+			} catch (err) {
+				backendLog(`postStatusCommentToSteam fetch error: ${err}`);
+			}
+		}
+	} catch (e) {
+		backendLog('postStatusCommentToSteam error: ' + e);
+	}
+	return false;
+}
+
+export async function deleteStatusCommentOnSteam(
+	ownerSteamId: string,
+	postId: string,
+	commentId: string
+): Promise<boolean> {
+	try {
+		const cleanPostId = postId.replace(/^post_/, '');
+		const cleanCommentId = commentId.replace(/^comment_/, '');
+		const sid = ownerSteamId || extractSteamIdFromValue((window as any)?.SteamClient?.User?.GetSteamID?.()) || '';
+		const sessionId = await getSteamCommunitySessionId();
+
+		const body = new URLSearchParams();
+		if (sessionId) body.append('sessionid', sessionId);
+		body.append('gidcomment', cleanCommentId);
+
+		const url = `https://steamcommunity.com/comment/UserStatus/delete/${sid}/${cleanPostId}/`;
+		const res = await fetch(url, {
+			method: 'POST',
+			credentials: 'include',
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+				'Accept': 'application/json, text/javascript, */*; q=0.01',
+			},
+			body: body.toString(),
+		});
+		if (res.ok) {
+			const json: any = await res.json().catch((): null => null);
+			return Boolean(json && (json.success === true || json.success === 1));
+		}
+	} catch (e) {
+		backendLog('deleteStatusCommentOnSteam error: ' + e);
+	}
+	return false;
+}
+
 export function clearSteamSocialCaches(): void {
 	protoMessageCache?.clear();
 	protoMessageCache = null;

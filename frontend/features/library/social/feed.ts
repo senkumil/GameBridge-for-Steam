@@ -4,7 +4,12 @@ import { escapeHtml } from '../../../core/text';
 import { EVENT_CLASSES, FEED_CLASSES } from '../../../steam/css';
 import { gdlText, loc, steamIntlLocale } from '../../../steam/localization';
 import { eventTypeLabel, formatNewsDate, isPatchNoteItem, newsExcerpt } from '../news';
-import { deleteStatusPostOnSteam, extractSteamIdFromValue } from '../../../steam/social';
+import {
+	deleteStatusPostOnSteam,
+	deleteStatusCommentOnSteam,
+	postStatusCommentToSteam,
+	extractSteamIdFromValue,
+} from '../../../steam/social';
 import { getCachedPersona } from './personas';
 import { socialRuntimeHost } from './host';
 
@@ -682,6 +687,10 @@ export function setupPostDeleteHandlers(
 			user_name: user.name,
 			user_avatar: user.avatar,
 		}, shortcutAppId);
+
+		// Dispatch comment to Steam Community
+		void postStatusCommentToSteam('', postId, text).catch(() => {});
+
 		delete feedContainer.dataset.gdlFeedSignature;
 		applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
 		setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
@@ -715,6 +724,7 @@ export function setupPostDeleteHandlers(
 			const commentId = commentDeleteBtn.getAttribute('data-comment-id');
 			if (postId && commentId) {
 				deleteLocalActivityComment(steamAppId, postId, commentId, shortcutAppId);
+				void deleteStatusCommentOnSteam('', postId, commentId).catch(() => {});
 				delete feedContainer.dataset.gdlFeedSignature;
 				applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
 				setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
@@ -728,6 +738,7 @@ export function setupPostDeleteHandlers(
 		const postId = button.getAttribute('data-post-id');
 		if (!postId) return;
 		deleteLocalActivityPost(steamAppId, postId, shortcutAppId);
+		void deleteStatusPostOnSteam(postId).catch(() => {});
 		delete feedContainer.dataset.gdlFeedSignature;
 		applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
 		setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);

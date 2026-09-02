@@ -193,43 +193,37 @@ local function normalize_local_schema(appid, root_dir, lang)
         if p and p ~= "" then candidates[#candidates + 1] = p end
     end
 
-    -- Modern Goldberg:
+    -- Local SteamAchievements:
     if appdata ~= "" then
-        add_schema_candidate(fs.join(appdata, "Goldberg SteamEmu Saves", tostring(appid), "achievement_definitions.json"))
-        add_schema_candidate(fs.join(appdata, "Goldberg SteamEmu Saves", tostring(appid), "schema.json"))
-        add_schema_candidate(fs.join(appdata, "Goldberg SteamEmu Saves", tostring(appid), "steam_settings", "achievements.json"))
-        add_schema_candidate(fs.join(appdata, "Goldberg SteamEmu Saves", "settings", tostring(appid), "achievements.json"))
-        add_schema_candidate(fs.join(appdata, "Goldberg SteamEmu Saves", "settings", tostring(appid), "schema.json"))
+        add_schema_candidate(fs.join(appdata, "SteamAchievements", tostring(appid), "achievement_definitions.json"))
+        add_schema_candidate(fs.join(appdata, "SteamAchievements", tostring(appid), "schema.json"))
+        add_schema_candidate(fs.join(appdata, "SteamAchievements", tostring(appid), "steam_settings", "achievements.json"))
+        add_schema_candidate(fs.join(appdata, "SteamAchievements", "settings", tostring(appid), "achievements.json"))
+        add_schema_candidate(fs.join(appdata, "SteamAchievements", "settings", tostring(appid), "schema.json"))
     end
 
-    -- Legacy Goldberg / Steam emulator:
+    -- Local achievements:
     if appdata ~= "" then
+        add_schema_candidate(fs.join(appdata, "LocalAchievements", tostring(appid), "schema.json"))
+        add_schema_candidate(fs.join(appdata, "LocalAchievements", tostring(appid), "achievement_definitions.json"))
         add_schema_candidate(fs.join(appdata, "Steam", tostring(appid), "schema.json"))
         add_schema_candidate(fs.join(appdata, "Steam", tostring(appid), "achievement_definitions.json"))
         add_schema_candidate(fs.join(appdata, "Steam", tostring(appid), "stats", "achievements.json"))
         add_schema_candidate(fs.join(appdata, "Steam", tostring(appid), "steam_settings", "achievements.json"))
     end
 
-    -- LocalAppData Goldberg:
+    -- LocalAppData:
     if localappdata ~= "" then
-        add_schema_candidate(fs.join(localappdata, "Goldberg SteamEmu Saves", tostring(appid), "schema.json"))
-        add_schema_candidate(fs.join(localappdata, "Goldberg SteamEmu Saves", tostring(appid), "achievement_definitions.json"))
+        add_schema_candidate(fs.join(localappdata, "SteamAchievements", tostring(appid), "schema.json"))
+        add_schema_candidate(fs.join(localappdata, "SteamAchievements", tostring(appid), "achievement_definitions.json"))
+        add_schema_candidate(fs.join(localappdata, "LocalAchievements", tostring(appid), "schema.json"))
+        add_schema_candidate(fs.join(localappdata, "LocalAchievements", tostring(appid), "achievement_definitions.json"))
     end
 
-    -- GSE Saves:
+    -- Additional local schema candidates:
     if appdata ~= "" then
-        add_schema_candidate(fs.join(appdata, "GSE Saves", tostring(appid), "schema.json"))
-        add_schema_candidate(fs.join(appdata, "GSE Saves", tostring(appid), "achievement_definitions.json"))
-    end
-    if localappdata ~= "" then
-        add_schema_candidate(fs.join(localappdata, "GSE Saves", tostring(appid), "schema.json"))
-    end
-
-    -- Achievement Watcher schema cache:
-    if appdata ~= "" then
-        add_schema_candidate(fs.join(appdata, "Achievement Watcher", "steam_cache", "schema", "latam", tostring(appid) .. ".db"))
-        add_schema_candidate(fs.join(appdata, "Achievement Watcher", "steam_cache", "schema", "spanish", tostring(appid) .. ".db"))
-        add_schema_candidate(fs.join(appdata, "Achievement Watcher", "steam_cache", "schema", tostring(appid) .. ".db"))
+        add_schema_candidate(fs.join(appdata, "SteamAchievements", "schema", tostring(appid) .. ".json"))
+        add_schema_candidate(fs.join(appdata, "LocalAchievements", "schema", tostring(appid) .. ".json"))
     end
     for _, path in ipairs(candidates) do
         local data = decode_json_file(path)
@@ -431,8 +425,8 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         allow_simulated = request_json.allow_simulated == true
         simulate_unlock_all = request_json.simulate_unlock_all == true
         unlock_online = request_json.unlock_online == true
-        -- A non-Steam shortcut has its own unsigned Steam shortcut ID.  Some
-        -- emulators/Achievement Watcher setups write their live achievement
+        -- A non-Steam shortcut has its own unsigned Steam shortcut ID. Some
+        -- local save setups write their live achievement
         -- state under that ID, while the linked Steam AppID is still needed
         -- for the public schema, names and icon URLs.
         state_app_id = request_json.state_app_id
@@ -522,24 +516,29 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
 
         local function add_common(base_dir, tag, with_ini)
             if base_dir and base_dir ~= "" then
-                add_state_path(fs.join(base_dir, "achievements.json"), appid, base_dir, tag)
-                add_state_path(fs.join(base_dir, "stats", "achievements.json"), appid, base_dir, tag)
-                add_state_path(fs.join(base_dir, "steam_settings", "achievements.json"), appid, base_dir, tag)
-                if with_ini then add_state_path(fs.join(base_dir, "achievements.ini"), appid, base_dir, tag) end
+                local p = fs.join(base_dir, "achievements.json")
+                if fs.exists(p) then
+                    add_state_path(p, appid, base_dir, tag)
+                else
+                    add_state_path(fs.join(base_dir, "achievements.json"), appid, base_dir, tag)
+                    add_state_path(fs.join(base_dir, "stats", "achievements.json"), appid, base_dir, tag)
+                    add_state_path(fs.join(base_dir, "steam_settings", "achievements.json"), appid, base_dir, tag)
+                    if with_ini then add_state_path(fs.join(base_dir, "achievements.ini"), appid, base_dir, tag) end
+                end
             end
         end
         if appdata ~= "" then
-            add_common(fs.join(appdata, "Goldberg SteamEmu Saves", tostring(appid)), "goldberg_modern", true)
-            add_common(fs.join(appdata, "Goldberg SteamEmu Saves", "settings", tostring(appid)), "goldberg_settings")
-            add_common(fs.join(appdata, "Steam", tostring(appid)), "goldberg_legacy_steam")
-            add_common(fs.join(appdata, "GSE Saves", tostring(appid)), "gse_saves")
+            add_common(fs.join(appdata, "SteamAchievements", tostring(appid)), "steam_achievements", true)
+            add_common(fs.join(appdata, "SteamAchievements", "settings", tostring(appid)), "steam_achievements_settings")
+            add_common(fs.join(appdata, "LocalAchievements", tostring(appid)), "local_achievements")
+            add_common(fs.join(appdata, "Steam", tostring(appid)), "legacy_steam")
         end
         if localappdata ~= "" then
-            add_common(fs.join(localappdata, "Goldberg SteamEmu Saves", tostring(appid)), "goldberg_localappdata")
-            add_common(fs.join(localappdata, "GSE Saves", tostring(appid)), "gse_saves_local")
+            add_common(fs.join(localappdata, "SteamAchievements", tostring(appid)), "steam_achievements_local")
+            add_common(fs.join(localappdata, "LocalAchievements", tostring(appid)), "local_achievements_local")
         end
     end
-    -- Automatic AppID/emulator progress is likewise ignored temporarily while
+    -- Automatic AppID progress is likewise ignored temporarily while
     -- simulation is enabled. The files remain untouched and become active again
     -- as soon as the user disables simulation.
     if not allow_simulated then

@@ -35,24 +35,23 @@ end
 local function default_root()
     local appdata = os.getenv("APPDATA")
     if appdata and appdata ~= "" then
-        if fs.exists(fs.join(appdata, "GSE Saves")) then return fs.join(appdata, "GSE Saves") end
-        if fs.exists(fs.join(appdata, "Goldberg SteamEmu Saves")) then return fs.join(appdata, "Goldberg SteamEmu Saves") end
-        return fs.join(appdata, "GSE Saves")
+        if fs.exists(fs.join(appdata, "SteamAchievements")) then return fs.join(appdata, "SteamAchievements") end
+        return fs.join(appdata, "SteamAchievements")
     end
     local localappdata = os.getenv("LOCALAPPDATA")
-    if localappdata and localappdata ~= "" and fs.exists(fs.join(localappdata, "GSE Saves")) then
-        return fs.join(localappdata, "GSE Saves")
+    if localappdata and localappdata ~= "" and fs.exists(fs.join(localappdata, "SteamAchievements")) then
+        return fs.join(localappdata, "SteamAchievements")
     end
     local userprofile = os.getenv("USERPROFILE")
-    if userprofile and userprofile ~= "" then return fs.join(userprofile, "AppData", "Roaming", "GSE Saves") end
-    return "C:\\Users\\" .. tostring(os.getenv("USERNAME") or "User") .. "\\AppData\\Roaming\\GSE Saves"
+    if userprofile and userprofile ~= "" then return fs.join(userprofile, "AppData", "Roaming", "SteamAchievements") end
+    return "C:\\Users\\" .. tostring(os.getenv("USERNAME") or "User") .. "\\AppData\\Roaming\\SteamAchievements"
 end
 
 local function normalize_path(value, use_default)
     local path = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
     local quoted = path:match('^"(.-)"$')
     if quoted then path = quoted end
-    if use_default and (path == "" or path:lower() == "c:\\steam auto" or path:lower() == "c:/steam auto") then
+    if use_default and path == "" then
         path = default_root()
     else
         path = expand_environment_variables(path)

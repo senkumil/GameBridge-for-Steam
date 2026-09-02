@@ -187,7 +187,23 @@ export function syncDesktopLibraryHomePlaytimeDom(doc: Document): void {
 	const snapshots = Array.from(desktopPlaytimeSnapshots.values());
 	for (const snapshot of snapshots) {
 		const app = getShortcutAppById(snapshot.shortcutAppId);
-		if (!app || snapshot.minutesForever <= 0) continue;
+		if (!app) continue;
+		try { (app as any).canonicalAppType = 1; } catch {}
+		try { (app as any).controller_support = 2; } catch {}
+		try { (app as any).xbox_controller_support = 2; } catch {}
+		try { (app as any).gamepad_preferred = true; } catch {}
+		const proto = Object.getPrototypeOf(app);
+		if (proto && typeof proto.BIsShortcut === 'function' && !proto.BIsShortcut.__gdlDesktopWrapped) {
+			const orig = proto.BIsShortcut;
+			proto.BIsShortcut = function (this: any) {
+				if (this && (Number(this.appid) >= 2147483648 || Number(this.app_type) === 1073741824)) {
+					return false;
+				}
+				return orig.call(this);
+			};
+			(proto.BIsShortcut as any).__gdlDesktopWrapped = true;
+		}
+		if (snapshot.minutesForever <= 0) continue;
 		desktopPlaytimeHydratedApps.add(app);
 		setDesktopPlaytimeField(app, 'minutes_playtime_forever', snapshot.minutesForever);
 		setDesktopPlaytimeField(app, 'minutes_playtime_last_two_weeks', snapshot.minutesRecent);

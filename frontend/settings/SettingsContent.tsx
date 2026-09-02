@@ -28,7 +28,7 @@ import {
 } from '../features/shortcuts/bulk-link-state';
 import { SteamGridDbSettings } from './SteamGridDbSettings';
 
-const DEFAULT_ACHIEVEMENT_BASE_PATH = '%APPDATA%\\GSE Saves';
+const DEFAULT_ACHIEVEMENT_BASE_PATH = '%APPDATA%\\SteamAchievements';
 
 export interface SettingsContentProps {
 	clearAchievementCache: () => void;
@@ -536,7 +536,7 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 					value={achievementPath}
 					onChange={(event: React.ChangeEvent<HTMLInputElement>) => setAchievementPath(event.currentTarget.value)}
 					onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => { if (event.key === 'Enter' && !disabled) void saveAchievementPath(achievementPath); }}
-					placeholder={gdlText('achievement_path_placeholder', 'Example: %APPDATA%\\GSE Saves')}
+					placeholder={gdlText('achievement_path_placeholder', 'Example: %APPDATA%\\SteamAchievements')}
 					disabled={disabled}
 					spellCheck={false}
 					style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '6px 9px', color: '#dcdedf', background: '#1b2838', border: '1px solid #3d4450', borderRadius: '2px', outline: 'none', fontSize: '12px', marginBottom: '6px' }}
@@ -560,73 +560,6 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 					</button>
 				</div>
 				{pathStatus && <div style={{ marginTop: '6px', color: pathStatus.color, fontSize: '11.5px' }}>{pathStatus.text}</div>}
-				<div style={{
-					marginTop: '8px',
-					padding: '8px 10px',
-					background: 'rgba(45, 115, 255, 0.08)',
-					border: '1px solid rgba(45, 115, 255, 0.25)',
-					borderRadius: '3px',
-					fontSize: '11.5px',
-					lineHeight: '1.4',
-					color: '#a8c0d6'
-				}}>
-					<div style={{ fontWeight: 600, color: '#66c0f4', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-						<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }}>
-							<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
-						</svg>
-						{gdlText('achievement_autocrack_title', 'Achievement generation for external games')}
-					</div>
-					<div style={{ marginBottom: '6px' }}>
-						{gdlText('achievement_autocrack_note', 'For unofficial games to record achievements in real time, they must use an emulator such as SteamAutoCrack (Goldberg Emulator). The emulator automatically generates the folders and achievements.json file as you play and earn achievements.')}
-					</div>
-					<div>
-						<span
-							role="button"
-							tabIndex={0}
-							onClick={(event: React.MouseEvent<HTMLSpanElement>) => {
-								event.preventDefault();
-								event.stopPropagation();
-								const url = 'https://github.com/SteamAutoCracks/Steam-auto-crack/releases';
-								const sc = (window as any).SteamClient;
-								if (typeof sc?.System?.OpenInSystemBrowser === 'function') {
-									try {
-										sc.System.OpenInSystemBrowser(url);
-										return;
-									} catch {}
-								}
-								window.open(url, '_blank', 'noopener,noreferrer');
-							}}
-							onKeyDown={(event: React.KeyboardEvent<HTMLSpanElement>) => {
-								if (event.key === 'Enter' || event.key === ' ') {
-									event.preventDefault();
-									const url = 'https://github.com/SteamAutoCracks/Steam-auto-crack/releases';
-									const sc = (window as any).SteamClient;
-									if (typeof sc?.System?.OpenInSystemBrowser === 'function') {
-										try {
-											sc.System.OpenInSystemBrowser(url);
-											return;
-										} catch {}
-									}
-									window.open(url, '_blank', 'noopener,noreferrer');
-								}
-							}}
-							style={{
-								color: '#66c0f4',
-								textDecoration: 'underline',
-								fontWeight: 500,
-								cursor: 'pointer',
-								display: 'inline-flex',
-								alignItems: 'center',
-								gap: '4px',
-							}}
-						>
-							<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }}>
-								<path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/>
-							</svg>
-							{gdlText('achievement_autocrack_download_link', 'Download SteamAutoCrack from GitHub (Releases)')}
-						</span>
-					</div>
-				</div>
 			</div>
 
 			{/* ── Probar notificaciones ────────────────────────────────── */}

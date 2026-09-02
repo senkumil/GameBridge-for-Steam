@@ -82,14 +82,14 @@ function M.export_achievements_json(request_json)
     if not target_path then
         local candidates = {}
         if appdata ~= "" then
-            candidates[#candidates + 1] = fs.join(appdata, "Goldberg SteamEmu Saves", tostring(metadata_appid), "achievements.json")
-            candidates[#candidates + 1] = fs.join(appdata, "Goldberg SteamEmu Saves", tostring(state_appid or ""), "achievements.json")
-            candidates[#candidates + 1] = fs.join(appdata, "GSE Saves", tostring(metadata_appid), "achievements.json")
+            candidates[#candidates + 1] = fs.join(appdata, "SteamAchievements", tostring(metadata_appid), "achievements.json")
+            candidates[#candidates + 1] = fs.join(appdata, "SteamAchievements", tostring(state_appid or ""), "achievements.json")
+            candidates[#candidates + 1] = fs.join(appdata, "LocalAchievements", tostring(metadata_appid), "achievements.json")
             candidates[#candidates + 1] = fs.join(appdata, "Steam", tostring(metadata_appid), "stats", "achievements.json")
         end
         if localappdata ~= "" then
-            candidates[#candidates + 1] = fs.join(localappdata, "Goldberg SteamEmu Saves", tostring(metadata_appid), "achievements.json")
-            candidates[#candidates + 1] = fs.join(localappdata, "GSE Saves", tostring(metadata_appid), "achievements.json")
+            candidates[#candidates + 1] = fs.join(localappdata, "SteamAchievements", tostring(metadata_appid), "achievements.json")
+            candidates[#candidates + 1] = fs.join(localappdata, "LocalAchievements", tostring(metadata_appid), "achievements.json")
         end
 
         for _, c in ipairs(candidates) do
@@ -102,9 +102,9 @@ function M.export_achievements_json(request_json)
 
     if not target_path then
         if appdata ~= "" then
-            target_path = fs.join(appdata, "Goldberg SteamEmu Saves", tostring(metadata_appid), "achievements.json")
+            target_path = fs.join(appdata, "SteamAchievements", tostring(metadata_appid), "achievements.json")
         else
-            target_path = fs.join("C:\\Steam Auto", tostring(metadata_appid), "achievements.json")
+            target_path = fs.join("C:\\SteamAchievements", tostring(metadata_appid), "achievements.json")
         end
     end
 
