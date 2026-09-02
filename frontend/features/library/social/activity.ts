@@ -4,6 +4,7 @@ import { backendLog, fetchCommunityActivityBackend, fetchFriendPersonasBackend, 
 import { escapeHtml } from '../../../core/text';
 import { ACH_CLASSES, EVENT_CLASSES } from '../../../steam/css';
 import { gdlText, loc, steamIntlLocale } from '../../../steam/localization';
+import { extractSteamIdFromValue, fetchAuthenticatedCommunityActivity } from '../../../steam/social';
 import { cachePersona, getCachedPersona, hasCachedPersona } from './personas';
 import { socialRuntimeHost } from './host';
 import {
@@ -24,7 +25,11 @@ function getAppActivityStore(): any {
 		if (win.top?.appActivityStore && typeof win.top.appActivityStore.GetAppActivity === 'function') return win.top.appActivityStore;
 		if (win.AppActivityStore && typeof win.AppActivityStore.GetAppActivity === 'function') return win.AppActivityStore;
 		const found = findModuleExport((m: any) =>
-			typeof m?.GetAppActivity === 'function' || typeof m?.GetAppActivityData === 'function' || typeof m?.GetActivityForApp === 'function'
+			typeof m?.GetAppActivity === 'function'
+			|| typeof m?.GetAppActivityData === 'function'
+			|| typeof m?.GetActivityForApp === 'function'
+			|| typeof m?.RequestAppActivity === 'function'
+			|| typeof m?.RequestActivityForApp === 'function'
 		);
 		if (found) return found;
 	} catch {}
@@ -131,21 +136,39 @@ const REVIEW_THUMB_DOWN = 'https://community.akamai.steamstatic.com/public/share
 
 function eventActorId(event: any): string {
 	try {
-		if (event?.steamIDActor?.ConvertTo64BitString) return event.steamIDActor.ConvertTo64BitString();
-		if (event?.m_steamidActor?.ConvertTo64BitString) return event.m_steamidActor.ConvertTo64BitString();
-		if (event?.m_steamIDActor?.ConvertTo64BitString) return event.m_steamIDActor.ConvertTo64BitString();
-		if (event?.steamidActor?.ConvertTo64BitString) return event.steamidActor.ConvertTo64BitString();
-		if (event?.steamIDActor?.GetAccountID) return (BigInt('76561197960265728') + BigInt(event.steamIDActor.GetAccountID())).toString();
-		if (event?.steamIDActor) return String(event.steamIDActor);
-		if (event?.m_steamidActor) return String(event.m_steamidActor);
-		if (event?.m_steamIDActor) return String(event.m_steamIDActor);
-		if (event?.steamid) return String(event.steamid);
-		if (event?.steamID?.ConvertTo64BitString) return event.steamID.ConvertTo64BitString();
-		if (event?.m_steamID?.ConvertTo64BitString) return event.m_steamID.ConvertTo64BitString();
-		if (event?.steamidUser?.ConvertTo64BitString) return event.steamidUser.ConvertTo64BitString();
-		if (event?.m_ulSteamID) return String(event.m_ulSteamID);
-		return '';
+		return extractSteamIdFromValue(
+			event?.steamIDActor || event?.m_steamidActor || event?.m_steamIDActor || event?.steamidActor ||
+			event?.steamID || event?.m_steamID || event?.steamid || event?.steamidUser ||
+			event?.m_ulSteamID || event?.actor_steamid || event?.m_unAccountID || event?.account_id || event?.accountid || event
+		);
 	} catch { return ''; }
+}
+
+function extractEventStatusText(e: any): string {
+	if (!e) return '';
+	if (typeof e.statusText === 'string' && e.statusText) return e.statusText;
+	if (typeof e.strStatusText === 'string' && e.strStatusText) return e.strStatusText;
+	if (typeof e.status_text === 'string' && e.status_text) return e.status_text;
+	if (typeof e.strStatus === 'string' && e.strStatus) return e.strStatus;
+	if (typeof e.m_strStatus === 'string' && e.m_strStatus) return e.m_strStatus;
+	if (typeof e.m_strStatusText === 'string' && e.m_strStatusText) return e.m_strStatusText;
+	if (typeof e.m_strStatusMessage === 'string' && e.m_strStatusMessage) return e.m_strStatusMessage;
+	if (typeof e.status_message === 'string' && e.status_message) return e.status_message;
+	if (typeof e.strMessage === 'string' && e.strMessage) return e.strMessage;
+	if (typeof e.m_strMessage === 'string' && e.m_strMessage) return e.m_strMessage;
+	if (typeof e.m_strText === 'string' && e.m_strText) return e.m_strText;
+	if (typeof e.strText === 'string' && e.strText) return e.strText;
+	if (typeof e.text === 'string' && e.text) return e.text;
+	if (typeof e.m_text === 'string' && e.m_text) return e.m_text;
+	if (typeof e.m_strBody === 'string' && e.m_strBody) return e.m_strBody;
+	if (typeof e.body === 'string' && e.body) return e.body;
+	if (typeof e.m_strContent === 'string' && e.m_strContent) return e.m_strContent;
+	if (typeof e.content === 'string' && e.content) return e.content;
+	if (Array.isArray(e.m_rgStrings) && typeof e.m_rgStrings[0] === 'string' && e.m_rgStrings[0]) return e.m_rgStrings[0];
+	if (Array.isArray(e.rgStrings) && typeof e.rgStrings[0] === 'string' && e.rgStrings[0]) return e.rgStrings[0];
+	if (Array.isArray(e.strings) && typeof e.strings[0] === 'string' && e.strings[0]) return e.strings[0];
+	if (typeof e.post_text === 'string' && e.post_text) return e.post_text;
+	return '';
 }
 
 function stableActivityDomId(event: any, values: string[]): string {
@@ -290,21 +313,13 @@ function renderReviewEvent(event: any, review: FriendReview | undefined, appid: 
 function getCurrentSteamID64(): string {
 	try {
 		const win = window as any;
-		let raw = win.SteamClient?.User?.GetSteamID?.()
-			|| win.userStore?.m_steamid?.ConvertTo64BitString?.()
+		const raw = win.SteamClient?.User?.GetSteamID?.()
+			|| win.userStore?.m_steamid
 			|| win.g_AccountInfo?.m_ulSteamID
 			|| win.g_AccountInfo?.m_unAccountID
+			|| win.g_FriendsUIApp?.m_CurrentUser?.m_steamid
 			|| '';
-		if (typeof raw === 'object' && raw?.ConvertTo64BitString) {
-			return raw.ConvertTo64BitString();
-		}
-		let str = String(raw || '').trim();
-		if (str && /^\d+$/.test(str)) {
-			if (str.length < 15 && Number(str) > 0) {
-				return (BigInt('76561197960265728') + BigInt(str)).toString();
-			}
-			return str;
-		}
+		return extractSteamIdFromValue(raw);
 	} catch {}
 	return '';
 }
@@ -312,6 +327,22 @@ function getCurrentSteamID64(): string {
 async function fetchCommunityWebEvents(steamAppId: string, _gameName: string): Promise<any[]> {
 	try {
 		const currentSid = getCurrentSteamID64();
+
+		// 1. Primary: Authenticated CEF fetch with user's active session cookies
+		const webEvents = await fetchAuthenticatedCommunityActivity(steamAppId, currentSid);
+		if (Array.isArray(webEvents) && webEvents.length > 0) {
+			for (const item of webEvents) {
+				const sid = eventActorId(item);
+				if (sid && sid !== '0') {
+					if (item.actorName || item.actorAvatar) {
+						cachePersona({ steamid: sid, name: item.actorName || sid, avatar: item.actorAvatar || DEFAULT_AVATAR });
+					}
+				}
+			}
+			return webEvents;
+		}
+
+		// 2. Secondary fallback: backend scraping
 		const raw = await fetchCommunityActivityBackend({ steam_app_id: steamAppId, steam_id64: currentSid });
 		const parsed = JSON.parse(raw);
 		if (!Array.isArray(parsed) || parsed.length === 0) return [];
@@ -432,6 +463,10 @@ export async function populateActivityFeed(
 				day: { GetLatestEventTime: () => nowTs },
 				events: webEvents,
 			});
+			for (const we of webEvents) {
+				const sid = eventActorId(we);
+				if (sid && !hasCachedPersona(sid)) actorIds.add(sid);
+			}
 		}
 	}
 
@@ -496,7 +531,7 @@ export async function populateActivityFeed(
 				eventHtml = renderReviewEvent(e, reviews.get(eventActorId(e)), steamAppId);
 				break;
 			case NEWS_TYPE.UserStatus: {
-				const text = e.statusText || e.strStatusText || e.status_text || e.strStatus || e.m_strStatus || e.strText || e.text || e.m_strText || e.m_status || e.m_strStatusMessage || e.status_message || e.message || '';
+				const text = extractEventStatusText(e);
 				if (!text) {
 					backendLog('UserStatus event fields: ' + Object.keys(e).slice(0, 40).join(','));
 					return null;

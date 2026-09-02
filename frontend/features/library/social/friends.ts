@@ -3,7 +3,8 @@ import type { FriendCategories, FriendPersona, FriendPlayInfo } from '../../../d
 import { CACHE_RETENTION, CACHE_TTL, cacheGet, cacheRead, cacheSet } from '../../../core/cache';
 import { escapeHtml } from '../../../core/text';
 import { gdlText, loc } from '../../../steam/localization';
-import { backendLog, fetchCommunityActivityBackend, fetchFriendPersonasBackend } from '../../../api/backend';
+import { backendLog, fetchFriendPersonasBackend } from '../../../api/backend';
+import { extractSteamIdFromValue, fetchFriendsGameplayInfo } from '../../../steam/social';
 import { cachePersona, getCachedPersona, hasCachedPersona } from './personas';
 import { buildNativeSidebarSection, discoverNativeLibraryLayout } from '../layout';
 
@@ -43,232 +44,115 @@ export async function getFriendData(steamAppId: string): Promise<{ html: string;
 	return request;
 }
 
-async function fetchCommunityWishlistFriends(steamAppId: string): Promise<FriendPlayInfo[]> {
-	try {
-		const raw = await fetchCommunityActivityBackend({ steam_app_id: steamAppId });
-		const parsed = JSON.parse(raw);
-		if (!Array.isArray(parsed)) return [];
-		const result: FriendPlayInfo[] = [];
-		for (const item of parsed) {
-			if (item.type === 9) { // AddedGameToWishlist
-				const sid = String(item.steamid || '');
-				const name = String(item.name || sid);
-				const avatar = String(item.avatar || DEFAULT_AVATAR);
-				if (sid && sid !== '0') {
-					cachePersona({ steamid: sid, name, avatar });
-					if (!result.some(f => f.steamid === sid)) {
-						result.push({ steamid: sid, minutes_played: 0, minutes_played_recently: 0 });
-					}
-				}
-			}
-		}
-		return result;
-	} catch (e) {
-		backendLog('fetchCommunityWishlistFriends backend error: ' + e);
-		return [];
-	}
-}
-
-function extractSteamId(value: any): string {
-	if (!value) return '';
-	if (typeof value === 'string' && /^\d{16,20}$/.test(value)) return value;
-	if (typeof value === 'number' && value > 0) {
-		if (value < 2147483648) return (BigInt('76561197960265728') + BigInt(value)).toString();
-		return String(value);
-	}
-	if (typeof value.ConvertTo64BitString === 'function') {
-		try { return value.ConvertTo64BitString(); } catch {}
-	}
-	if (typeof value.m_steamid?.ConvertTo64BitString === 'function') {
-		try { return value.m_steamid.ConvertTo64BitString(); } catch {}
-	}
-	if (typeof value.steamID?.ConvertTo64BitString === 'function') {
-		try { return value.steamID.ConvertTo64BitString(); } catch {}
-	}
-	if (typeof value.steamIDActor?.ConvertTo64BitString === 'function') {
-		try { return value.steamIDActor.ConvertTo64BitString(); } catch {}
-	}
-	if (typeof value.m_steamidActor?.ConvertTo64BitString === 'function') {
-		try { return value.m_steamidActor.ConvertTo64BitString(); } catch {}
-	}
-	if (value.GetAccountID) {
-		try { return (BigInt('76561197960265728') + BigInt(value.GetAccountID())).toString(); } catch {}
-	}
-	if (value.accountid) return (BigInt('76561197960265728') + BigInt(value.accountid)).toString();
-	if (value.account_id) return (BigInt('76561197960265728') + BigInt(value.account_id)).toString();
-	const sid = String(value.steamid || value.m_steamid || value.m_ulSteamID || value.steamidActor || value.steamIDActor || '');
-	if (/^\d{16,20}$/.test(sid)) return sid;
-	return '';
-}
-
 async function loadFriendData(steamAppId: string): Promise<{ html: string; data: FriendCategories | null }> {
 	const appIdNum = parseInt(steamAppId, 10);
 	if (!Number.isFinite(appIdNum) || appIdNum <= 0) return { html: '', data: null };
 
-	const steamClient = getSteamClient();
-	if (!steamClient?.Apps?.GetFriendsWhoPlay) {
-		return { html: '', data: null };
-	}
-
 	try {
-		const result = await steamClient.Apps.GetFriendsWhoPlay(appIdNum);
-		const parseFriends = (values: any[]): FriendPlayInfo[] => values.map((friend: any) => ({
-			steamid: extractSteamId(friend),
-			minutes_played: Number(friend?.minutes_played || friend?.m_nMinutesPlayed || friend?.minutesPlayed || friend?.minutes_played_forever || 0),
-			minutes_played_recently: Number(friend?.minutes_played_recently || friend?.m_nMinutesPlayedRecently || friend?.minutesPlayedRecently || 0),
-		})).filter(f => Boolean(f.steamid && f.steamid !== '0'));
+		// 1. Fetch comprehensive friends gameplay info via Steam protobuf RPC & Store API
+		const gameplayInfo = await fetchFriendsGameplayInfo(appIdNum);
 
-		let friends: FriendPlayInfo[] = [];
-		if (Array.isArray(result)) {
-			friends = result.length > 0 && typeof result[0] === 'object' && result[0] !== null
-				? parseFriends(result)
-				: result.map(value => ({ steamid: extractSteamId(value), minutes_played: 0, minutes_played_recently: 0 })).filter(f => Boolean(f.steamid && f.steamid !== '0'));
-		} else if (result && typeof result === 'object') {
-			const candidates = (result as any).friends || (result as any).rgFriends || (result as any).m_rgFriends;
-			friends = Array.isArray(candidates)
-				? parseFriends(candidates)
-				: Object.values(result).filter(Boolean).map((value: any) => ({
-					steamid: extractSteamId(value),
-					minutes_played: Number(value?.minutes_played || value?.m_nMinutesPlayed || 0),
-					minutes_played_recently: Number(value?.minutes_played_recently || value?.m_nMinutesPlayedRecently || 0),
+		const recentlyPlayed: FriendPlayInfo[] = gameplayInfo?.recentlyPlayed ? [...gameplayInfo.recentlyPlayed] : [];
+		const previouslyPlayed: FriendPlayInfo[] = gameplayInfo?.previouslyPlayed ? [...gameplayInfo.previouslyPlayed] : [];
+		const wishlisted: FriendPlayInfo[] = gameplayInfo?.wishlisted ? [...gameplayInfo.wishlisted] : [];
+
+		const seenSids = new Set<string>([
+			...recentlyPlayed.map(f => f.steamid),
+			...previouslyPlayed.map(f => f.steamid),
+			...wishlisted.map(f => f.steamid),
+		]);
+
+		// 2. Query SteamClient native Apps.GetFriendsWhoPlay if available
+		const steamClient = getSteamClient();
+		if (steamClient?.Apps?.GetFriendsWhoPlay) {
+			try {
+				const result = await steamClient.Apps.GetFriendsWhoPlay(appIdNum);
+				const parseFriends = (values: any[]): FriendPlayInfo[] => values.map((friend: any) => ({
+					steamid: extractSteamIdFromValue(friend),
+					minutes_played: Number(friend?.minutes_played || friend?.m_nMinutesPlayed || friend?.minutesPlayed || friend?.minutes_played_forever || 0),
+					minutes_played_recently: Number(friend?.minutes_played_recently || friend?.m_nMinutesPlayedRecently || friend?.minutesPlayedRecently || 0),
 				})).filter(f => Boolean(f.steamid && f.steamid !== '0'));
+
+				let rawFriends: FriendPlayInfo[] = [];
+				if (Array.isArray(result)) {
+					rawFriends = result.length > 0 && typeof result[0] === 'object' && result[0] !== null
+						? parseFriends(result)
+						: result.map(value => ({ steamid: extractSteamIdFromValue(value), minutes_played: 0, minutes_played_recently: 0 })).filter(f => Boolean(f.steamid && f.steamid !== '0'));
+				} else if (result && typeof result === 'object') {
+					const candidates = (result as any).friends || (result as any).rgFriends || (result as any).m_rgFriends;
+					rawFriends = Array.isArray(candidates)
+						? parseFriends(candidates)
+						: Object.values(result).filter(Boolean).map((value: any) => ({
+							steamid: extractSteamIdFromValue(value),
+							minutes_played: Number(value?.minutes_played || value?.m_nMinutesPlayed || 0),
+							minutes_played_recently: Number(value?.minutes_played_recently || value?.m_nMinutesPlayedRecently || 0),
+						})).filter(f => Boolean(f.steamid && f.steamid !== '0'));
+				}
+
+				for (const rf of rawFriends) {
+					if (!rf.steamid || rf.steamid === '0') continue;
+					if (rf.minutes_played_recently > 0) {
+						const existing = recentlyPlayed.find(f => f.steamid === rf.steamid);
+						if (existing) {
+							existing.minutes_played_recently = Math.max(existing.minutes_played_recently, rf.minutes_played_recently);
+							existing.minutes_played = Math.max(existing.minutes_played, rf.minutes_played);
+						} else {
+							const wIndex = wishlisted.findIndex(w => w.steamid === rf.steamid);
+							if (wIndex >= 0) wishlisted.splice(wIndex, 1);
+							const pIndex = previouslyPlayed.findIndex(p => p.steamid === rf.steamid);
+							if (pIndex >= 0) previouslyPlayed.splice(pIndex, 1);
+							recentlyPlayed.push(rf);
+							seenSids.add(rf.steamid);
+						}
+					} else {
+						if (!recentlyPlayed.some(f => f.steamid === rf.steamid) && !previouslyPlayed.some(f => f.steamid === rf.steamid)) {
+							const wIndex = wishlisted.findIndex(w => w.steamid === rf.steamid);
+							if (wIndex >= 0) wishlisted.splice(wIndex, 1);
+							previouslyPlayed.push(rf);
+							seenSids.add(rf.steamid);
+						}
+					}
+				}
+			} catch (err) {
+				backendLog('GetFriendsWhoPlay fallback error: ' + err);
+			}
 		}
 
-		const wishlisted: FriendPlayInfo[] = [];
-		const addWishlistFriend = (sid: string) => {
-			if (sid && sid !== '0' && !friends.some(f => f.steamid === sid) && !wishlisted.some(w => w.steamid === sid)) {
-				wishlisted.push({ steamid: sid, minutes_played: 0, minutes_played_recently: 0 });
-			}
-		};
-
-		// 1. SteamClient native bridge methods
-		const clientCandidates = [
-			steamClient?.Apps?.GetFriendsWhoWishlist,
-			steamClient?.Apps?.GetFriendsWithAppOnWishlist,
-			steamClient?.Apps?.GetFriendsWhoWishlistApp,
-			steamClient?.Friends?.GetFriendsWhoWishlist,
-			steamClient?.Friends?.GetFriendsWithAppOnWishlist,
-			(window as any).SteamClient?.Apps?.GetFriendsWhoWishlist,
-			(window as any).SteamClient?.Friends?.GetFriendsWhoWishlist,
-		];
-		for (const fn of clientCandidates) {
-			if (typeof fn === 'function') {
-				try {
-					const wResult = await fn(appIdNum);
-					if (Array.isArray(wResult)) {
-						for (const item of wResult) addWishlistFriend(extractSteamId(item));
-					}
-				} catch {}
-			}
-		}
-
-		// 2. Webpack modules for wishlist queries
-		try {
-			const mod = findModuleExport((m: any) =>
-				typeof m?.GetFriendsWhoWishlist === 'function'
-				|| typeof m?.GetFriendsWithAppOnWishlist === 'function'
-				|| typeof m?.GetFriendsWhoHaveOnWishlist === 'function'
-			);
-			if (mod) {
-				const fns = [mod.GetFriendsWhoWishlist, mod.GetFriendsWithAppOnWishlist, mod.GetFriendsWhoHaveOnWishlist];
-				for (const fn of fns) {
-					if (typeof fn === 'function') {
-						try {
-							const wResult = await fn.call(mod, appIdNum);
-							if (Array.isArray(wResult)) {
-								for (const item of wResult) addWishlistFriend(extractSteamId(item));
-							}
-						} catch {}
-					}
-				}
-			}
-		} catch {}
-
-		// 3. Webpack friend store search
-		try {
-			const friendStore = findModuleExport((m: any) =>
-				(m?.m_mapFriends instanceof Map || typeof m?.GetFriend === 'function' || Array.isArray(m?.m_rgFriends))
-				&& (typeof m?.GetFriends === 'function' || typeof m?.GetFriendList === 'function' || m?.m_mapFriends)
-			);
-			if (friendStore) {
-				const allFriends = friendStore.m_mapFriends instanceof Map
-					? Array.from(friendStore.m_mapFriends.values())
-					: (Array.isArray(friendStore.m_rgFriends) ? friendStore.m_rgFriends : []);
-				for (const f of allFriends) {
-					const sid = extractSteamId(f);
-					if (!sid) continue;
-					const wishlist = (f as any)?.m_rgWishlistApps || (f as any)?.m_setWishlistApps || (f as any)?.wishlist || (f as any)?.m_rgWishlist;
-					if (wishlist instanceof Set && (wishlist.has(appIdNum) || wishlist.has(String(appIdNum)))) {
-						addWishlistFriend(sid);
-					} else if (Array.isArray(wishlist) && (wishlist.includes(appIdNum) || wishlist.includes(String(appIdNum)))) {
-						addWishlistFriend(sid);
-					}
-				}
-			}
-		} catch {}
-
-		// 4. AppActivity store search
-		try {
-			const activityStore = (window as any).appActivityStore
-				|| (window as any).parent?.appActivityStore
-				|| (window as any).top?.appActivityStore
-				|| findModuleExport((m: any) =>
-					typeof m?.GetAppActivity === 'function'
-					|| typeof m?.GetActivityForApp === 'function'
-					|| typeof m?.GetAppActivityData === 'function'
-					|| typeof m?.GetActivityByAppID === 'function'
-				);
-			const appActivity = activityStore?.GetAppActivity?.(appIdNum)
-				|| activityStore?.GetAppActivityData?.(appIdNum)
-				|| activityStore?.GetActivityForApp?.(appIdNum)
-				|| activityStore?.GetActivityByAppID?.(appIdNum);
-			const allEvents: any[] = [];
-			if (Array.isArray(appActivity?.m_Events)) allEvents.push(...appActivity.m_Events);
-			if (Array.isArray(appActivity?.events)) allEvents.push(...appActivity.events);
-			if (Array.isArray(appActivity?.m_rgEvents)) allEvents.push(...appActivity.m_rgEvents);
-			if (Array.isArray(appActivity?.rgEvents)) allEvents.push(...appActivity.rgEvents);
-			const days = appActivity?.m_mapActivityByDay || appActivity?.m_rgDays || appActivity?.days;
-			if (days instanceof Map || typeof days?.forEach === 'function') {
-				days.forEach((day: any) => {
-					const dayEvs = day?.events || day?.m_Events || day?.m_rgEvents || day?.rgEvents || (Array.isArray(day) ? day : []);
-					if (Array.isArray(dayEvs)) allEvents.push(...dayEvs);
-				});
-			} else if (days && typeof days === 'object') {
-				for (const day of Object.values(days)) {
-					const dayEvs = (day as any)?.events || (day as any)?.m_Events || (day as any)?.m_rgEvents || (day as any)?.rgEvents || (Array.isArray(day) ? day : []);
-					if (Array.isArray(dayEvs)) allEvents.push(...dayEvs);
-				}
-			}
-			for (const ev of allEvents) {
-				const eventType = Number(ev?.eEventType ?? ev?.m_eEventType ?? ev?.type ?? ev?.event_type ?? 0);
-				const strAction = String(ev?.strAction || ev?.action || ev?.m_strAction || '').toLowerCase();
-				if (eventType === 9 || eventType === 8 || strAction.includes('wishlist') || strAction.includes('deseados')) {
-					addWishlistFriend(extractSteamId(ev));
-				}
-			}
-		} catch {}
-
+		// 3. Webpack friend store search fallback for wishlist
 		if (wishlisted.length === 0) {
-			const webWishlist = await fetchCommunityWishlistFriends(steamAppId);
-			for (const w of webWishlist) {
-				addWishlistFriend(w.steamid);
-			}
+			try {
+				const friendStore = findModuleExport((m: any) =>
+					(m?.m_mapFriends instanceof Map || typeof m?.GetFriend === 'function' || Array.isArray(m?.m_rgFriends))
+					&& (typeof m?.GetFriends === 'function' || typeof m?.GetFriendList === 'function' || m?.m_mapFriends)
+				);
+				if (friendStore) {
+					const allFriends = friendStore.m_mapFriends instanceof Map
+						? Array.from(friendStore.m_mapFriends.values())
+						: (Array.isArray(friendStore.m_rgFriends) ? friendStore.m_rgFriends : []);
+					for (const f of allFriends) {
+						const sid = extractSteamIdFromValue(f);
+						if (!sid || seenSids.has(sid)) continue;
+						const wishlist = (f as any)?.m_rgWishlistApps || (f as any)?.m_setWishlistApps || (f as any)?.wishlist || (f as any)?.m_rgWishlist;
+						if (wishlist instanceof Set && (wishlist.has(appIdNum) || wishlist.has(String(appIdNum)))) {
+							wishlisted.push({ steamid: sid, minutes_played: 0, minutes_played_recently: 0 });
+							seenSids.add(sid);
+						} else if (Array.isArray(wishlist) && (wishlist.includes(appIdNum) || wishlist.includes(String(appIdNum)))) {
+							wishlisted.push({ steamid: sid, minutes_played: 0, minutes_played_recently: 0 });
+							seenSids.add(sid);
+						}
+					}
+				}
+			} catch {}
 		}
 
-		const hasRecentPlaytime = friends.some(friend => friend.minutes_played_recently > 0);
-		const recentlyPlayed = hasRecentPlaytime
-			? friends.filter(friend => friend.minutes_played_recently > 0).sort((a, b) => b.minutes_played_recently - a.minutes_played_recently)
-			: [];
-		const previouslyPlayed = hasRecentPlaytime
-			? friends.filter(friend => friend.minutes_played_recently === 0)
-			: friends;
+		recentlyPlayed.sort((a, b) => b.minutes_played_recently - a.minutes_played_recently);
 
 		const totalCount = recentlyPlayed.length + previouslyPlayed.length + wishlisted.length;
 		const data: FriendCategories = { recentlyPlayed, previouslyPlayed, wishlisted, totalCount };
 		if (totalCount > 0) cacheSet('friends_' + steamAppId, data);
 		return { html: '', data };
 	} catch (error) {
-		backendLog('GetFriendsWhoPlay error: ' + error);
+		backendLog('loadFriendData error: ' + error);
 		return { html: '', data: null };
 	}
 }

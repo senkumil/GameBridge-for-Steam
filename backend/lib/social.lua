@@ -122,6 +122,12 @@ function M.fetch_friend_personas(steam_ids_csv)
                 if not name then name = res.body:match("<steamID>(.-)</steamID>") end
                 local avatar = res.body:match("<avatarMedium><!%[CDATA%[(.-)%]%]></avatarMedium>")
                 if not avatar then avatar = res.body:match("<avatarMedium>(.-)</avatarMedium>") end
+                if not avatar or avatar == "" then
+                    avatar = res.body:match("<avatarFull><!%[CDATA%[(.-)%]%]></avatarFull>")
+                        or res.body:match("<avatarFull>(.-)</avatarFull>")
+                        or res.body:match("<avatarIcon><!%[CDATA%[(.-)%]%]></avatarIcon>")
+                        or res.body:match("<avatarIcon>(.-)</avatarIcon>")
+                end
                 entry.name = name or ""
                 entry.avatar = avatar or ""
             end

@@ -4,8 +4,17 @@ import { escapeHtml } from '../../../core/text';
 import { EVENT_CLASSES, FEED_CLASSES } from '../../../steam/css';
 import { gdlText, loc, steamIntlLocale } from '../../../steam/localization';
 import { eventTypeLabel, formatNewsDate, isPatchNoteItem, newsExcerpt } from '../news';
-import { deleteStatusPostOnSteam } from '../../../steam/social';
+import { deleteStatusPostOnSteam, extractSteamIdFromValue } from '../../../steam/social';
+import { getCachedPersona } from './personas';
 import { socialRuntimeHost } from './host';
+
+export interface LocalActivityComment {
+	id: string;
+	text: string;
+	timestamp: number;
+	user_name: string;
+	user_avatar: string;
+}
 
 export interface LocalActivityPost {
 	id: string;
@@ -13,6 +22,7 @@ export interface LocalActivityPost {
 	timestamp: number;
 	user_name: string;
 	user_avatar: string;
+	comments?: LocalActivityComment[];
 }
 
 function getLocalActivityPostsKey(steamAppId: string, shortcutAppId?: string | null): string {
@@ -42,12 +52,96 @@ export function saveLocalActivityPost(steamAppId: string, post: LocalActivityPos
 	}
 }
 
+export function saveLocalActivityComment(
+	steamAppId: string,
+	postId: string,
+	comment: LocalActivityComment,
+	shortcutAppId?: string | null,
+): void {
+	try {
+		const targetKeys = new Set<string>();
+		if (steamAppId) targetKeys.add(`gdl_posts_${steamAppId}`);
+		if (shortcutAppId) targetKeys.add(`gdl_posts_${shortcutAppId}`);
+		if (socialRuntimeHost().getCurrentInjectedAppId()) targetKeys.add(`gdl_posts_${socialRuntimeHost().getCurrentInjectedAppId()}`);
+		if (socialRuntimeHost().getCurrentInjectedShortcutAppId()) targetKeys.add(`gdl_posts_${socialRuntimeHost().getCurrentInjectedShortcutAppId()}`);
+
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i);
+			if (k && k.startsWith('gdl_posts_')) targetKeys.add(k);
+		}
+
+		for (const key of targetKeys) {
+			const raw = localStorage.getItem(key);
+			if (!raw) continue;
+			try {
+				const parsed = JSON.parse(raw);
+				if (Array.isArray(parsed)) {
+					const post = parsed.find((p: LocalActivityPost) => p.id === postId);
+					if (post) {
+						if (!Array.isArray(post.comments)) post.comments = [];
+						post.comments.push(comment);
+						localStorage.setItem(key, JSON.stringify(parsed));
+					}
+				}
+			} catch {}
+		}
+	} catch (e) {
+		backendLog('Failed to save local activity comment: ' + e);
+	}
+}
+
+export function deleteLocalActivityComment(
+	steamAppId: string,
+	postId: string,
+	commentId: string,
+	shortcutAppId?: string | null,
+): void {
+	try {
+		const targetKeys = new Set<string>();
+		if (steamAppId) targetKeys.add(`gdl_posts_${steamAppId}`);
+		if (shortcutAppId) targetKeys.add(`gdl_posts_${shortcutAppId}`);
+		if (socialRuntimeHost().getCurrentInjectedAppId()) targetKeys.add(`gdl_posts_${socialRuntimeHost().getCurrentInjectedAppId()}`);
+		if (socialRuntimeHost().getCurrentInjectedShortcutAppId()) targetKeys.add(`gdl_posts_${socialRuntimeHost().getCurrentInjectedShortcutAppId()}`);
+
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i);
+			if (k && k.startsWith('gdl_posts_')) targetKeys.add(k);
+		}
+
+		for (const key of targetKeys) {
+			const raw = localStorage.getItem(key);
+			if (!raw) continue;
+			try {
+				const parsed = JSON.parse(raw);
+				if (Array.isArray(parsed)) {
+					const post = parsed.find((p: LocalActivityPost) => p.id === postId);
+					if (post && Array.isArray(post.comments)) {
+						post.comments = post.comments.filter((c: LocalActivityComment) => c.id !== commentId);
+						localStorage.setItem(key, JSON.stringify(parsed));
+					}
+				}
+			} catch {}
+		}
+	} catch (e) {
+		backendLog('Failed to delete local activity comment: ' + e);
+	}
+}
+
 export function getCurrentSteamUser(doc: Document): { name: string; avatar: string } {
 	let name = '';
 	let avatar = '';
 	try {
 		const anyWin = (doc.defaultView || window) as any;
-		if (typeof anyWin?.SteamClient?.User?.GetPersonaName === 'function') {
+		const rawSid = anyWin?.SteamClient?.User?.GetSteamID?.()
+			|| anyWin?.userStore?.m_steamid
+			|| anyWin?.g_AccountInfo?.m_ulSteamID;
+		const sidStr = extractSteamIdFromValue(rawSid);
+		if (sidStr) {
+			const cached = getCachedPersona(sidStr);
+			if (cached?.name) name = cached.name;
+			if (cached?.avatar) avatar = cached.avatar;
+		}
+		if (!name && typeof anyWin?.SteamClient?.User?.GetPersonaName === 'function') {
 			name = anyWin.SteamClient.User.GetPersonaName();
 		}
 		if (!name && anyWin?.g_AccountInfo?.m_strPersonaName) {
@@ -55,6 +149,9 @@ export function getCurrentSteamUser(doc: Document): { name: string; avatar: stri
 		}
 		if (!name && anyWin?.userStore?.m_strPersonaName) {
 			name = anyWin.userStore.m_strPersonaName;
+		}
+		if (!avatar && typeof anyWin?.SteamClient?.Friends?.GetFriendAvatarURL === 'function' && sidStr) {
+			avatar = anyWin.SteamClient.Friends.GetFriendAvatarURL(sidStr, 'medium') || anyWin.SteamClient.Friends.GetFriendAvatarURL(sidStr) || '';
 		}
 	} catch {}
 
@@ -84,9 +181,11 @@ export function getCurrentSteamUser(doc: Document): { name: string; avatar: stri
 
 	if (!name) name = gdlText('steam_user', 'Steam User');
 
-	const avatarImg = doc.querySelector('[class*="Avatar"] img, [class*="avatar"] img, .avatarHolder img, [class*="AccountAvatar"] img') as HTMLImageElement | null;
-	if (avatarImg?.src) {
-		avatar = avatarImg.src;
+	if (!avatar) {
+		const avatarImg = doc.querySelector('[class*="Avatar"] img, [class*="avatar"] img, .avatarHolder img, [class*="AccountAvatar"] img') as HTMLImageElement | null;
+		if (avatarImg?.src) {
+			avatar = avatarImg.src;
+		}
 	}
 	if (!avatar) {
 		avatar = 'https://avatars.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg';
@@ -318,6 +417,13 @@ export function activityFeedContentSignature(
 		for (const value of [post.id, post.timestamp, post.user_name, post.user_avatar, post.text]) {
 			hash = hashFeedPart(hash, value);
 		}
+		if (Array.isArray(post.comments)) {
+			for (const c of post.comments) {
+				for (const value of [c.id, c.timestamp, c.user_name, c.user_avatar, c.text]) {
+					hash = hashFeedPart(hash, value);
+				}
+			}
+		}
 	}
 	for (const friend of effectiveFriendItems) {
 		for (const value of [friend.id, friend.date, friend.html]) {
@@ -425,7 +531,46 @@ export function renderUnifiedActivityFeed(
 		for (const entry of group.items) {
 			if (entry.type === 'post') {
 				const p = entry.post;
-				feedHtml += `<div class="gdl-local-post" data-post-id="${escapeHtml(p.id)}" style="margin-bottom:20px;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><img src="${escapeHtml(p.user_avatar)}" style="width:28px;height:28px;border-radius:2px;object-fit:cover;" data-gdl-fallback-src="https://avatars.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg" /><div style="font-size:13px;line-height:1.3;"><span style="font-weight:700;color:#66c0f4;">${escapeHtml(p.user_name)}</span><span style="color:#8f98a0;margin-left:4px;">${escapeHtml(gdlText('status_posted_at', 'posted a status update at'))} ${formatPostTime(p.timestamp)}</span></div><button type="button" class="gdl-delete-post-btn" data-post-id="${escapeHtml(p.id)}" title="${escapeHtml(gdlText('delete_post', 'Delete post'))}" style="margin-left:auto;background:transparent;border:none;color:#56606c;cursor:pointer;padding:4px 6px;border-radius:3px;display:flex;align-items:center;justify-content:center;transition:color 0.15s, background 0.15s;"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button></div><div style="background:#1f252e;border:1px solid rgba(255,255,255,0.025);border-radius:2px;padding:14px 18px;"><div style="font-size:14px;color:#d6d7d8;line-height:1.45;word-break:break-word;">${escapeHtml(p.text)}</div></div></div>`;
+				const comments = Array.isArray(p.comments) ? p.comments : [];
+				const commentsHtml = comments.map(c => `
+					<div class="gdl-post-comment" data-comment-id="${escapeHtml(c.id)}" data-post-id="${escapeHtml(p.id)}" style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-top:1px solid rgba(255,255,255,0.03);">
+						<img src="${escapeHtml(c.user_avatar)}" style="width:24px;height:24px;border-radius:2px;object-fit:cover;flex-shrink:0;margin-top:2px;" data-gdl-fallback-src="https://avatars.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg" />
+						<div style="flex:1;min-width:0;font-size:12.5px;line-height:1.4;">
+							<div style="display:flex;align-items:center;gap:6px;">
+								<span style="font-weight:700;color:#66c0f4;">${escapeHtml(c.user_name)}</span>
+								<span style="color:#626d7b;font-size:11px;">${formatPostTime(c.timestamp)}</span>
+								<button type="button" class="gdl-delete-comment-btn" data-comment-id="${escapeHtml(c.id)}" data-post-id="${escapeHtml(p.id)}" title="${escapeHtml(gdlText('delete_comment', 'Delete reply'))}" style="margin-left:auto;background:transparent;border:none;color:#4a5562;cursor:pointer;padding:2px 4px;border-radius:2px;display:flex;align-items:center;line-height:1;transition:color 0.15s;">
+									<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+								</button>
+							</div>
+							<div style="color:#c6d4df;margin-top:2px;word-break:break-word;">${escapeHtml(c.text)}</div>
+						</div>
+					</div>`).join('');
+
+				feedHtml += `<div class="gdl-local-post" data-post-id="${escapeHtml(p.id)}" style="margin-bottom:20px;">
+					<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+						<img src="${escapeHtml(p.user_avatar)}" style="width:28px;height:28px;border-radius:2px;object-fit:cover;" data-gdl-fallback-src="https://avatars.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg" />
+						<div style="font-size:13px;line-height:1.3;">
+							<span style="font-weight:700;color:#66c0f4;">${escapeHtml(p.user_name)}</span>
+							<span style="color:#8f98a0;margin-left:4px;">${escapeHtml(gdlText('status_posted_at', 'posted a status update at'))} ${formatPostTime(p.timestamp)}</span>
+						</div>
+						<button type="button" class="gdl-delete-post-btn" data-post-id="${escapeHtml(p.id)}" title="${escapeHtml(gdlText('delete_post', 'Delete post'))}" style="margin-left:auto;background:transparent;border:none;color:#56606c;cursor:pointer;padding:4px 6px;border-radius:3px;display:flex;align-items:center;justify-content:center;transition:color 0.15s, background 0.15s;">
+							<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+						</button>
+					</div>
+					<div style="background:#1f252e;border:1px solid rgba(255,255,255,0.025);border-radius:2px;padding:14px 18px;">
+						<div style="font-size:14px;color:#d6d7d8;line-height:1.45;word-break:break-word;">${escapeHtml(p.text)}</div>
+					</div>
+					<div class="gdl-post-comments-container" style="margin-top:6px;padding-left:14px;border-left:2px solid rgba(255,255,255,0.06);">
+						${commentsHtml}
+						<form class="gdl-comment-form" data-post-id="${escapeHtml(p.id)}" style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+							<input type="text" class="gdl-comment-input" data-post-id="${escapeHtml(p.id)}" placeholder="${escapeHtml(gdlText('add_comment', 'Write a reply...'))}" style="flex:1;background:#14181d;border:1px solid #232a32;border-radius:2px;color:#dcdedf;padding:6px 10px;font-size:13px;outline:none;" />
+							<button type="submit" class="gdl-comment-submit-btn" data-post-id="${escapeHtml(p.id)}" style="background:#222b35;border:1px solid rgba(255,255,255,0.08);color:#66c0f4;padding:6px 12px;border-radius:2px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px;">
+								${escapeHtml(gdlText('reply', 'Reply'))}
+							</button>
+						</form>
+					</div>
+				</div>`;
 			} else if (entry.type === 'friend') {
 				feedHtml += entry.item.html;
 			} else {
@@ -518,6 +663,30 @@ export function setupPostDeleteHandlers(
 	const feedContainer = doc.getElementById('gdl-activity-feed');
 	if (!feedContainer) return;
 
+	const handleFormSubmit = (event: Event): void => {
+		const target = event.target as HTMLElement | null;
+		const form = target?.closest('.gdl-comment-form') as HTMLFormElement | null;
+		if (!form) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const postId = form.getAttribute('data-post-id');
+		if (!postId) return;
+		const input = form.querySelector('.gdl-comment-input') as HTMLInputElement | null;
+		const text = input?.value.trim() || '';
+		if (!text) return;
+		const user = getCurrentSteamUser(doc);
+		saveLocalActivityComment(steamAppId, postId, {
+			id: 'comment_' + Date.now(),
+			text,
+			timestamp: Math.floor(Date.now() / 1000),
+			user_name: user.name,
+			user_avatar: user.avatar,
+		}, shortcutAppId);
+		delete feedContainer.dataset.gdlFeedSignature;
+		applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
+		setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
+	};
+
 	const handleClick = (event: Event): void => {
 		const target = event.target as HTMLElement | null;
 		if (!target) return;
@@ -538,6 +707,20 @@ export function setupPostDeleteHandlers(
 			applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, sourceNews, fallbackImage);
 			return;
 		}
+		const commentDeleteBtn = target.closest('.gdl-delete-comment-btn') as HTMLElement | null;
+		if (commentDeleteBtn) {
+			event.preventDefault();
+			event.stopPropagation();
+			const postId = commentDeleteBtn.getAttribute('data-post-id');
+			const commentId = commentDeleteBtn.getAttribute('data-comment-id');
+			if (postId && commentId) {
+				deleteLocalActivityComment(steamAppId, postId, commentId, shortcutAppId);
+				delete feedContainer.dataset.gdlFeedSignature;
+				applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
+				setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
+			}
+			return;
+		}
 		const button = target.closest('.gdl-delete-post-btn') as HTMLElement | null;
 		if (!button) return;
 		event.preventDefault();
@@ -545,14 +728,18 @@ export function setupPostDeleteHandlers(
 		const postId = button.getAttribute('data-post-id');
 		if (!postId) return;
 		deleteLocalActivityPost(steamAppId, postId, shortcutAppId);
+		delete feedContainer.dataset.gdlFeedSignature;
 		applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
+		setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
 	};
 	feedContainer.addEventListener('click', handleClick);
+	feedContainer.addEventListener('submit', handleFormSubmit);
 	let active = true;
 	const cleanup = (): void => {
 		if (!active) return;
 		active = false;
 		feedContainer.removeEventListener('click', handleClick);
+		feedContainer.removeEventListener('submit', handleFormSubmit);
 		feedInteractionCleanup.delete(doc);
 	};
 	feedInteractionCleanup.set(doc, cleanup);
