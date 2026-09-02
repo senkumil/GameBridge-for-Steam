@@ -52,7 +52,8 @@ local function parse_hub_cards(html, fallback_type, items)
     debug_log("parse_hub_cards: using delimiter '" .. DELIM .. "' first match at pos " .. tostring(first))
 
     local search_pos = first
-    while #items < 96 do
+    local seen_items = {}
+    while #items < 120 do
         local card_start = html:find(DELIM, search_pos, true)
         if not card_start then break end
 
@@ -62,31 +63,83 @@ local function parse_hub_cards(html, fallback_type, items)
 
         local item = {}
 
-        -- Detect type from apphub_CardContentType div
-        local content_type = card:match('apphub_CardContentType[^"]*"[^>]*>%s*(%w+)')
-        if content_type then
-            local ct = content_type:lower()
-            if ct == "guide" then
-                item.type = "guide"
-                item.label = "Guide"
-            elseif ct == "artwork" then
-                item.type = "screenshot"  -- treat artwork like screenshots for rendering
-            else
-                item.type = fallback_type or "screenshot"
-            end
-        else
-            item.type = fallback_type or "screenshot"
+        -- Detect type from apphub_CardContentType div or specific classes / video indicators
+        local is_real_video = card:find("apphub_CardContentPlayVideo")
+            or card:find("video_play_icon")
+            or card:find("data%-youtube%-id")
+            or card:find("apphub_CardContentVideoImage")
+            or card:find("img%.youtube%.com")
+            or card:find("i%.ytimg%.com")
+            or card:find("youtube%.com/watch")
+            or card:find("youtu%.be")
+
+        local content_type = card:match('apphub_CardContentType[^"]*"[^>]*>%s*([%w%s]+)')
+        if not content_type then
+            content_type = card:match('appHubCardContentType[^"]*"[^>]*>%s*([%w%s]+)')
         end
 
-        -- Main preview image (screenshots/artwork)
+        -- Extract youtube_id if present
+        local yt = card:match('data%-youtube%-id="([^"]+)"')
+            or card:match('youtubeid="([^"]+)"')
+            or card:match('youtube%.com/watch%?v=([%w_%-]+)')
+            or card:match('youtu%.be/([%w_%-]+)')
+            or card:match('img%.youtube%.com/vi/([%w_%-]+)')
+            or card:match('i%.ytimg%.com/vi/([%w_%-]+)')
+            or card:match('youtube%.com/embed/([%w_%-]+)')
+
+        if yt and yt ~= "" then
+            item.youtube_id = yt
+            item.type = "video"
+            item.label = "Video"
+        elseif is_real_video then
+            item.type = "video"
+            item.label = "Video"
+        elseif content_type then
+            local ct = content_type:lower()
+            if ct:find("guide") or ct:find("guía") or ct:find("guia") then
+                item.type = "guide"
+                item.label = "Guide"
+            elseif ct:find("video") or ct:find("vídeo") then
+                item.type = "video"
+                item.label = "Video"
+            elseif ct:find("artwork") or ct:find("arte") then
+                item.type = "artwork"
+                item.label = "Artwork"
+            elseif ct:find("screenshot") or ct:find("captura") then
+                item.type = "screenshot"
+                item.label = "Screenshot"
+            else
+                item.type = fallback_type == "guide" and "guide" or "screenshot"
+            end
+        elseif fallback_type == "guide" and (card:find("apphub_CardContentGuide") or card:find("GuideImage")) then
+            item.type = "guide"
+            item.label = "Guide"
+        else
+            item.type = (fallback_type == "artwork") and "artwork" or "screenshot"
+        end
+
+        -- Main preview image (screenshots/artwork/videos)
         item.image = card:match('apphub_CardContentPreviewImage" src="([^"]+)"')
+        if not item.image and item.youtube_id then
+            item.image = "https://img.youtube.com/vi/" .. item.youtube_id .. "/hqdefault.jpg"
+        end
         -- Guide image
         if not item.image then
             item.image = card:match('apphub_CardContentGuideImage" src="([^"]+)"')
         end
+        -- Video preview image
+        if not item.image then
+            item.image = card:match('apphub_CardContentVideoImage" src="([^"]+)"')
+        end
         -- Generic fallback
         if not item.image then
             item.image = card:match('<img[^>]+src="(https://images%.steamusercontent%.com/[^"]+)"')
+        end
+        if not item.image then
+            item.image = card:match('<img[^>]+src="(https://img%.youtube%.com/[^"]+)"')
+        end
+        if not item.image then
+            item.image = card:match('<img[^>]+src="(https://i%.ytimg%.com/[^"]+)"')
         end
 
         -- Title: screenshots use apphub_CardContentTitle, guides use apphub_CardContentGuideTitle
@@ -121,10 +174,7 @@ local function parse_hub_cards(html, fallback_type, items)
             item.author_name = item.author_name:gsub("&amp;", "&"):gsub("&#39;", "'"):gsub("%s+$", "")
         end
 
-        -- Link from data-modal-content-url: it sits on the card's OPENING tag
-        -- before the id attribute, so it is NOT inside this chunk - the next
-        -- card's link is, which used to send clicks to the neighboring item.
-        -- Search backward from this card's id and take the closest match.
+        -- Link from data-modal-content-url
         item.link = nil
         local window_start = (card_start > 3000) and (card_start - 3000) or 1
         local window = html:sub(window_start, card_start)
@@ -135,7 +185,15 @@ local function parse_hub_cards(html, fallback_type, items)
             item.link = item.link:gsub("&amp;", "&")
         end
 
-        if item.image and item.image ~= "" then
+        local is_latin_user = (safe_language ~= "russian" and safe_language ~= "ukrainian" and safe_language ~= "schinese" and safe_language ~= "tchinese" and safe_language ~= "japanese" and safe_language ~= "koreana")
+        local title_has_cyrillic = raw_title and (raw_title:find("[\208\209][\128-\191]") ~= nil)
+        local desc_has_cyrillic = raw_desc and (raw_desc:find("[\208\209][\128-\191]") ~= nil)
+        local title_has_cjk = raw_title and (raw_title:find("[\228-\233][\128-\191][\128-\191]") ~= nil)
+        local skip_script = is_latin_user and (title_has_cyrillic or desc_has_cyrillic or title_has_cjk)
+
+        local dedup_key = item.link or item.image
+        if not skip_script and item.image and item.image ~= "" and dedup_key and not seen_items[dedup_key] then
+            seen_items[dedup_key] = true
             table.insert(items, item)
             if #items <= 3 then
                 debug_log("Parsed item #" .. tostring(#items) .. ": type=" .. tostring(item.type)
@@ -160,31 +218,88 @@ function M.fetch_community_content(steam_app_id, language)
     local items = {}
 	local successful_pages = 0
 
-    -- One page per native subsection already supplies up to 48 cards. Loading
-    -- additional pages multiplied network/HTML parsing cost for content that is
-    -- normally below the fold and rarely reached.
-    local function fetch_pages(subsection, fallback_type, label)
-        for page = 1, 1 do
+    local function fetch_feed(lang, filter_lang, pages)
+        local headers = {
+            ["Accept"] = "text/html,*/*",
+            ["Cookie"] = "Steam_Language=" .. lang .. "; steamLanguage=" .. lang .. "; timezoneOffset=-18000,0;",
+            ["Accept-Language"] = lang,
+        }
+        for page = 1, pages do
             local url = "https://steamcommunity.com/app/" .. appid
-                .. "/homecontent/?l=" .. detection_url_encode(safe_language) .. "&browsefilter=trend&numperpage=24&p=" .. page
-                .. "&appid=" .. appid .. "&appHubSubSection=" .. subsection .. "&forceanon=1"
+                .. "/homecontent/?l=" .. detection_url_encode(lang)
+                .. (filter_lang and ("&filterLanguage=" .. detection_url_encode(filter_lang)) or "")
+                .. "&browsefilter=trend&numperpage=30&p=" .. page
+                .. "&appid=" .. appid .. "&forceanon=1"
             local ok, response = pcall(http.get, url, {
-                headers = { ["Accept"] = "text/html,*/*" },
-                timeout = 12
+                headers = headers,
+                timeout = 10
             })
             if ok and response and response.status == 200 and response.body then
-				successful_pages = successful_pages + 1
-                parse_hub_cards(response.body, fallback_type, items)
-                logger:info(label .. " page " .. page .. " parsed; total: " .. tostring(#items))
+                successful_pages = successful_pages + 1
+                parse_hub_cards(response.body, nil, items)
+                logger:info("Trending homecontent (" .. lang .. ") page " .. page .. " parsed; total: " .. tostring(#items))
             else
-                logger:warn(label .. " page " .. page .. " fetch failed or empty")
+                logger:info("Trending homecontent (" .. lang .. ") page " .. page .. " fetch failed or empty")
             end
-            if #items >= 96 then break end
+            if #items >= 50 then break end
         end
     end
 
-    fetch_pages(2, "screenshot", "Community screenshots")
-    fetch_pages(9, "guide", "Community guides")
+    local function fetch_sub(lang, filter_lang, subsection, fallback_type, label)
+        local headers = {
+            ["Accept"] = "text/html,*/*",
+            ["Cookie"] = "Steam_Language=" .. lang .. "; steamLanguage=" .. lang .. "; timezoneOffset=-18000,0;",
+            ["Accept-Language"] = lang,
+        }
+        local url = "https://steamcommunity.com/app/" .. appid
+            .. "/homecontent/?l=" .. detection_url_encode(lang)
+            .. (filter_lang and ("&requiredtags[0]=" .. detection_url_encode(filter_lang)) or "")
+            .. "&browsefilter=trend&numperpage=20&p=1"
+            .. "&appid=" .. appid .. "&appHubSubSection=" .. subsection .. "&forceanon=1"
+        local ok, response = pcall(http.get, url, {
+            headers = headers,
+            timeout = 10
+        })
+        if ok and response and response.status == 200 and response.body then
+            successful_pages = successful_pages + 1
+            parse_hub_cards(response.body, fallback_type, items)
+            logger:info(label .. " (" .. lang .. ") parsed; total: " .. tostring(#items))
+        end
+    end
+
+    local function get_language_family(lang)
+        lang = tostring(lang or "english"):lower()
+        if lang == "spanish" or lang == "latam" then
+            return { "spanish", "latam" }
+        elseif lang == "portuguese" or lang == "brazilian" then
+            return { "brazilian", "portuguese" }
+        elseif lang == "schinese" or lang == "tchinese" then
+            return { "schinese", "tchinese" }
+        end
+        return { lang }
+    end
+
+    local lang_family = get_language_family(safe_language)
+    local is_english = lang_family[1] == "english"
+
+    -- 1. Priority: Client language family (unifies Spanish variants, etc.)
+    if not is_english then
+        for _, lang in ipairs(lang_family) do
+            fetch_feed(lang, lang, 2)
+            fetch_sub(lang, lang, 9, "guide", "Guides")
+            fetch_sub(lang, lang, 4, "video", "Videos")
+            fetch_sub(lang, lang, 3, "artwork", "Artwork")
+            if #items >= 50 then break end
+        end
+    end
+
+    -- 2. Fallback: If client language has few items or is English, fetch English/global trending content
+    if #items < 24 then
+        fetch_feed("english", nil, 2)
+        fetch_sub("english", nil, 4, "video", "Videos")
+        fetch_sub("english", nil, 9, "guide", "Guides")
+        fetch_sub("english", nil, 3, "artwork", "Artwork")
+    end
 
     logger:info("Total community content items: " .. tostring(#items))
     return cjson.encode({
@@ -362,7 +477,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
             ["Accept-Language"] = "en-US,en;q=0.8",
             ["User-Agent"] = USER_AGENT,
         },
-        timeout = 18,
+        timeout = 4,
     })
 
     local result = { appid = tonumber(appid) or 0, cards = {}, badges = {}, source = "unavailable" }
@@ -374,7 +489,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
             result.source = "steam-community-market"
         end
     else
-        logger:warn("Official Steam card catalogue unavailable for " .. appid
+        logger:info("Official Steam card catalogue unavailable for " .. appid
             .. " (HTTP " .. tostring(market_response and market_response.status or "request_failed") .. ")")
     end
 
@@ -390,7 +505,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
             ["Accept-Language"] = "en-US,en;q=0.8",
             ["User-Agent"] = USER_AGENT,
         },
-        timeout = 18,
+        timeout = 4,
     })
 
     local badge_complete = ok and response and response.status == 200 and type(response.body) == "string"
@@ -403,7 +518,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
         logger:info("Community items for " .. appid .. ": "
             .. tostring(#result.cards) .. " cards, " .. tostring(#result.badges) .. " badges")
     else
-        logger:warn("Community item catalogue unavailable for " .. appid
+        logger:info("Community item catalogue unavailable for " .. appid
             .. " (HTTP " .. tostring(response and response.status or "request_failed") .. ")")
     end
 

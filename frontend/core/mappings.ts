@@ -1,12 +1,71 @@
 import type { Mappings } from '../domain/types';
 import { getAllMappings, saveMappingBackend, removeMappingBackend, updateMappingsBackend, backendLog, backendResultStatus, parseMappingsResponse } from '../api/backend';
 import { normalizeTitle } from './text';
+import { nglEvents } from './events';
 
 export const MAPPINGS_CACHE_STORAGE_KEY = 'gdl_mappings_snapshot_v1';
 const MAPPINGS_CHANGED_EVENT = 'gdl:mappings-changed';
 
+const shortcutToSteamMap = new Map<number, string>();
+const reverseSteamToShortcutMap = new Map<string, Set<number>>();
+const titleToSteamMap = new Map<string, string>();
+const exeToSteamMap = new Map<string, string>();
+const exeStemToSteamMap = new Map<string, string>();
+
+function rebuildMappingIndexes(source: Mappings): void {
+	shortcutToSteamMap.clear();
+	reverseSteamToShortcutMap.clear();
+	titleToSteamMap.clear();
+	exeToSteamMap.clear();
+	exeStemToSteamMap.clear();
+
+	for (const [key, value] of Object.entries(source)) {
+		if (!key || typeof value !== 'string' || !/^\d+$/.test(value)) continue;
+
+		if (key.startsWith('shortcut:')) {
+			const idStr = key.slice('shortcut:'.length);
+			const rawId = Number(idStr);
+			if (Number.isFinite(rawId)) {
+				const unsigned = rawId < 0 ? (rawId >>> 0) : rawId;
+				const signed = rawId > 2147483647 ? rawId - 4294967296 : rawId;
+				shortcutToSteamMap.set(rawId, value);
+				shortcutToSteamMap.set(unsigned, value);
+				shortcutToSteamMap.set(signed, value);
+
+				let set = reverseSteamToShortcutMap.get(value);
+				if (!set) {
+					set = new Set();
+					reverseSteamToShortcutMap.set(value, set);
+				}
+				if (unsigned >= 2147483648) set.add(unsigned);
+			}
+		} else if (key.startsWith('exe:')) {
+			const exePath = key.slice('exe:'.length);
+			const cleaned = exePath.trim().toLowerCase().replace(/\\/g, '/');
+			exeToSteamMap.set(cleaned, value);
+			exeToSteamMap.set(exePath.trim().toLowerCase(), value);
+		} else if (key.startsWith('exe_stem:')) {
+			const stem = key.slice('exe_stem:'.length);
+			exeStemToSteamMap.set(stem.trim().toLowerCase(), value);
+		} else {
+			const trimmed = key.trim();
+			titleToSteamMap.set(trimmed, value);
+			titleToSteamMap.set(trimmed.toLowerCase(), value);
+			const norm = normalizeTitle(trimmed);
+			if (norm) titleToSteamMap.set(norm, value);
+		}
+	}
+}
+
 function notifyMappingsChanged(): void {
+	rebuildMappingIndexes(mappings);
 	try { window.dispatchEvent(new CustomEvent<Mappings>(MAPPINGS_CHANGED_EVENT, { detail: { ...mappings } })); } catch {}
+	for (const [key, value] of Object.entries(mappings)) {
+		if (key.startsWith('shortcut:')) {
+			const shortcutAppId = key.slice('shortcut:'.length);
+			nglEvents.emit('linkedGameChanged', { shortcutAppId, linkedSteamAppId: value });
+		}
+	}
 }
 
 export function subscribeMappings(listener: (value: Mappings) => void): () => void {
@@ -36,6 +95,7 @@ export function persistMappingsSnapshot(value: Mappings): void {
 }
 
 export let mappings: Mappings = readCachedMappings();
+rebuildMappingIndexes(mappings);
 
 const wait = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
 let mappingLoadInFlight: Promise<void> | null = null;
@@ -133,15 +193,17 @@ async function updateMappingsCheckedUnlocked(mutation: MappingMutation): Promise
 	const remove = Array.from(new Set((mutation.remove || []).filter(Boolean)));
 	if (Object.keys(set).length === 0 && remove.length === 0) return true;
 
+	// Optimistically apply in memory and notify immediately on frame 0
+	for (const [key, value] of Object.entries(set)) mappings[key] = value;
+	for (const key of remove) delete mappings[key];
+	persistMappingsSnapshot(mappings);
+	notifyMappingsChanged();
+
 	try {
 		const raw = await updateMappingsBackend({ request_json: JSON.stringify({ set, remove }) });
 		const response = parseMappingMutationResponse(raw);
 		if (response?.ok) {
 			if (response.data && typeof response.data === 'object') mappings = response.data;
-			else {
-				for (const [key, value] of Object.entries(set)) mappings[key] = value;
-				for (const key of remove) delete mappings[key];
-			}
 			persistMappingsSnapshot(mappings);
 			notifyMappingsChanged();
 			return true;
@@ -279,17 +341,13 @@ export async function removeShortcutMappingsChecked(identity: ShortcutMappingIde
  * identity: unrelated games can legitimately ship the same filename. */
 export function findMappingByExactExe(exePath: string): string | null {
 	if (!exePath) return null;
+	const lower = exePath.trim().toLowerCase();
+	const normalizedLower = lower.replace(/\\/g, '/');
+	const indexed = exeToSteamMap.get(normalizedLower) || exeToSteamMap.get(lower);
+	if (indexed && /^\d+$/.test(indexed)) return indexed;
 	const fullKey = exeMappingKey(exePath);
 	if (mappings[fullKey] && /^\d+$/.test(String(mappings[fullKey]))) {
 		return String(mappings[fullKey]);
-	}
-	const lower = exePath.trim().toLowerCase();
-	const normalizedLower = lower.replace(/\\/g, '/');
-	for (const [k, v] of Object.entries(mappings)) {
-		if (k.startsWith('exe:') && /^\d+$/.test(String(v))) {
-			const target = k.replace('exe:', '').toLowerCase();
-			if (target === lower || target === normalizedLower) return String(v);
-		}
 	}
 	return null;
 }
@@ -300,32 +358,43 @@ export function findMappingByExe(exePath: string): string | null {
 	const exact = findMappingByExactExe(exePath);
 	if (exact) return exact;
 	const stemKey = exeStemMappingKey(exePath);
-	if (stemKey && mappings[stemKey] && /^\d+$/.test(String(mappings[stemKey]))) {
-		return String(mappings[stemKey]);
+	if (stemKey) {
+		const stem = stemKey.replace('exe_stem:', '');
+		const indexed = exeStemToSteamMap.get(stem);
+		if (indexed && /^\d+$/.test(indexed)) return indexed;
+		if (mappings[stemKey] && /^\d+$/.test(String(mappings[stemKey]))) {
+			return String(mappings[stemKey]);
+		}
 	}
 	return null;
 }
 
 export function findMappingForTitle(title: string, shortcutAppId?: string | number | null): string | null {
 	if (shortcutAppId) {
-		const stable = mappings[shortcutMappingKey(shortcutAppId)];
-		return stable && /^\d+$/.test(String(stable)) ? String(stable) : null;
+		const raw = Number(shortcutAppId);
+		const indexed = shortcutToSteamMap.get(raw);
+		if (indexed && /^\d+$/.test(indexed)) return indexed;
+		const unsigned = raw < 0 ? (raw >>> 0) : raw;
+		const signed = raw > 2147483647 ? raw - 4294967296 : raw;
+		const stable = mappings[shortcutMappingKey(shortcutAppId)]
+			|| (Number.isFinite(unsigned) ? mappings[shortcutMappingKey(unsigned)] : null)
+			|| (Number.isFinite(signed) ? mappings[shortcutMappingKey(signed)] : null);
+		if (stable && /^\d+$/.test(String(stable))) return String(stable);
 	}
 	if (!title) return null;
 	const trimmedTitle = String(title).trim();
+	const indexedExact = titleToSteamMap.get(trimmedTitle) || titleToSteamMap.get(trimmedTitle.toLowerCase());
+	if (indexedExact && /^\d+$/.test(indexedExact)) return indexedExact;
+	const normKey = normalizeTitle(trimmedTitle);
+	if (normKey) {
+		const indexedNorm = titleToSteamMap.get(normKey);
+		if (indexedNorm && /^\d+$/.test(indexedNorm)) return indexedNorm;
+	}
 	if (mappings[trimmedTitle] && /^\d+$/.test(String(mappings[trimmedTitle]))) {
 		return String(mappings[trimmedTitle]);
 	}
-	const normKey = normalizeTitle(trimmedTitle);
 	if (normKey && mappings[normKey] && /^\d+$/.test(String(mappings[normKey]))) {
 		return String(mappings[normKey]);
-	}
-	const lower = trimmedTitle.toLowerCase();
-	for (const [k, v] of Object.entries(mappings)) {
-		if (k.startsWith('shortcut:') || k.startsWith('exe:') || k.startsWith('exe_stem:') || !/^\d+$/.test(String(v))) continue;
-		if (k.toLowerCase() === lower || normalizeTitle(k) === normKey) {
-			return String(v);
-		}
 	}
 	return null;
 }
@@ -346,6 +415,15 @@ function isAppKnownInSteam(shortcutAppId: number): boolean {
 
 export function findShortcutIdForMappedSteamAppId(steamAppId: string | number): number | null {
 	const target = String(steamAppId);
+	const set = reverseSteamToShortcutMap.get(target);
+	if (set && set.size > 0) {
+		let fallbackId: number | null = null;
+		for (const rawId of set) {
+			if (isAppKnownInSteam(rawId)) return rawId;
+			if (!fallbackId) fallbackId = rawId;
+		}
+		if (fallbackId) return fallbackId;
+	}
 	let fallbackId: number | null = null;
 	for (const [key, mappedAppId] of Object.entries(mappings)) {
 		if (mappedAppId === target && key.startsWith('shortcut:')) {

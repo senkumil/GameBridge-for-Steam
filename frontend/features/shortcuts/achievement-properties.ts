@@ -9,6 +9,7 @@ import {
 	syncSteamAccountAchievementsBackend,
 } from '../../api/backend';
 import type { LocalAchievementData } from '../../domain/types';
+import { getCachedGameData } from '../../core/game-data';
 import { getPreferences } from '../../core/preferences';
 import { escapeHtml } from '../../core/text';
 import {
@@ -18,6 +19,89 @@ import {
 } from '../achievements/runtime';
 import { gdlText, steamLanguageSync } from '../../steam/localization';
 import { openAchievementPickerModal } from './achievement-picker-modal';
+
+const achievementOptionsMemoryCache = new Map<string, GameAchievementOptions>();
+const achievementPathMemoryCache = new Map<string, { configured?: boolean; path?: string; usable?: boolean }>();
+const achievementCapabilitiesMemoryCache = new Map<string, GameAchievementCapabilities & { total?: number }>();
+
+const STORAGE_ACH_OPTIONS = 'gdl:ach_options_v1:';
+const STORAGE_ACH_CAPS = 'gdl:ach_caps_v1:';
+const STORAGE_ACH_PATH = 'gdl:ach_path_v1:';
+
+function getStoredOptions(appId: string): GameAchievementOptions | null {
+	if (!appId) return null;
+	const mem = achievementOptionsMemoryCache.get(appId);
+	if (mem) return mem;
+	try {
+		const raw = localStorage.getItem(STORAGE_ACH_OPTIONS + appId);
+		if (raw) {
+			const parsed = JSON.parse(raw);
+			if (parsed && typeof parsed === 'object') {
+				achievementOptionsMemoryCache.set(appId, parsed);
+				return parsed;
+			}
+		}
+	} catch {}
+	return null;
+}
+
+function storeOptions(appId: string, value: GameAchievementOptions): void {
+	if (!appId) return;
+	achievementOptionsMemoryCache.set(appId, value);
+	try {
+		localStorage.setItem(STORAGE_ACH_OPTIONS + appId, JSON.stringify(value));
+	} catch {}
+}
+
+function getStoredCaps(appId: string): (GameAchievementCapabilities & { total?: number }) | null {
+	if (!appId) return null;
+	const mem = achievementCapabilitiesMemoryCache.get(appId);
+	if (mem) return mem;
+	try {
+		const raw = localStorage.getItem(STORAGE_ACH_CAPS + appId);
+		if (raw) {
+			const parsed = JSON.parse(raw);
+			if (parsed && typeof parsed === 'object') {
+				achievementCapabilitiesMemoryCache.set(appId, parsed);
+				return parsed;
+			}
+		}
+	} catch {}
+	return null;
+}
+
+function storeCaps(appId: string, value: GameAchievementCapabilities & { total?: number }): void {
+	if (!appId) return;
+	achievementCapabilitiesMemoryCache.set(appId, value);
+	try {
+		localStorage.setItem(STORAGE_ACH_CAPS + appId, JSON.stringify(value));
+	} catch {}
+}
+
+function getStoredPath(appId: string): { configured?: boolean; path?: string; usable?: boolean } | null {
+	if (!appId) return null;
+	const mem = achievementPathMemoryCache.get(appId);
+	if (mem) return mem;
+	try {
+		const raw = localStorage.getItem(STORAGE_ACH_PATH + appId);
+		if (raw) {
+			const parsed = JSON.parse(raw);
+			if (parsed && typeof parsed === 'object') {
+				achievementPathMemoryCache.set(appId, parsed);
+				return parsed;
+			}
+		}
+	} catch {}
+	return null;
+}
+
+function storePath(appId: string, value: { configured?: boolean; path?: string; usable?: boolean }): void {
+	if (!appId) return;
+	achievementPathMemoryCache.set(appId, value);
+	try {
+		localStorage.setItem(STORAGE_ACH_PATH + appId, JSON.stringify(value));
+	} catch {}
+}
 
 export interface ShortcutAchievementSettingsContext {
 	section: HTMLElement;
@@ -56,7 +140,7 @@ function parseIpcObject<T extends object>(raw: unknown): T | null {
 }
 
 export function shortcutAchievementSettingsHtml(): string {
-	return `<div class="gdl-game-achievement-source gdl-native-section" style="display:none;">
+	return `<div class="gdl-game-achievement-source gdl-native-section">
 		<div class="gdl-native-section-heading">${escapeHtml(gdlText('game_achievement_options_title', 'Achievement progress options'))}</div>
 		<div class="gdl-native-section-description">${escapeHtml(gdlText('game_simulated_achievements_description', 'Show progress using the real Steam names and icons.'))}</div>
 		<div class="gdl-game-achievement-options">
@@ -105,7 +189,7 @@ export function shortcutAchievementSettingsHtml(): string {
 	</div>`;
 }
 
-export function bindShortcutAchievementSettings(context: ShortcutAchievementSettingsContext): void {
+export function bindShortcutAchievementSettings(context: ShortcutAchievementSettingsContext): { sync: (appId?: string) => void } {
 	const { section } = context;
 	const achievementSection = section.querySelector<HTMLElement>('.gdl-game-achievement-source');
 	const pathInput = section.querySelector<HTMLInputElement>('.gdl-game-achievement-path-input');
@@ -123,17 +207,18 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 	const pickerBtn = section.querySelector<HTMLButtonElement>('.gdl-game-achievement-picker-btn');
 	const resetButton = section.querySelector<HTMLButtonElement>('.gdl-game-achievement-reset');
 	const optionsStatus = section.querySelector<HTMLElement>('.gdl-game-achievement-options-status');
-	if (!achievementSection || !pathInput || !pathSave || !pathClear || !pathStatus || !optionsStatus) return;
+	if (!achievementSection || !pathInput || !pathSave || !pathClear || !pathStatus || !optionsStatus) {
+		return { sync: () => {} };
+	}
 
 	let options: Required<Pick<GameAchievementOptions, 'configured' | 'simulate' | 'simulate_count' | 'simulate_online_count' | 'simulate_percent' | 'simulate_online_percent' | 'unlock_online'>> & { unlocked_names?: string[] } = {
 		configured: false, simulate: false, simulate_count: 0, simulate_online_count: 0, simulate_percent: 25, simulate_online_percent: 0, unlock_online: false, unlocked_names: undefined,
 	};
-	let loading = true;
+	let loading = false;
 	let saving = false;
 	let hasOnlineAchievements = false;
 	let capabilitiesLoaded = false;
 	let capabilitiesConfirmed = false;
-	let settingsLoaded = false;
 	let customPathConfigured = false;
 	let totalAchievements = 0;
 	let onlineAchievementsCount = 0;
@@ -142,11 +227,10 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 	let isSlidingOnline = false;
 	let lastLoadedOptions: GameAchievementOptions | null = null;
 	const replayIdentity = (): [string, string] => [context.steamAppId(), context.shortcutAppId() || context.steamAppId()];
+
 	const updateSectionVisibility = (): void => {
-		// Avoid flashing achievement controls while Steam/local metadata is still
-		// being checked. If detection fails, keep the controls available rather
-		// than hiding them on an unknown result.
-		if (!settingsLoaded || !capabilitiesLoaded) {
+		const targetAppId = context.steamAppId();
+		if (!targetAppId || !/^\d+$/.test(targetAppId)) {
 			achievementSection.style.display = 'none';
 			return;
 		}
@@ -331,6 +415,8 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			}) });
 			const result = parseIpcObject<GameAchievementOptions>(raw) || {};
 			if (!result.ok) throw new Error(result.error || 'save_failed');
+			const targetAppId = context.steamAppId();
+			if (targetAppId) storeOptions(targetAppId, result);
 			saving = false;
 			const previousSimulate = options.simulate;
 			const previousCount = options.simulate_count;
@@ -513,6 +599,8 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			const raw = await setGameAchievementPathBackend({ request_json: request({ path, unlock_online: options.unlock_online }) });
 			const result = parseIpcObject<{ ok?: boolean; usable?: boolean; error?: string }>(raw) || {};
 			if (!result.ok) throw new Error(result.error || 'save_failed');
+			const targetAppId = context.steamAppId();
+			if (targetAppId) storePath(targetAppId, { configured: true, path, usable: result.usable });
 			customPathConfigured = true;
 			options.simulate = false; options.configured = true;
 			render();
@@ -532,6 +620,8 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			const raw = await setGameAchievementPathBackend({ request_json: request({ path: '' }) });
 			const result = parseIpcObject<{ ok?: boolean; error?: string }>(raw) || {};
 			if (!result.ok) throw new Error(result.error || 'clear_failed');
+			const targetAppId = context.steamAppId();
+			if (targetAppId) storePath(targetAppId, { configured: false, path: '', usable: false });
 			customPathConfigured = false;
 			pathInput.value = '';
 			pathStatus.textContent = gdlText('game_achievement_path_cleared', 'Custom source removed; automatic AppID folders will be used.');
@@ -544,59 +634,114 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 		}
 	});
 
-	pathStatus.textContent = gdlText('game_achievement_path_loading', 'Loading achievement source...');
-	render();
-	void Promise.all([
-		getGameAchievementPathBackend({ request_json: request() }),
-		getGameAchievementOptionsBackend({ request_json: request() }),
-	]).then(([pathRaw, optionsRaw]) => {
-		const pathResult = parseIpcObject<{ ok?: boolean; configured?: boolean; path?: string; usable?: boolean }>(pathRaw) || {};
-		const optionsResult = parseIpcObject<GameAchievementOptions>(optionsRaw) || {};
-		if (pathResult.ok) {
-			customPathConfigured = pathResult.configured === true;
-			pathInput.value = pathResult.path || '';
-			if (pathDisclosure && pathResult.configured) pathDisclosure.open = true;
-			pathStatus.textContent = pathResult.configured
-				? (pathResult.usable ? gdlText('game_achievement_path_ready', 'This game will use the selected achievement file.') : gdlText('game_achievement_path_saved_missing', 'The path is saved, but no readable achievements JSON was found there.'))
-				: gdlText('game_achievement_path_automatic', 'Using automatic AppID folders from the global plugin setting.');
-		}
-		loading = false;
-		if (optionsResult.ok) applyOptions(optionsResult);
-		else render();
-		settingsLoaded = true;
-		updateSectionVisibility();
-	}).catch(() => {
-		loading = false;
-		settingsLoaded = true;
-		if (pathDisclosure) pathDisclosure.open = true;
-		render();
-		pathStatus.textContent = gdlText('game_achievement_path_failed', 'The achievement source could not be loaded.');
-		pathStatus.style.color = '#d94126';
-		updateSectionVisibility();
-	});
+	let syncGeneration = 0;
 
-	// Capability detection is intentionally independent from the fast settings
-	// load: a slow Steam metadata response must not block the rest of Properties.
-	void getGameAchievementCapabilitiesBackend({ request_json: request() }).then(raw => {
-		const result = parseIpcObject<GameAchievementCapabilities & { total?: number }>(raw) || {};
-		capabilitiesLoaded = true;
-		capabilitiesConfirmed = result.ok === true;
-		hasOnlineAchievements = result.ok === true && result.has_online === true && Number(result.online_count || 0) > 0;
-		if (result.ok === true && typeof result.total === 'number') {
-			totalAchievements = result.total;
-			onlineAchievementsCount = Number(result.online_count || 0);
-			offlineAchievementsCount = Math.max(0, totalAchievements - onlineAchievementsCount);
+	const syncForAppId = (targetAppId: string): void => {
+		syncGeneration += 1;
+		const thisGeneration = syncGeneration;
+		if (!targetAppId || !/^\d+$/.test(targetAppId)) {
+			achievementSection.style.display = 'none';
+			return;
 		}
-		if (!hasOnlineAchievements) options.unlock_online = false;
-		if (lastLoadedOptions) applyOptions(lastLoadedOptions);
-		else render();
-		updateSectionVisibility();
-	}).catch(() => {
-		capabilitiesLoaded = true;
-		capabilitiesConfirmed = false;
-		hasOnlineAchievements = false;
-		options.unlock_online = false;
+		achievementSection.style.display = 'block';
+
+		const cachedGame = getCachedGameData(targetAppId, steamLanguageSync() || 'english')?.data;
+		if (cachedGame?.achievements?.total && cachedGame.achievements.total > 0) {
+			totalAchievements = cachedGame.achievements.total;
+			offlineAchievementsCount = totalAchievements;
+			capabilitiesLoaded = true;
+			capabilitiesConfirmed = true;
+		}
+		const cachedCaps = getStoredCaps(targetAppId);
+		if (cachedCaps) {
+			capabilitiesLoaded = true;
+			capabilitiesConfirmed = cachedCaps.ok === true;
+			hasOnlineAchievements = cachedCaps.ok === true && cachedCaps.has_online === true && Number(cachedCaps.online_count || 0) > 0;
+			if (typeof cachedCaps.total === 'number') {
+				totalAchievements = cachedCaps.total;
+				onlineAchievementsCount = Number(cachedCaps.online_count || 0);
+				offlineAchievementsCount = Math.max(0, totalAchievements - onlineAchievementsCount);
+			}
+		}
+		const cachedOpt = getStoredOptions(targetAppId);
+		if (cachedOpt) {
+			loading = false;
+			lastLoadedOptions = cachedOpt;
+			applyOptions(cachedOpt);
+		} else if (totalAchievements > 0) {
+			loading = false;
+		}
+		const cachedPath = getStoredPath(targetAppId);
+		if (cachedPath) {
+			customPathConfigured = cachedPath.configured === true;
+			pathInput.value = cachedPath.path || '';
+			if (pathDisclosure && cachedPath.configured) pathDisclosure.open = true;
+		}
+
 		render();
-		updateSectionVisibility();
-	});
+
+		// Capability detection and settings load asynchronously in background
+		void Promise.all([
+			getGameAchievementPathBackend({ request_json: request({ steam_app_id: targetAppId }) }),
+			getGameAchievementOptionsBackend({ request_json: request({ steam_app_id: targetAppId }) }),
+		]).then(([pathRaw, optionsRaw]) => {
+			if (thisGeneration !== syncGeneration || !section.isConnected) return;
+			const pathResult = parseIpcObject<{ ok?: boolean; configured?: boolean; path?: string; usable?: boolean }>(pathRaw) || {};
+			const optionsResult = parseIpcObject<GameAchievementOptions>(optionsRaw) || {};
+			if (pathResult.ok) storePath(targetAppId, pathResult);
+			if (optionsResult.ok) storeOptions(targetAppId, optionsResult);
+			if (pathResult.ok) {
+				customPathConfigured = pathResult.configured === true;
+				pathInput.value = pathResult.path || '';
+				if (pathDisclosure && pathResult.configured) pathDisclosure.open = true;
+				pathStatus.textContent = pathResult.configured
+					? (pathResult.usable ? gdlText('game_achievement_path_ready', 'This game will use the selected achievement file.') : gdlText('game_achievement_path_saved_missing', 'The path is saved, but no readable achievements JSON was found there.'))
+					: gdlText('game_achievement_path_automatic', 'Using automatic AppID folders from the global plugin setting.');
+			}
+			loading = false;
+			if (optionsResult.ok) applyOptions(optionsResult);
+			else render();
+			updateSectionVisibility();
+		}).catch(() => {
+			if (thisGeneration !== syncGeneration || !section.isConnected) return;
+			loading = false;
+			if (pathDisclosure) pathDisclosure.open = true;
+			render();
+			updateSectionVisibility();
+		});
+
+		void getGameAchievementCapabilitiesBackend({ request_json: request({ steam_app_id: targetAppId }) }).then(raw => {
+			if (thisGeneration !== syncGeneration || !section.isConnected) return;
+			const result = parseIpcObject<GameAchievementCapabilities & { total?: number }>(raw) || {};
+			if (result.ok) storeCaps(targetAppId, result);
+			capabilitiesLoaded = true;
+			capabilitiesConfirmed = result.ok === true;
+			hasOnlineAchievements = result.ok === true && result.has_online === true && Number(result.online_count || 0) > 0;
+			if (result.ok === true && typeof result.total === 'number') {
+				totalAchievements = result.total;
+				onlineAchievementsCount = Number(result.online_count || 0);
+				offlineAchievementsCount = Math.max(0, totalAchievements - onlineAchievementsCount);
+			}
+			if (!hasOnlineAchievements) options.unlock_online = false;
+			if (lastLoadedOptions) applyOptions(lastLoadedOptions);
+			else render();
+			updateSectionVisibility();
+		}).catch(() => {
+			if (thisGeneration !== syncGeneration || !section.isConnected) return;
+			capabilitiesLoaded = true;
+			capabilitiesConfirmed = false;
+			hasOnlineAchievements = false;
+			options.unlock_online = false;
+			render();
+			updateSectionVisibility();
+		});
+	};
+
+	const sync = (appId?: string): void => {
+		const target = appId ?? context.steamAppId();
+		syncForAppId(target);
+	};
+
+	sync();
+	return { sync };
 }

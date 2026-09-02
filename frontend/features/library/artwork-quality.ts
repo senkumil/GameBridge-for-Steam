@@ -8,8 +8,8 @@ interface ArtworkQualitySpec {
 const AUTOMATIC_SLOT_QUALITY: Record<number, ArtworkQualitySpec> = {
 	0: { minWidth: 300, minHeight: 400, minRatio: 0.52, maxRatio: 0.82 },
 	1: { minWidth: 1280, minHeight: 400, minRatio: 2.35, maxRatio: 3.65 },
-	2: { minWidth: 128, minHeight: 64, minRatio: 0.35, maxRatio: 8 },
-	3: { minWidth: 400, minHeight: 180, minRatio: 1.6, maxRatio: 2.65 },
+	2: { minWidth: 64, minHeight: 20, minRatio: 0.2, maxRatio: 25 },
+	3: { minWidth: 400, minHeight: 180, minRatio: 1.5, maxRatio: 2.75 },
 };
 
 /** Reject automatic sources that would need severe cropping or upscaling.

@@ -4,7 +4,7 @@ import { mappings } from '../../core/mappings';
 import { steamLanguageSync } from '../../steam/localization';
 import { getMappedShortcuts } from '../../steam/shortcuts';
 import { getCachedLibraryAssets, getModernLibraryAssets } from './artwork';
-import { getNews } from './news';
+import { getCommunityContent, getNews } from './news';
 
 type PrefetchPhase = 'core' | 'news';
 
@@ -159,8 +159,11 @@ async function runTask(task: PrefetchTask): Promise<boolean> {
 			&& getCachedLibraryAssets(task.appId, task.language)?.fresh === true;
 	}
 
-	// An empty feed is a valid terminal result for many retired games.
-	await getNews(task.appId, task.language);
+	// Feed prefetch: load news and community content concurrently
+	await Promise.allSettled([
+		getNews(task.appId, task.language),
+		getCommunityContent(task.appId, task.language),
+	]);
 	return true;
 }
 

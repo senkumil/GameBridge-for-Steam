@@ -1,5 +1,6 @@
+import { findModuleExport } from '@steambrew/client';
 import type { FriendPersona, NewsItem } from '../../../domain/types';
-import { backendLog, fetchFriendPersonasBackend, fetchFriendReviewBackend, fetchPublishedPreviewsBackend } from '../../../api/backend';
+import { backendLog, fetchCommunityActivityBackend, fetchFriendPersonasBackend, fetchFriendReviewBackend, fetchPublishedPreviewsBackend } from '../../../api/backend';
 import { escapeHtml } from '../../../core/text';
 import { ACH_CLASSES, EVENT_CLASSES } from '../../../steam/css';
 import { gdlText, loc, steamIntlLocale } from '../../../steam/localization';
@@ -10,18 +11,65 @@ import {
 	hasFreshFriendActivitySnapshot,
 	markFriendActivitySnapshotChecked,
 	setupPostDeleteHandlers,
+	type FriendActivityFeedItem,
 } from './feed';
 
 const DEFAULT_AVATAR = 'https://avatars.cloudflare.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_medium.jpg';
 
+function getAppActivityStore(): any {
+	try {
+		const win = window as any;
+		if (win.appActivityStore && typeof win.appActivityStore.GetAppActivity === 'function') return win.appActivityStore;
+		if (win.parent?.appActivityStore && typeof win.parent.appActivityStore.GetAppActivity === 'function') return win.parent.appActivityStore;
+		if (win.top?.appActivityStore && typeof win.top.appActivityStore.GetAppActivity === 'function') return win.top.appActivityStore;
+		if (win.AppActivityStore && typeof win.AppActivityStore.GetAppActivity === 'function') return win.AppActivityStore;
+		const found = findModuleExport((m: any) =>
+			typeof m?.GetAppActivity === 'function' || typeof m?.GetAppActivityData === 'function' || typeof m?.GetActivityForApp === 'function'
+		);
+		if (found) return found;
+	} catch {}
+	return null;
+}
+
 async function getRealActivity(appid: number): Promise<any | null> {
 	try {
-		const store = (window as any).appActivityStore;
-		if (!store?.GetAppActivity) return null;
-		let activity = store.GetAppActivity(appid); // undefined on first call; triggers restore
-		for (let i = 0; i < 12 && !activity; i++) {
-			await new Promise(r => setTimeout(r, 400));
-			activity = store.GetAppActivity(appid);
+		const store = getAppActivityStore();
+		if (!store) {
+			backendLog('No appActivityStore found');
+			return null;
+		}
+		let activity = store.GetAppActivity ? store.GetAppActivity(appid) : (store.GetAppActivityData ? store.GetAppActivityData(appid) : store.GetActivityForApp?.(appid));
+		if (!activity && store.m_mapAppActivity?.get) activity = store.m_mapAppActivity.get(appid);
+		if (!activity && store.m_mapActivity?.get) activity = store.m_mapActivity.get(appid);
+
+		if (activity) {
+			if (typeof activity.RequestActivity === 'function') activity.RequestActivity();
+			if (typeof activity.RequestMoreActivity === 'function') activity.RequestMoreActivity();
+			if (typeof activity.LoadActivity === 'function') activity.LoadActivity();
+			if (typeof activity.Fetch === 'function') activity.Fetch();
+			if (typeof activity.FetchActivity === 'function') activity.FetchActivity();
+			if (typeof activity.LoadMoreActivity === 'function') activity.LoadMoreActivity();
+		}
+		if (typeof store.RequestAppActivity === 'function') store.RequestAppActivity(appid);
+		if (typeof store.RequestActivityForApp === 'function') store.RequestActivityForApp(appid);
+		if (typeof store.LoadAppActivity === 'function') store.LoadAppActivity(appid);
+		if (typeof store.FetchAppActivity === 'function') store.FetchAppActivity(appid);
+		if (typeof store.FetchActivityForApp === 'function') store.FetchActivityForApp(appid);
+
+		for (let i = 0; i < 20; i++) {
+			if (activity) {
+				const mapSize = activity.m_mapActivityByDay?.size
+					|| (typeof activity.m_mapActivityByDay?.length === 'number' ? activity.m_mapActivityByDay.length : 0)
+					|| (activity.m_mapActivityByDay && typeof activity.m_mapActivityByDay === 'object' ? Object.keys(activity.m_mapActivityByDay).length : 0);
+				const eventsCount = activity.m_Events?.length || activity.events?.length || activity.m_rgEvents?.length || (Array.isArray(activity) ? activity.length : 0);
+				const daysCount = activity.m_rgDays?.length || activity.days?.length || 0;
+				if (mapSize > 0 || eventsCount > 0 || daysCount > 0 || activity.m_bLoaded) {
+					break;
+				}
+			}
+			await new Promise(r => setTimeout(r, 200));
+			activity = store.GetAppActivity ? store.GetAppActivity(appid) : (store.GetAppActivityData ? store.GetAppActivityData(appid) : store.GetActivityForApp?.(appid));
+			if (!activity && store.m_mapAppActivity?.get) activity = store.m_mapAppActivity.get(appid);
 		}
 		if (!activity) {
 			backendLog('No activity object for appid ' + appid);
@@ -37,7 +85,7 @@ async function getRealActivity(appid: number): Promise<any | null> {
 /** Achievement icon URLs in activity events may be bare filenames */
 function achievementIconUrl(icon: string, appid: string): string {
 	if (!icon) return '';
-	if (/^https?:\/\//.test(icon)) return icon;
+	if (/^(https?:\/\/|data:)/.test(icon)) return icon;
 	return `https://cdn.steamstatic.com/steamcommunity/public/images/apps/${appid}/${icon}`;
 }
 
@@ -45,14 +93,16 @@ function achievementIconUrl(icon: string, appid: string): string {
 function renderAchievementCard(a: any, featured: boolean, appid: string): string {
 	if (!a) return '';
 	const c = ACH_CLASSES();
-	const icon = achievementIconUrl(a.strImage || '', appid);
+	const icon = achievementIconUrl(a.strImage || a.m_strImage || a.image || a.icon || a.strIcon || '', appid);
+	const name = a.strName || a.m_strName || a.name || a.strTitle || '';
+	const desc = a.strDescription || a.m_strDescription || a.description || a.strDesc || '';
 	return `<div class="${c.Achieved}${featured ? ' ' + c.Featured : ''}" style="display:flex;align-items:center;min-width:0;">
 		<div class="${c.AchievementHoverContainer}" style="flex-shrink:0;">
 			<img class="${c.Icon}" src="${escapeHtml(icon)}" style="display:block;width:64px;height:64px;" data-gdl-hide-on-error="1" />
 		</div>
 		${featured ? `<div class="${c.TextSection}">
-			<div class="${c.Name}">${escapeHtml(a.strName || '')}</div>
-			<div class="${c.Desc}">${escapeHtml(a.strDescription || '')}</div>
+			<div class="${c.Name}">${escapeHtml(name)}</div>
+			<div class="${c.Desc}">${escapeHtml(desc)}</div>
 		</div>` : ''}
 	</div>`;
 }
@@ -80,11 +130,26 @@ const REVIEW_THUMB_UP = 'https://community.akamai.steamstatic.com/public/shared/
 const REVIEW_THUMB_DOWN = 'https://community.akamai.steamstatic.com/public/shared/images/userreviews/icon_thumbsDown_v6.png';
 
 function eventActorId(event: any): string {
-	try { return event.steamIDActor?.ConvertTo64BitString?.() || ''; } catch { return ''; }
+	try {
+		if (event?.steamIDActor?.ConvertTo64BitString) return event.steamIDActor.ConvertTo64BitString();
+		if (event?.m_steamidActor?.ConvertTo64BitString) return event.m_steamidActor.ConvertTo64BitString();
+		if (event?.m_steamIDActor?.ConvertTo64BitString) return event.m_steamIDActor.ConvertTo64BitString();
+		if (event?.steamidActor?.ConvertTo64BitString) return event.steamidActor.ConvertTo64BitString();
+		if (event?.steamIDActor?.GetAccountID) return (BigInt('76561197960265728') + BigInt(event.steamIDActor.GetAccountID())).toString();
+		if (event?.steamIDActor) return String(event.steamIDActor);
+		if (event?.m_steamidActor) return String(event.m_steamidActor);
+		if (event?.m_steamIDActor) return String(event.m_steamIDActor);
+		if (event?.steamid) return String(event.steamid);
+		if (event?.steamID?.ConvertTo64BitString) return event.steamID.ConvertTo64BitString();
+		if (event?.m_steamID?.ConvertTo64BitString) return event.m_steamID.ConvertTo64BitString();
+		if (event?.steamidUser?.ConvertTo64BitString) return event.steamidUser.ConvertTo64BitString();
+		if (event?.m_ulSteamID) return String(event.m_ulSteamID);
+		return '';
+	} catch { return ''; }
 }
 
 function stableActivityDomId(event: any, values: string[]): string {
-	const source = [event?.unUniqueID, event?.eEventType, event?.rtEventTime, eventActorId(event), ...values].join('|');
+	const source = [event?.unUniqueID || event?.m_unUniqueID || event?.id, event?.eEventType || event?.m_eEventType || event?.type, event?.rtEventTime || event?.m_rtEventTime, eventActorId(event), ...values].join('|');
 	let hash = 2166136261;
 	for (let index = 0; index < source.length; index += 1) {
 		hash ^= source.charCodeAt(index);
@@ -120,8 +185,8 @@ function renderEventShell(event: any, verbHtml: string, bodyHtml: string): strin
 
 /** Achievement unlock event (featured card + extra icon cards) */
 function renderAchievementEvent(event: any, appid: string): string {
-	const achs: any[] = event.achievements || [];
-	if (achs.length === 0) return '';
+	const achs: any[] = event.achievements || event.m_rgAchievements || event.m_achievements || event.m_vecAchievements || [];
+	if (!Array.isArray(achs) || achs.length === 0) return '';
 	const primary = renderAchievementCard(achs[0], true, appid);
 	const rest = achs.slice(1, 7).map(a => renderAchievementCard(a, false, appid)).join('');
 	const body = `<div class="${EVENT_CLASSES().EventBody}">
@@ -135,7 +200,8 @@ function renderAchievementEvent(event: any, appid: string): string {
 
 /** Shared screenshots/videos: large active image + swappable thumbnails */
 function renderScreenshotEvent(event: any, previews: Map<string, string>, isVideo: boolean): string {
-	const ids: string[] = (event.publishedfileids || []).map(String);
+	const rawIds = event.publishedfileids || event.m_rgPublishedFileIDs || event.m_publishedfileids || event.m_rgPublishedFileIds || event.fileids || [];
+	const ids: string[] = (Array.isArray(rawIds) ? rawIds : [rawIds]).map(String).filter(Boolean);
 	const imgs = ids.map(id => ({ id, img: previews.get(id) || '' })).filter(x => x.img);
 	if (imgs.length === 0) return '';
 
@@ -152,14 +218,11 @@ function renderScreenshotEvent(event: any, previews: Map<string, string>, isVide
 	const fileUrl = (id: string) => `https://steamcommunity.com/sharedfiles/filedetails/?id=${id}`;
 	const main = imgs[0];
 	const thumbs = imgs.slice(1, 5);
-	const ts = event.rtEventTime || 0;
+	const ts = event.rtEventTime || event.m_rtEventTime || event.time || 0;
 	const uploaded = ts
 		? 'Uploaded: ' + new Date(ts * 1000).toLocaleDateString(steamIntlLocale(), { month: 'short', day: 'numeric', year: 'numeric' })
 			+ ' at ' + new Date(ts * 1000).toLocaleTimeString(steamIntlLocale(), { hour: 'numeric', minute: '2-digit' })
 		: '';
-
-	// Thumbnail swapping is handled by the shared delegated Steam navigation layer.
-
 
 	const body = `<div class="${EVENT_CLASSES().EventBody}">
 		<div style="padding:12px;">
@@ -201,7 +264,7 @@ export interface ActivityHydrationGuard {
 	shortcutAppId: string | null;
 }
 
-/** "reviewed a este juego" event with the scraped review content */
+/** "reviewed this game" event with the scraped review content */
 function renderReviewEvent(event: any, review: FriendReview | undefined, appid: string): string {
 	const verb = escapeHtml(loc('AppActivity_RecommendedGame', ' reviewed this game'));
 	const url = review?.url || `https://steamcommunity.com/profiles/${eventActorId(event)}/recommended/${appid}/`;
@@ -224,6 +287,57 @@ function renderReviewEvent(event: any, review: FriendReview | undefined, appid: 
 	return renderEventShell(event, verb, `<div class="${EVENT_CLASSES().EventBody}">${inner}</div>`);
 }
 
+function getCurrentSteamID64(): string {
+	try {
+		const win = window as any;
+		let raw = win.SteamClient?.User?.GetSteamID?.()
+			|| win.userStore?.m_steamid?.ConvertTo64BitString?.()
+			|| win.g_AccountInfo?.m_ulSteamID
+			|| win.g_AccountInfo?.m_unAccountID
+			|| '';
+		if (typeof raw === 'object' && raw?.ConvertTo64BitString) {
+			return raw.ConvertTo64BitString();
+		}
+		let str = String(raw || '').trim();
+		if (str && /^\d+$/.test(str)) {
+			if (str.length < 15 && Number(str) > 0) {
+				return (BigInt('76561197960265728') + BigInt(str)).toString();
+			}
+			return str;
+		}
+	} catch {}
+	return '';
+}
+
+async function fetchCommunityWebEvents(steamAppId: string, _gameName: string): Promise<any[]> {
+	try {
+		const currentSid = getCurrentSteamID64();
+		const raw = await fetchCommunityActivityBackend({ steam_app_id: steamAppId, steam_id64: currentSid });
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed) || parsed.length === 0) return [];
+		const events: any[] = [];
+		parsed.forEach((item: any, index: number) => {
+			const sid = String(item.steamid || '');
+			const name = String(item.name || sid);
+			const avatar = String(item.avatar || DEFAULT_AVATAR);
+			if (sid && sid !== '0') {
+				cachePersona({ steamid: sid, name, avatar });
+			}
+			events.push({
+				eEventType: item.type || NEWS_TYPE.UserStatus,
+				steamIDActor: { ConvertTo64BitString: () => sid },
+				unUniqueID: `backend_activity_${sid}_${index}`,
+				rtEventTime: item.time || (Math.floor(Date.now() / 1000) - index * 60),
+				statusText: item.text || '',
+			});
+		});
+		return events;
+	} catch (e) {
+		backendLog('fetchCommunityWebEvents backend error: ' + e);
+		return [];
+	}
+}
+
 /** Fetch real activity and render all supported friend events into the feed */
 export async function populateActivityFeed(
 	doc: Document,
@@ -244,26 +358,35 @@ export async function populateActivityFeed(
 	// activity store here would wait up to 4.8 seconds and then replace identical
 	// feed DOM on every visit.
 	if (hasFreshFriendActivitySnapshot(steamAppId)) return;
-	const activity = await getRealActivity(numericAppId);
+	let activity: any = null;
+	try {
+		activity = await getRealActivity(numericAppId);
+	} catch {}
 	if (!isCurrent()) return;
-	if (!activity) {
-		markFriendActivitySnapshotChecked(steamAppId, 15_000);
-		return;
-	}
 
-	// Collect days (native store groups events per day)
+	// Collect days (native store groups events per day, or array of events)
 	const days: any[] = [];
 	try {
-		activity.m_mapActivityByDay?.forEach?.((d: any) => days.push(d));
-	} catch {}
-	if (days.length === 0) {
-		// Steam can expose the activity object before its day map has restored.
-		// Back off briefly, then allow a background retry.
-		markFriendActivitySnapshotChecked(steamAppId, 30_000);
-		backendLog('Activity: no day groups for ' + steamAppId);
-		return;
+		if (activity?.m_mapActivityByDay instanceof Map || typeof activity?.m_mapActivityByDay?.forEach === 'function') {
+			activity.m_mapActivityByDay.forEach((d: any) => days.push(d));
+		} else if (activity?.m_mapActivityByDay && typeof activity.m_mapActivityByDay === 'object') {
+			for (const d of Object.values(activity.m_mapActivityByDay)) {
+				if (d) days.push(d);
+			}
+		} else if (Array.isArray(activity?.m_rgDays)) {
+			days.push(...activity.m_rgDays);
+		} else if (Array.isArray(activity?.days)) {
+			days.push(...activity.days);
+		} else if (Array.isArray(activity?.m_Events) || Array.isArray(activity?.events) || Array.isArray(activity?.m_rgEvents)) {
+			const evs = activity.m_Events || activity.events || activity.m_rgEvents;
+			days.push({ day: { GetLatestEventTime: () => Math.floor(Date.now() / 1000) }, events: evs });
+		} else if (Array.isArray(activity)) {
+			days.push({ day: { GetLatestEventTime: () => Math.floor(Date.now() / 1000) }, events: activity });
+		}
+	} catch (e) {
+		backendLog('Error collecting activity days: ' + e);
 	}
-	days.sort((a, b) => (b.GetLatestEventTime?.() || 0) - (a.GetLatestEventTime?.() || 0));
+	days.sort((a, b) => (b.GetLatestEventTime?.() || b.m_rtDay || b.rtEventTime || 0) - (a.GetLatestEventTime?.() || a.m_rtDay || a.rtEventTime || 0));
 
 	// Gather renderable events per day + everything we need to prefetch
 	const dayEvents: { day: any; events: any[] }[] = [];
@@ -273,28 +396,47 @@ export async function populateActivityFeed(
 	for (const day of days) {
 		let events: any[] = [];
 		try {
-			events = (day.events || []).filter((e: any) => {
-				if (!RENDERABLE_EVENT_TYPES.has(e.eEventType)) return false;
-				if (e.eEventType === NEWS_TYPE.AchievementUnlocked) return Array.isArray(e.achievements) && e.achievements.length > 0;
+			const rawEvents = day.events || day.m_Events || day.m_rgEvents || day.rgEvents || day.m_vecEvents || (Array.isArray(day) ? day : []);
+			events = rawEvents.filter((e: any) => {
+				const eventType = Number(e.eEventType || e.m_eEventType || e.type || e.event_type || e.nEventType || 0);
+				if (!RENDERABLE_EVENT_TYPES.has(eventType)) return false;
+				if (eventType === NEWS_TYPE.AchievementUnlocked) {
+					const achs = e.achievements || e.m_rgAchievements || e.m_achievements || e.m_vecAchievements || [];
+					return Array.isArray(achs) && achs.length > 0;
+				}
 				return true;
-			}).slice(0, 5);
+			}).slice(0, 10);
 		} catch {}
 		if (events.length === 0) continue;
 		for (const e of events) {
+			const eventType = Number(e.eEventType || e.m_eEventType || e.type || e.event_type || e.nEventType || 0);
 			const sid = eventActorId(e);
 			if (sid && !hasCachedPersona(sid)) actorIds.add(sid);
-			if (SCREENSHOT_TYPES.has(e.eEventType) || e.eEventType === NEWS_TYPE.Video) {
-				for (const id of (e.publishedfileids || []).slice(0, 5)) fileIds.add(String(id));
+			if (SCREENSHOT_TYPES.has(eventType) || eventType === NEWS_TYPE.Video) {
+				const fileList = e.publishedfileids || e.m_rgPublishedFileIDs || e.m_publishedfileids || e.m_rgPublishedFileIds || e.fileids || [];
+				for (const id of (Array.isArray(fileList) ? fileList : [fileList]).slice(0, 5)) fileIds.add(String(id));
 			}
-			if (e.eEventType === NEWS_TYPE.RecommendedGame && sid && reviewActors.length < 3) {
+			if (eventType === NEWS_TYPE.RecommendedGame && sid && reviewActors.length < 6) {
 				reviewActors.push(sid);
 			}
 		}
 		dayEvents.push({ day, events });
-		if (dayEvents.length >= 8) break;
+		if (dayEvents.length >= 12) break;
 	}
+
 	if (dayEvents.length === 0) {
-		markFriendActivitySnapshotChecked(steamAppId, 30_000);
+		const webEvents = await fetchCommunityWebEvents(steamAppId, gameName);
+		if (webEvents.length > 0) {
+			const nowTs = Math.floor(Date.now() / 1000);
+			dayEvents.push({
+				day: { GetLatestEventTime: () => nowTs },
+				events: webEvents,
+			});
+		}
+	}
+
+	if (dayEvents.length === 0) {
+		markFriendActivitySnapshotChecked(steamAppId, 5_000);
 		backendLog('Activity: no renderable events for ' + steamAppId);
 		return;
 	}
@@ -302,7 +444,7 @@ export async function populateActivityFeed(
 	// Prefetch personas, screenshot previews, and reviews in parallel
 	const previews = new Map<string, string>();
 	const reviews = new Map<string, FriendReview>();
-	const visibleActorIds = [...actorIds].filter(id => !hasCachedPersona(id)).slice(0, 8);
+	const visibleActorIds = [...actorIds].filter(id => !hasCachedPersona(id)).slice(0, 32);
 	await Promise.all([
 		visibleActorIds.length > 0
 			? fetchFriendPersonasBackend({ steam_ids_csv: visibleActorIds.join(',') })
@@ -322,57 +464,67 @@ export async function populateActivityFeed(
 	]);
 	if (!isCurrent()) return;
 
-	const renderEvent = (e: any): string => {
-		switch (e.eEventType) {
+	const renderEvent = (e: any, day: any): FriendActivityFeedItem | null => {
+		const eventType = Number(e.eEventType || e.m_eEventType || e.type || e.event_type || e.nEventType || 0);
+		const eventTime = Number(e.rtEventTime || e.m_rtEventTime || e.time || e.timestamp || day?.GetLatestEventTime?.() || day?.m_rtDay || day?.m_rtEventTime || day?.rtEventTime || day?.time || Math.floor(Date.now() / 1000));
+		let eventHtml = '';
+
+		switch (eventType) {
 			case NEWS_TYPE.AchievementUnlocked:
-				return renderAchievementEvent(e, steamAppId);
+				eventHtml = renderAchievementEvent(e, steamAppId);
+				break;
 			case NEWS_TYPE.Video:
-				return renderScreenshotEvent(e, previews, true);
+				eventHtml = renderScreenshotEvent(e, previews, true);
+				break;
 			case NEWS_TYPE.ReceivedNewGame:
-				return renderEventShell(e,
+				eventHtml = renderEventShell(e,
 					verbWithGameName(loc('AppActivity_ReceivedNewGameList', ' added %1$s to their library'), gameName),
 					renderCapsuleBody(steamAppId, headerImage));
+				break;
 			case NEWS_TYPE.AddedGameToWishlist:
-				return renderEventShell(e,
+				eventHtml = renderEventShell(e,
 					verbWithGameName(loc('AppActivity_AddedGameToWishlist', ' added %1$s to their %2$s.')
 						.replace('%2$s', loc('AppActivity_Wishlist', 'wishlist')), gameName),
 					renderCapsuleBody(steamAppId, headerImage));
+				break;
 			case NEWS_TYPE.PlayedGameFirstTime:
-				return renderEventShell(e,
+				eventHtml = renderEventShell(e,
 					verbWithGameName(loc('AppActivity_PlayedGameFirstTime', ' played %1$s for the first time'), gameName),
 					renderCapsuleBody(steamAppId, headerImage));
+				break;
 			case NEWS_TYPE.RecommendedGame:
-				return renderReviewEvent(e, reviews.get(eventActorId(e)), steamAppId);
+				eventHtml = renderReviewEvent(e, reviews.get(eventActorId(e)), steamAppId);
+				break;
 			case NEWS_TYPE.UserStatus: {
-				const text = e.statusText || e.strStatusText || e.status_text || e.strStatus || '';
+				const text = e.statusText || e.strStatusText || e.status_text || e.strStatus || e.m_strStatus || e.strText || e.text || e.m_strText || e.m_status || e.m_strStatusMessage || e.status_message || e.message || '';
 				if (!text) {
 					backendLog('UserStatus event fields: ' + Object.keys(e).slice(0, 40).join(','));
-					return '';
+					return null;
 				}
 				const ev2 = EVENT_CLASSES();
-				return renderEventShell(e,
+				eventHtml = renderEventShell(e,
 					escapeHtml(loc('AppActivity_UserStatus', ' posted a status update')),
-					`<div class="${ev2.EventBody} ${ev2.UserStatus}"><div style="font-size:14px;color:#dcdedf;line-height:1.5;white-space:pre-line;">${escapeHtml(String(text))}</div></div>`);
+					`<div class="${ev2.EventBody} ${ev2.UserStatus}"><div style="font-size:14px;color:#dcdedf;line-height:1.5;white-space:pre-line;word-break:break-word;">${escapeHtml(String(text))}</div></div>`);
+				break;
 			}
 			default:
-				if (SCREENSHOT_TYPES.has(e.eEventType)) return renderScreenshotEvent(e, previews, false);
-				return '';
+				if (SCREENSHOT_TYPES.has(eventType)) {
+					eventHtml = renderScreenshotEvent(e, previews, false);
+				}
+				break;
 		}
+
+		if (!eventHtml) return null;
+		const id = stableActivityDomId(e, [String(eventTime)]);
+		return { id, date: eventTime, html: eventHtml };
 	};
 
-	const ev = EVENT_CLASSES();
-	let html = '';
+	const friendItems: FriendActivityFeedItem[] = [];
 	for (const { day, events } of dayEvents) {
-		const rendered = events.map(renderEvent).join('');
-		if (!rendered) continue;
-		const ts = day.GetLatestEventTime?.() || 0;
-		const dateLabel = ts
-			? new Date(ts * 1000).toLocaleDateString(steamIntlLocale(), { month: 'long', day: 'numeric' })
-			: '';
-		html += `<div class="${ev.AppActivityDay}" role="region">
-			<h4 class="${ev.AppActivityDate}" style="margin:0 0 4px;">${escapeHtml(dateLabel)}<div class="${ev.Rule}"></div></h4>
-			${rendered}
-		</div>`;
+		for (const e of events) {
+			const item = renderEvent(e, day);
+			if (item) friendItems.push(item);
+		}
 	}
 
 	const feedEl = doc.getElementById('gdl-activity-feed');
@@ -386,7 +538,7 @@ export async function populateActivityFeed(
 			shortcutAppId,
 			newsItems,
 			headerImage,
-			html
+			friendItems
 		);
 		markFriendActivitySnapshotChecked(steamAppId);
 		setupPostDeleteHandlers(
@@ -396,6 +548,6 @@ export async function populateActivityFeed(
 			newsItems,
 			headerImage
 		);
-		backendLog('Activity feed rendered with friends & news: ' + dayEvents.length + ' day group(s)');
+		backendLog('Activity feed rendered with friends & news: ' + friendItems.length + ' friend event(s)');
 	}
 }

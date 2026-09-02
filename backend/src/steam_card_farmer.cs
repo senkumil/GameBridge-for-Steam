@@ -6,7 +6,7 @@ using System.Threading;
 
 namespace SteamCardFarmer
 {
-    class Program
+    public class Program
     {
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
         static extern bool SetDllDirectoryA(string lpPathName);
@@ -82,7 +82,7 @@ namespace SteamCardFarmer
 
         const string DefaultEventName = "NativeGameLink_Steam_CardFarmer_StopEvent";
 
-        static void Main(string[] args)
+        public static void Main(string[] args)
         {
             if (args.Length == 0) return;
 

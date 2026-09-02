@@ -199,6 +199,9 @@ function renderAchievementFooter(footer: HTMLElement, data: LocalAchievementData
 	const percent = hasAchievements ? localAchievementPercent(data!) : 0;
 	const labels = achievementLabels(percent);
 	const label = pending ? labels.loading : hasAchievements ? labels.progress : labels.empty;
+	const host = footer.parentElement;
+	if (host) host.style.display = '';
+	footer.style.display = '';
 	footer.className = `gdl-bp-achievement-footer${pending ? ' is-loading' : ''}${hasAchievements ? ' has-progress' : ' is-empty'}${percent >= 100 ? ' is-complete' : ''}`;
 	footer.innerHTML = `${percent >= 100 ? completionMedal() : ''}<span class="gdl-bp-card-ach-label">${escapeHtml(label)}</span>${hasAchievements ? `<span class="gdl-bp-card-ach-track"><span class="gdl-bp-card-ach-fill" style="width:${percent}%"></span></span>` : ''}`;
 	footer.setAttribute('aria-label', label);

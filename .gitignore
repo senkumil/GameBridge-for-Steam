@@ -55,9 +55,13 @@ coverage/
 build/
 out/
 backend/obj/
-backend/bin/*.pdb
-backend/bin/*.ilk
-backend/bin/*.xml
+backend/bin/
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+*.ilk
 
 # Scratch files and local exports
 scratch/

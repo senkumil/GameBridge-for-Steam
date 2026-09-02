@@ -67,7 +67,7 @@ local function fetch_global_achievement_percentages(appid)
     local url = "https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/?gameid=" .. tostring(appid)
     local ok, res = pcall(http.get, url, {
         headers = { ["Accept"] = "application/json" },
-        timeout = 15
+        timeout = 8
     })
     if not ok or not res or res.status ~= 200 or not res.body then return {}, {} end
     local okj, body = pcall(cjson.decode, res.body)
@@ -137,10 +137,10 @@ local function fetch_community_achievement_rows(appid, lang)
             ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             ["Cookie"] = cookie_header,
         },
-        timeout = 20
+        timeout = 8
     })
     if not ok or not res or res.status ~= 200 or not res.body then
-        logger:warn("Community achievement rows fetch failed for appid " .. tostring(appid))
+        logger:info("Community achievement rows unavailable for appid " .. tostring(appid))
         return {}
     end
     local html = res.body
@@ -270,7 +270,8 @@ local function match_public_metadata(appid, lang, root_dir)
     local key = tostring(appid) .. "|" .. tostring(lang or "spanish")
     local now = os.time()
     local cached = local_achievement_meta_cache[key]
-    if cached and next(cached.by_name or {}) and (now - (cached.time or 0)) < 1800 then
+    local cache_ttl = (cached and next(cached.by_name or {})) and 1800 or 300
+    if cached and (now - (cached.time or 0)) < cache_ttl then
         lru.touch(cached)
         return cached.by_name or {}, cached.source or "cache"
     end
@@ -365,10 +366,10 @@ local function match_public_metadata(appid, lang, root_dir)
         end
     end
 
-	-- An empty remote merge is usually a transient Community/API failure. Do
-	-- not turn it into a thirty-minute negative result in this Steam session.
 	if next(result) then
 		set_metadata_cache(key, { time = now, by_name = result, source = "steam_public" })
+	else
+		set_metadata_cache(key, { time = now, by_name = {}, source = "steam_public_empty" })
 	end
     return result, "steam_public"
 end

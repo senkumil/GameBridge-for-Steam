@@ -12,6 +12,7 @@ import type { NativeLibraryLayout } from './layout';
 import { buildNativeSidebarSection } from './layout';
 import { buildHistoricalSidebarSections } from './historical-sidebar';
 import type { SteamLibraryAssets } from './artwork';
+import { renderFriendsSection } from './social';
 
 export interface LinkedSidebarOptions {
 	steamAppId: string;
@@ -49,6 +50,23 @@ export function renderLinkedSidebarCore(
 	};
 
 	for (const node of buildHistoricalSidebarSections(doc, layout, options.data, options.steamAppId, options.modern)) insertSidebarNode(node);
+
+	if (options.friendResult && options.friendResult.totalCount > 0) {
+		const friendsHtml = renderFriendsSection(options.friendResult, options.steamAppId, options.data.name);
+		if (friendsHtml) {
+			const node = buildNativeSidebarSection(doc, layout, {
+				sectionId: 'gdl-friends-section',
+				headerText: loc('AppDetails_SectionTitle_Friends', 'Friends who play'),
+				innerId: 'gdl-friends-content',
+				innerHtml: friendsHtml,
+				cloneInnerClass: false,
+			});
+			if (node) {
+				node.dataset.gdlSteamAppId = options.steamAppId;
+				insertSidebarNode(node);
+			}
+		}
+	}
 
 	const total = options.data.achievements?.total || 0;
 	if (total <= 0) return;

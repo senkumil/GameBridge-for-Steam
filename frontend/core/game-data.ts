@@ -2,7 +2,8 @@ import type { GameDataCache, SteamGameData } from '../domain/types';
 import { fetchGameData, backendLog } from '../api/backend';
 import { CACHE_RETENTION, CACHE_TTL, cacheDeleteMatching, cacheRead, cacheSet } from './cache';
 import { RetryingRequestCache } from './request-cache';
-import { getSteamLanguage } from '../steam/localization';
+import { getSteamLanguage, steamLanguageSync } from '../steam/localization';
+import { mappings } from './mappings';
 import { normalizeSteamGameData } from './steam-game-data';
 
 export const gameDataCache: GameDataCache = {};
@@ -70,6 +71,32 @@ export function getCachedGameData(steamAppId: string, language: string): CachedG
 	if (!normalized) return null;
 	if (stored.fresh) cacheGameDataValue(languageKey, normalized);
 	return { data: normalized, fresh: stored.fresh };
+}
+
+export function getSynchronousGameData(steamAppId: string, requestedLanguage?: string): SteamGameData | null {
+	const language = String(requestedLanguage || steamLanguageSync() || 'english').toLowerCase();
+	const languageKey = gameDataLanguageKey(steamAppId, language);
+	const memory = gameDataCache[languageKey];
+	if (memory) {
+		const normalized = normalizeSteamGameData(memory);
+		if (normalized) return normalized;
+	}
+	const cached = getCachedGameData(steamAppId, language);
+	return cached?.data || null;
+}
+
+export function warmupAllMappedGameData(): void {
+	const language = String(steamLanguageSync() || 'english').toLowerCase();
+	try {
+		for (const [, value] of Object.entries(mappings)) {
+			if (typeof value === 'string' && /^\d+$/.test(value)) {
+				const cached = getCachedGameData(value, language);
+				if (cached?.data) {
+					cacheGameDataValue(gameDataLanguageKey(value, language), cached.data);
+				}
+			}
+		}
+	} catch {}
 }
 const transientLocalizedGameData = new WeakSet<SteamGameData>();
 const gameDataRequests = new RetryingRequestCache<SteamGameData>({

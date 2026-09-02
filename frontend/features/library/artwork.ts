@@ -53,8 +53,7 @@ function normalizeIconExtension(ext: string): string {
 	const value = String(ext || '').toLowerCase().replace(/^\./, '');
 	if (value === 'jpeg') return 'jpg';
 	if (value === 'x-icon') return 'ico';
-	if (value === 'png' || value === 'jpg' || value === 'ico' || value === 'tga') return value;
-	return 'png';
+	return (value === 'png' || value === 'jpg' || value === 'ico' || value === 'tga') ? value : 'png';
 }
 
 function iconExtensionFromDataUrl(dataUrl: string, fallback: string): string {
@@ -92,9 +91,9 @@ async function imageDataUrlToPng(dataUrl: string): Promise<string | null> {
 
 function iconCandidatePriority(ext: string): number {
 	const normalized = normalizeIconExtension(ext);
-	if (normalized === 'ico') return 0;
-	if (normalized === 'png') return 1;
-	if (normalized === 'jpg') return 2;
+	if (normalized === 'png') return 0;
+	if (normalized === 'jpg') return 1;
+	if (normalized === 'ico') return 2;
 	if (normalized === 'tga') return 3;
 	return 4;
 }
@@ -126,7 +125,7 @@ async function fetchOfficialShortcutIconPayload(candidates: { url?: string; exte
 export { getCachedLibraryAssets, getModernLibraryAssets, getResolvedLibraryAssets, refreshModernLibraryAssets } from './library-assets';
 export type { SteamLibraryAssets } from './library-assets';
 export { imageUrlToBase64, normalizeCommunityArtworkDataUrl } from './artwork-image';
-const SHORTCUT_ICON_STORAGE_PREFIX = 'gdl_shortcut_icon2_';
+const SHORTCUT_ICON_STORAGE_PREFIX = 'gdl_shortcut_icon4_';
 const artworkGenerations = new Map<number, number>();
 const shortcutIconInFlight = new Map<string, Promise<boolean>>();
 function artworkGeneration(shortcutAppId: number): number { return artworkGenerations.get(shortcutAppId) ?? 0; }
@@ -166,7 +165,7 @@ async function applyOfficialShortcutIconOnce(shortcutAppId: number, steamAppId: 
 						markShortcutIconApplied(shortcutAppId, steamAppId, path);
 						setTimeout(() => {
 							if (!artworkGenerationIsCurrent(shortcutAppId, generation)) return;
-							try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId, icon: true } })); } catch {}
+							try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId, icon: true, automatic: true } })); } catch {}
 						}, 0);
 						backendLog('Official shortcut icon applied for ' + shortcutAppId + ': ' + path);
 						return true;
@@ -178,6 +177,32 @@ async function applyOfficialShortcutIconOnce(shortcutAppId: number, steamAppId: 
 			}
 			return false;
 		};
+
+		const assets = getResolvedLibraryAssets(steamAppId) || await getModernLibraryAssets(steamAppId);
+		if (!artworkGenerationIsCurrent(shortcutAppId, generation)) return false;
+		const candidates = Array.isArray(assets?.shortcut_icons) ? [...assets.shortcut_icons] : [];
+		if (assets?.shortcut_icon) {
+			candidates.push({ url: assets.shortcut_icon, extension: assets.shortcut_icon_extension || '' });
+		}
+		const payload = await fetchOfficialShortcutIconPayload(candidates);
+		if (!artworkGenerationIsCurrent(shortcutAppId, generation)) return false;
+		if (payload) {
+			const saved = JSON.parse(await saveShortcutIconBackend({
+				request_json: JSON.stringify({
+					shortcut_app_id: String(shortcutAppId),
+					steam_app_id: steamAppId,
+					language: steamLanguageSync() || 'english',
+					icon_base64: payload.base64,
+					extension: payload.extension,
+					source: payload.source,
+				}),
+			}));
+			if (!artworkGenerationIsCurrent(shortcutAppId, generation)) return false;
+			if (saved?.saved && saved?.path) {
+				if (await applyIconPath(String(saved.path))) return true;
+			}
+		}
+
 		const response = JSON.parse(await saveShortcutIconBackend({
 			request_json: JSON.stringify({
 				shortcut_app_id: String(shortcutAppId),
@@ -187,38 +212,9 @@ async function applyOfficialShortcutIconOnce(shortcutAppId: number, steamAppId: 
 		}));
 		if (!artworkGenerationIsCurrent(shortcutAppId, generation)) return false;
 		if (response?.saved && response?.path) {
-			if (await applyIconPath(String(response.path))) return true;
-			backendLog('Official shortcut icon path was saved but Steam did not accept it; trying frontend fallback.');
+			return await applyIconPath(String(response.path));
 		}
-		backendLog('Official shortcut icon backend download unavailable for ' + steamAppId + ': ' + String(response?.error || 'unknown'));
-		const assets = getResolvedLibraryAssets(steamAppId) || await getModernLibraryAssets(steamAppId);
-		if (!artworkGenerationIsCurrent(shortcutAppId, generation)) return false;
-		const candidates = Array.isArray(assets?.shortcut_icons) ? [...assets.shortcut_icons] : [];
-		if (assets?.shortcut_icon) {
-			candidates.push({ url: assets.shortcut_icon, extension: assets.shortcut_icon_extension || '' });
-		}
-		const payload = await fetchOfficialShortcutIconPayload(candidates);
-		if (!artworkGenerationIsCurrent(shortcutAppId, generation)) return false;
-		if (!payload) {
-			backendLog('Official shortcut icon unavailable for ' + steamAppId + ': no_frontend_candidate');
-			return false;
-		}
-		const saved = JSON.parse(await saveShortcutIconBackend({
-			request_json: JSON.stringify({
-				shortcut_app_id: String(shortcutAppId),
-				steam_app_id: steamAppId,
-				language: steamLanguageSync() || 'english',
-				icon_base64: payload.base64,
-				extension: payload.extension,
-				source: payload.source,
-			}),
-		}));
-		if (!artworkGenerationIsCurrent(shortcutAppId, generation)) return false;
-		if (!saved?.saved || !saved?.path) {
-			backendLog('Official shortcut icon unavailable for ' + steamAppId + ': ' + String(saved?.error || 'payload_failed'));
-			return false;
-		}
-		return await applyIconPath(String(saved.path));
+		return false;
 	} catch (e) {
 		backendLog('Official shortcut icon failed for ' + shortcutAppId + ': ' + e);
 		return false;
@@ -360,10 +356,10 @@ export function linkedShortcutPortrait(shortcutAppId: number | string, steamAppI
 
 function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): boolean {
 	const marker = readArtworkMarker(shortcutAppId, steamAppId);
-	return Boolean(marker && !marker.needsCommunityArtwork
-		&& isTrustedArtworkSourceUrl(marker.sourceUrls?.portrait
-			|| (marker.provenance?.portrait as { url?: unknown } | undefined)?.url)
-		&& [0, 1, 2, 3].every(slot => marker.slots.includes(slot)));
+	return Boolean(marker
+		&& (marker.slots.length > 0
+			|| isTrustedArtworkSourceUrl(marker.sourceUrls?.portrait
+				|| (marker.provenance?.portrait as { url?: unknown } | undefined)?.url)));
 }
 
 function markArtworkSaved(shortcutAppId: number, steamAppId: string, slots: number[], needsCommunityArtwork = false,
@@ -446,30 +442,23 @@ interface SteamLogoPosition {
 	nHeightPct: number;
 }
 
-function normalizeOfficialLogoPosition(
-	raw: any,
-	fallbackPin: SteamLogoPinPosition = 'BottomLeft',
-): SteamLogoPosition {
+function normalizeOfficialLogoPosition(raw: any, fallbackPin: SteamLogoPinPosition = 'BottomLeft'): SteamLogoPosition {
 	const rawPin = String(raw?.pinnedPosition ?? raw?.pinned_position ?? '').replace(/[^a-z]/gi, '').toLowerCase();
 	const pins: Record<string, SteamLogoPinPosition> = {
 		bottomleft: 'BottomLeft', upperleft: 'UpperLeft', centercenter: 'CenterCenter',
 		uppercenter: 'UpperCenter', bottomcenter: 'BottomCenter',
 	};
-	const numeric = (value: unknown, fallback: number): number => {
-		const parsed = Number(value);
-		return Number.isFinite(parsed) && parsed >= 5 && parsed <= 100 ? parsed : fallback;
+	const num = (val: unknown, fb: number): number => {
+		const p = Number(val);
+		return Number.isFinite(p) && p >= 5 && p <= 100 ? p : fb;
 	};
 	return {
 		pinnedPosition: pins[rawPin] || fallbackPin,
-		nWidthPct: numeric(raw?.nWidthPct ?? raw?.width_pct ?? raw?.widthPct, 50),
-		nHeightPct: numeric(raw?.nHeightPct ?? raw?.height_pct ?? raw?.heightPct, 50),
+		nWidthPct: num(raw?.nWidthPct ?? raw?.width_pct ?? raw?.widthPct, 50),
+		nHeightPct: num(raw?.nHeightPct ?? raw?.height_pct ?? raw?.heightPct, 50),
 	};
 }
-const PES_2013_LOGO_POSITION: SteamLogoPosition = {
-	pinnedPosition: 'BottomCenter',
-	nWidthPct: 50,
-	nHeightPct: 50,
-};
+const PES_2013_LOGO_POSITION: SteamLogoPosition = { pinnedPosition: 'BottomCenter', nWidthPct: 50, nHeightPct: 50 };
 
 function logoPositionProfileRevision(steamAppId: string): number {
 	return steamAppId === '221430' ? 1 : 0;
@@ -494,8 +483,6 @@ function markLogoPositionSaved(shortcutAppId: number, steamAppId: string, positi
 	} catch {}
 }
 
-/** Apply the same logo bounding box Steam publishes for the native AppID.
- *  SetCustomLogoPositionForApp is the API behind "Adjust logo position". */
 async function applyOfficialLogoPosition(
 	shortcutAppId: number,
 	steamAppId: string,
@@ -511,6 +498,11 @@ async function applyOfficialLogoPosition(
 	if (logoPositionAlreadySaved(shortcutAppId, steamAppId)) return false;
 	const apps = (window as any).SteamClient?.Apps;
 	if (typeof apps?.SetCustomLogoPositionForApp !== 'function') return false;
+	const hasExplicitPosition = Boolean(
+		rawPosition && typeof rawPosition === 'object'
+		&& ((rawPosition as any).pinnedPosition || (rawPosition as any).pinned_position || (rawPosition as any).nWidthPct || (rawPosition as any).width_pct || (rawPosition as any).widthPct)
+	);
+	if (!hasExplicitPosition && steamAppId !== '221430') return false;
 	const position = steamAppId === '221430'
 		? PES_2013_LOGO_POSITION
 		: normalizeOfficialLogoPosition(rawPosition, fallbackPin);
@@ -686,7 +678,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, gameT
 				label: 'Wide Capsule',
 			},
 		];
-		if (legacyPortraitOnly) sources[2].urls.splice(2);
+		if (legacyPortraitOnly || !modern?.portrait) sources[2].urls.splice(2);
 		const pendingSources = sources.filter(source => !reusableSlots.has(source.imageType));
 
 		const downloads = await Promise.all(pendingSources.map(async ({ urls, imageType, label }) => {
@@ -770,6 +762,13 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, gameT
 			if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
 			if (!dataUrl) {
 				backendLog('Artwork not available: ' + label + ' for ' + steamAppId);
+				if (force || !reusableSlots.has(imageType)) {
+					try {
+						if (typeof sc?.Apps?.ClearCustomArtworkForApp === 'function') {
+							await sc.Apps.ClearCustomArtworkForApp(shortcutAppId, imageType);
+						}
+					} catch {}
+				}
 				continue;
 			}
 			try {
@@ -854,7 +853,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, gameT
 		if (appliedSlots.length) {
 			setTimeout(() => {
 				if (!isCurrent()) return;
-				try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId } })); } catch {}
+				try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId, automatic: true } })); } catch {}
 			}, 0);
 		}
 		backendLog('Applied ' + successfulSlotSet.size + '/4 artwork images for ' + steamAppId
@@ -863,15 +862,12 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, gameT
 	}
 }
 
-/** Identical callers share the full operation instead of treating a harmless
- * duplicate render as a failed artwork pass. */
 export function spoofArtwork(shortcutAppId: number, steamAppId: string, gameTitle: string, force = false,
 	legacyPortraitOnly = false): Promise<ArtworkApplyResult> {
 	const key = shortcutAppId + ':' + steamAppId;
 	const active = artworkInFlight.get(key);
 	if (active) return active;
-	let request!: Promise<ArtworkApplyResult>;
-	request = spoofArtworkOnce(shortcutAppId, steamAppId, gameTitle, force, legacyPortraitOnly)
+	const request = spoofArtworkOnce(shortcutAppId, steamAppId, gameTitle, force, legacyPortraitOnly)
 		.finally(() => {
 			if (artworkInFlight.get(key) === request) artworkInFlight.delete(key);
 		});

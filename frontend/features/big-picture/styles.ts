@@ -35,6 +35,11 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			align-self: stretch;
 			background: transparent;
 		}
+		#gdl-bp-detail-root {
+			order: -1 !important;
+			display: block !important;
+			width: 100%;
+		}
 		#gdl-bp-detail-root * { box-sizing: border-box; }
 		#gdl-bp-detail-root a { color: inherit; text-decoration: none; }
 		#gdl-bp-detail-root .gdl-bp-section { margin: 0 0 34px; }

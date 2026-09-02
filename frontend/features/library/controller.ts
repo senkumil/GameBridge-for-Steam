@@ -117,8 +117,6 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 		}
 	} catch {}
 
-	timer = setInterval(check, 800);
-
 	return () => {
 		window.removeEventListener('gamepadconnected', onGamepadEvent);
 		window.removeEventListener('gamepaddisconnected', onGamepadEvent);
@@ -301,15 +299,12 @@ function setupControllerScrollTranslucencyWatcher(
 
 	const onScroll = () => schedule();
 	const onResize = () => schedule();
-	const observer = new MutationObserver(() => schedule());
-	observer.observe(doc.body, { childList: true, subtree: true });
-	window.addEventListener('scroll', onScroll, true);
-	window.addEventListener('resize', onResize);
+	window.addEventListener('scroll', onScroll, { passive: true, capture: true });
+	window.addEventListener('resize', onResize, { passive: true });
 	schedule();
 
 	return () => {
 		disconnected = true;
-		observer.disconnect();
 		window.removeEventListener('scroll', onScroll, true);
 		window.removeEventListener('resize', onResize);
 		if (frame && doc.defaultView) doc.defaultView.cancelAnimationFrame(frame);

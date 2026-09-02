@@ -246,15 +246,31 @@ export function findNativeSteamAppIdByName(title: string): string | null {
 export function getShortcutAppById(shortcutAppId: number): any | null {
 	const appStore = getSteamAppStore();
 	if (!appStore) return null;
+	const signedId = toSignedShortcutAppId(shortcutAppId);
 	if (typeof appStore.GetAppOverviewByAppID === 'function') {
 		try {
 			const app = appStore.GetAppOverviewByAppID(shortcutAppId)
-				|| appStore.GetAppOverviewByAppID(toSignedShortcutAppId(shortcutAppId));
+				|| appStore.GetAppOverviewByAppID(signedId);
 			if (app) return app;
 		} catch {}
 	}
 	if (!appStore.m_mapApps) return null;
-	const ids = new Set([shortcutAppId, toSignedShortcutAppId(shortcutAppId)]);
+	try {
+		if (typeof appStore.m_mapApps.get === 'function') {
+			const direct = appStore.m_mapApps.get(shortcutAppId)
+				|| appStore.m_mapApps.get(signedId)
+				|| appStore.m_mapApps.get(String(shortcutAppId))
+				|| appStore.m_mapApps.get(String(signedId));
+			if (direct) return direct;
+		} else if (typeof appStore.m_mapApps === 'object') {
+			const direct = appStore.m_mapApps[shortcutAppId]
+				|| appStore.m_mapApps[signedId]
+				|| appStore.m_mapApps[String(shortcutAppId)]
+				|| appStore.m_mapApps[String(signedId)];
+			if (direct) return direct;
+		}
+	} catch {}
+	const ids = new Set([shortcutAppId, signedId]);
 	try {
 		if (appStore.m_mapApps instanceof Map || typeof appStore.m_mapApps?.[Symbol.iterator] === 'function') {
 			for (const [id, app] of appStore.m_mapApps) {
@@ -319,7 +335,13 @@ export function getMappedShortcuts(): Array<{ id: number; title: string; steamAp
 	if (!appStore?.m_mapApps) return [];
 	const result: Array<{ id: number; title: string; steamAppId: string }> = [];
 	const entries: Array<[unknown, any]> = [];
-	try { for (const [id, app] of appStore.m_mapApps) entries.push([id, app]); } catch {}
+	try {
+		if (appStore.m_mapApps instanceof Map || typeof appStore.m_mapApps?.[Symbol.iterator] === 'function') {
+			for (const [id, app] of appStore.m_mapApps) entries.push([id, app]);
+		} else if (appStore.m_mapApps && typeof appStore.m_mapApps === 'object') {
+			for (const [id, app] of Object.entries(appStore.m_mapApps)) entries.push([id, app]);
+		}
+	} catch {}
 	try { for (const app of Array.from(appStore.allApps || []) as any[]) entries.push([app?.appid, app]); } catch {}
 	const seen = new Set<number>();
 	for (const [id, app] of entries) {

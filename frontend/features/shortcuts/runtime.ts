@@ -7,7 +7,7 @@ export { requestManualShortcutLink, requestNativeAddShortcutReview, linkAllShort
 export { startNativeAddAutoDetector, stopNativeAddAutoDetector } from './native-add-autodetect';
 export { undismissShortcut, dismissShortcut, isShortcutDismissed } from './dismissed';
 export { detectShortcutCandidates } from './detection';
-export { tryInjectPropertiesField } from './properties';
+export { tryInjectPropertiesField, mutationMayContainProperties } from './properties';
 export { disposeCustomizationArtwork, tryInjectCustomizationArtwork } from './customization-artwork';
 export { cleanAllArtworkAndRestoreNames, unlinkShortcutFromSteam, unlinkAllShortcutsFromSteam } from './unlinking';
 export { hasPendingLinkJob } from './link-job-queue';

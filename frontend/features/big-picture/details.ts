@@ -10,9 +10,11 @@ import { backendLog } from '../../api/backend';
 import { getCachedGameData, getGameData } from '../../core/game-data';
 import { steamStringList } from '../../core/steam-game-data';
 import { steamGameMainPageUrl } from '../../core/steam-links';
-import { escapeHtml, normalizeTitle } from '../../core/text';
+import { escapeAttr, escapeHtml, normalizeTitle } from '../../core/text';
 import { gdlText, loc, steamIntlLocale, steamLanguageSync } from '../../steam/localization';
-import { getMappedShortcuts, getSteamAppStore, toSignedShortcutAppId } from '../../steam/shortcuts';
+import { findMappingForTitle } from '../../core/mappings';
+import { getMappedShortcuts, getSteamAppStore, findShortcutAppIdByName, getShortcutAppById, toSignedShortcutAppId } from '../../steam/shortcuts';
+import { findMappingForShortcut } from '../shortcuts/registry';
 import { getCachedLocalAchievementsForGame } from '../achievements/cache';
 import { fetchLocalAchievementData } from '../achievements/service';
 import { compareEarnedAchievementsForDisplay, compareLockedAchievementsForDisplay, highlightedAchievementNames } from '../achievements/rarity';
@@ -29,6 +31,9 @@ import {
 import { type LocalActivityPost, loadLocalActivityPosts } from '../library/social/feed';
 import { ensureNativePanelRoot, removeBigPictureFallbackPanel } from './panel-mount';
 import { ensureBigPictureDetailsStyles } from './styles';
+import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
+import { gamepadFeatureFlags } from '../gamepad/flags';
+import { mountSingleNativeAchievement } from '../gamepad/achievements/SingleNativeAchievement';
 
 type MappedShortcut = { id: number; title: string; steamAppId: string };
 type BigPictureTab = 'activity' | 'stuff' | 'community' | 'info';
@@ -62,14 +67,19 @@ const detailRetryCounts = new WeakMap<Document, number>();
 const detailTabSyncTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
 
 const TAB_TEXT: Record<BigPictureTab, string[]> = {
-	activity: ['activity', 'actividad', 'activité', 'aktivität', 'attività', 'atividade'],
+	activity: ['activity', 'actividad', 'activite', 'aktivitat', 'attivita', 'atividade'],
 	stuff: ['your stuff', 'tus cosas', 'vos trucs', 'deine sachen', 'le tue cose', 'suas coisas'],
-	community: ['community', 'comunidad', 'communauté', 'community', 'comunità', 'comunidade'],
-	info: ['game information', 'información del juego', 'informations sur le jeu', 'spielinformationen', 'informazioni sul gioco', 'informações do jogo'],
+	community: ['community', 'comunidad', 'communaute', 'comunita', 'comunidade'],
+	info: ['game information', 'game info', 'informacion del juego', 'informacion', 'informations sur le jeu', 'spielinformationen', 'informazioni sul gioco', 'informacoes do jogo'],
 };
 
 function normalizeUiText(value: unknown): string {
-	return String(value ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+	return String(value ?? '')
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.replace(/\s+/g, ' ')
+		.trim()
+		.toLocaleLowerCase();
 }
 
 function mappedShortcutIds(shortcut: MappedShortcut): string[] {
@@ -79,38 +89,48 @@ function mappedShortcutIds(shortcut: MappedShortcut): string[] {
 	return Array.from(new Set([String(raw), String(unsigned), String(signed)]));
 }
 
-function selectedShortcutFromStore(shortcuts: MappedShortcut[], doc: Document): MappedShortcut | null {
-	const stores = [
-		(doc.defaultView as any)?.appStore,
-		getSteamAppStore(),
-	].filter(Boolean);
-	const byId = new Map<number, MappedShortcut>();
-	for (const shortcut of shortcuts) {
-		byId.set(shortcut.id, shortcut);
-		byId.set(toSignedShortcutAppId(shortcut.id), shortcut);
-		const unsigned = shortcut.id < 0 ? (shortcut.id >>> 0) : shortcut.id;
-		byId.set(unsigned, shortcut);
-	}
-	for (const store of stores) {
-		for (const key of Object.keys(store || {})) {
-			if (!/(selected|current|active|focused).*(app|game)|(?:app|game).*(selected|current|active|focused)/i.test(key)) continue;
-			let value: any;
-			try { value = store[key]; } catch { continue; }
-			const ids = [
-				Number(value),
-				Number(value?.appid),
-				Number(value?.app_id),
-				Number(value?.m_unAppID),
-				Number(value?.m_nAppID),
-			].filter(Number.isFinite);
-			for (const id of ids) {
-				const unsigned = id < 0 ? (id >>> 0) : id;
-				const signed = id > 2147483647 ? toSignedShortcutAppId(id) : id;
-				const match = byId.get(id) || byId.get(unsigned) || byId.get(signed);
-				if (match) return match;
-			}
+function findActiveAppIdFromDOM(doc: Document): number | null {
+	const view = doc.defaultView as any;
+	const candidates: string[] = [
+		String(view?.location?.hash || ''),
+		String(view?.location?.pathname || ''),
+		String(view?.location?.href || ''),
+		String(view?.g_Router?.history?.location?.pathname || ''),
+	];
+	for (const url of candidates) {
+		const m = url.match(/(?:\/app\/|\/details\/|\/game\/|appid=)(\d+)/i);
+		if (m && m[1]) {
+			const id = Number(m[1]);
+			if (Number.isFinite(id) && id > 0) return id;
 		}
 	}
+
+	const surfaceElements = Array.from(doc.querySelectorAll<HTMLElement>(
+		'[class*="GamepadTab"], [class*="gamepadtab"], [class*="AppDetails"], [class*="GameDetails"], [role="tablist"], [class*="PlayBar"], [class*="playbar"], [class*="Header"], [class*="Hero"]'
+	));
+	for (const el of surfaceElements) {
+		if (el.closest('#gdl-bp-detail-root, #gdl-bp-detail-fallback-panel')) continue;
+		let current: any = el;
+		while (current && current !== doc && current !== doc.body) {
+			const key = Object.keys(current).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$') || k.startsWith('__reactProps$'));
+			if (key) {
+				let fiber = current[key];
+				let depth = 0;
+				while (fiber && depth < 20) {
+					const props = fiber.memoizedProps || fiber.props || fiber;
+					const rawAppId = props?.appid ?? props?.appId ?? props?.nAppID ?? props?.app?.appid ?? props?.overview?.appid ?? props?.appOverview?.appid ?? props?.game?.appid;
+					const num = Number(rawAppId);
+					if (Number.isFinite(num) && num > 0) {
+						return num;
+					}
+					fiber = fiber.return;
+					depth++;
+				}
+			}
+			current = current.parentElement;
+		}
+	}
+
 	return null;
 }
 
@@ -168,9 +188,27 @@ function isNativeSteamGameActive(doc: Document): boolean {
 
 function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
 	const shortcuts = getMappedShortcuts();
-	if (shortcuts.length === 0 || !doc.body) return null;
+	if (!doc.body) return null;
 
-	// 1. A route AppID is the strongest transition signal.
+	// 1. Authoritative AppID from DOM / React Fiber / Route
+	const activeDomAppId = findActiveAppIdFromDOM(doc);
+	if (activeDomAppId) {
+		const unsigned = activeDomAppId < 0 ? (activeDomAppId >>> 0) : activeDomAppId;
+		const signed = activeDomAppId > 2147483647 ? toSignedShortcutAppId(activeDomAppId) : activeDomAppId;
+		const match = shortcuts.find(s => s.id === activeDomAppId || s.id === unsigned || s.id === signed);
+		if (match) return match;
+
+		const app = getShortcutAppById(activeDomAppId);
+		const title = String(app?.display_name || app?.m_strDisplayName || '').trim();
+		const mappedAppId = findMappingForShortcut(activeDomAppId, title);
+		if (mappedAppId && /^\d+$/.test(mappedAppId)) {
+			return { id: unsigned, title: title || `App ${unsigned}`, steamAppId: mappedAppId };
+		}
+	}
+
+	const byLongestTitle = [...shortcuts].sort((a, b) => b.title.length - a.title.length);
+
+	// 2. A route AppID in the URL
 	const href = decodeURIComponent(String(doc.defaultView?.location?.href || doc.location?.href || '')).toLocaleLowerCase();
 	for (const shortcut of shortcuts) {
 		const ids = mappedShortcutIds(shortcut);
@@ -179,54 +217,62 @@ function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
 		}
 	}
 
-	// 2. Check AppIDs inside the active detail/hero surface.
+	// 3. Check visible hero logo images in the top area (< 450px from top)
+	const heroLogos = Array.from(doc.querySelectorAll<HTMLElement>('img[alt], svg[aria-label]'));
+	for (const el of heroLogos) {
+		if (el.closest('#gdl-bp-detail-root, #gdl-bp-detail-fallback-panel, [class*="nav" i], [class*="footer" i], [class*="avatar" i], [class*="QuickAccess" i], [class*="MainMenu" i]')) continue;
+		const rect = el.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0 || rect.top > 450) continue;
+		const rawAlt = el.getAttribute('alt') || el.getAttribute('aria-label') || '';
+		const alt = normalizeTitle(rawAlt);
+		if (!alt) continue;
+		for (const shortcut of byLongestTitle) {
+			const sTitle = normalizeTitle(shortcut.title);
+			if (sTitle && (alt === sTitle || alt.includes(sTitle) || sTitle.includes(alt))) {
+				return shortcut;
+			}
+		}
+		const mappedAppId = findMappingForTitle(rawAlt);
+		if (mappedAppId) {
+			const numAppId = findShortcutAppIdByName(rawAlt) || 0;
+			return { id: numAppId, title: rawAlt, steamAppId: mappedAppId };
+		}
+	}
+
+	// 4. Match headings inside the top area (< 450px from top)
+	const titleHeadings = Array.from(doc.querySelectorAll<HTMLElement>('h1, h2, h3, [class*="title" i], [class*="header" i], [class*="logo" i]'));
+	for (const heading of titleHeadings) {
+		if (heading.closest('#gdl-bp-detail-root, #gdl-bp-detail-fallback-panel, [class*="nav" i], [class*="footer" i], [class*="QuickAccess" i], [class*="MainMenu" i]')) continue;
+		const rect = heading.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0 || rect.top > 450) continue;
+		const rawText = (heading.textContent || '').trim();
+		const headingText = normalizeTitle(rawText);
+		if (!headingText) continue;
+		for (const shortcut of byLongestTitle) {
+			const sTitle = normalizeTitle(shortcut.title);
+			if (sTitle && (headingText === sTitle || headingText.includes(sTitle) || sTitle.includes(headingText))) {
+				return shortcut;
+			}
+		}
+		const mappedAppId = findMappingForTitle(rawText);
+		if (mappedAppId) {
+			const numAppId = findShortcutAppIdByName(rawText) || 0;
+			return { id: numAppId, title: rawText, steamAppId: mappedAppId };
+		}
+	}
+
+	// 5. Check AppIDs inside the active detail/hero surface.
 	for (const shortcut of shortcuts) {
 		const ids = mappedShortcutIds(shortcut);
 		for (const id of ids) {
-			if (doc.querySelector(`[class*="AppDetails"] [data-appid="${id}"], [class*="AppDetails"] [data-app-id="${id}"], [class*="AppDetails"] [data-app-id-value="${id}"], [class*="GameDetails"] [data-appid="${id}"], [class*="GameDetails"] [data-app-id="${id}"], [class*="GameDetails"] [data-app-id-value="${id}"], [class*="Hero"] [data-appid="${id}"], [class*="Hero"] [data-app-id="${id}"]`)) {
+			if (doc.querySelector(`[data-appid="${id}"], [data-app-id="${id}"], [data-app-id-value="${id}"]`)) {
 				return shortcut;
 			}
 		}
 	}
 
-	// 3. Store selection check.
-	const selected = selectedShortcutFromStore(shortcuts, doc);
-	if (selected) return selected;
-
-	// 4. Protect real Steam games before title fallback.
+	// 6. Protect real Steam games.
 	if (isNativeSteamGameActive(doc)) return null;
-
-	const byLongestTitle = [...shortcuts].sort((a, b) => b.title.length - a.title.length);
-
-	// 5. Check visible hero logo images.
-	const heroLogos = Array.from(doc.querySelectorAll<HTMLElement>('[class*="AppDetails"] img[alt], [class*="GameDetails"] img[alt], [class*="Hero"] img[alt], [class*="Header"] [class*="Logo"] img[alt]'));
-	for (const el of heroLogos) {
-		const rect = el.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0) continue;
-		const alt = normalizeTitle(el.getAttribute('alt') || '');
-		for (const shortcut of byLongestTitle) {
-			const sTitle = normalizeTitle(shortcut.title);
-			if (sTitle && (alt === sTitle || alt.includes(sTitle))) {
-				return shortcut;
-			}
-		}
-	}
-
-	// 6. Match headings inside a detail/header surface.
-	const titleHeadings = Array.from(doc.querySelectorAll<HTMLElement>(
-		'[class*="AppDetails"] h1, [class*="AppDetails"] h2, [class*="GameDetails"] h1, [class*="GameDetails"] h2, [class*="GameTitle"], [class*="AppTitle"], [class*="TitleHeader"], [class*="HeaderTitle"], [class*="DetailTitle"]'
-	));
-	for (const heading of titleHeadings) {
-		const rect = heading.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0) continue;
-		const headingText = normalizeTitle(heading.textContent || '');
-		if (!headingText) continue;
-		const match = byLongestTitle.find(shortcut => {
-			const sTitle = normalizeTitle(shortcut.title);
-			return sTitle && (headingText === sTitle || headingText.includes(sTitle));
-		});
-		if (match) return match;
-	}
 
 	return null;
 }
@@ -281,16 +327,16 @@ function findBigPictureTabStrip(doc: Document): { strip: HTMLElement; controls: 
 			controls.set(tab, clickableTabElement(text));
 		}
 	}
-	if (!controls.has('activity')) return null;
+	if (controls.size < 2) return null;
 	const values = Array.from(controls.values());
 	let strip = commonAncestor(values);
 	if (!strip || strip === doc.body) {
-		strip = controls.get('activity')!.parentElement;
+		strip = (controls.get('activity') || values[0])?.parentElement;
 	}
 	if (!strip || strip === doc.body) return null;
 	while (strip.parentElement && strip.parentElement !== doc.body) {
 		const rect = strip.getBoundingClientRect();
-		if (rect.width >= 280 && rect.height > 20 && rect.height <= 150) break;
+		if (rect.width >= 200 && rect.height > 20 && rect.height <= 150) break;
 		const parent = strip.parentElement;
 		if (!values.every(value => parent.contains(value))) break;
 		strip = parent;
@@ -300,46 +346,22 @@ function findBigPictureTabStrip(doc: Document): { strip: HTMLElement; controls: 
 
 function activeTabFromNative(doc: Document, controls: Map<BigPictureTab, HTMLElement>): BigPictureTab | null {
 	let best: { tab: BigPictureTab; score: number } | null = null;
-	const activeEl = doc.activeElement as HTMLElement | null;
-
-	for (const [tab, control] of controls) {
+	for (const [tab, el] of controls) {
 		let score = 0;
-		if (activeEl && (activeEl === control || control.contains(activeEl))) score += 100;
-		if (control.getAttribute('aria-selected') === 'true' || control.getAttribute('aria-current')) score += 50;
-		if (control.getAttribute('tabindex') === '0') score += 20;
-		if (/(active|selected|current|focus)/i.test(control.className)) score += 10;
-
-		const style = doc.defaultView?.getComputedStyle(control);
-		const bg = style?.backgroundColor || '';
-		const rgbMatch = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-		if (rgbMatch) {
-			const r = Number(rgbMatch[1]);
-			const g = Number(rgbMatch[2]);
-			const b = Number(rgbMatch[3]);
-			const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-			if (brightness > 140) score += 40;
+		if (el.getAttribute('aria-selected') === 'true') score += 100;
+		if (el.getAttribute('aria-current') === 'page' || el.getAttribute('aria-current') === 'true') score += 90;
+		if (el.classList.contains('active') || el.classList.contains('Selected') || el.classList.contains('focus')) score += 50;
+		if (doc.activeElement && (doc.activeElement === el || el.contains(doc.activeElement))) score += 40;
+		const focusedChild = el.querySelector(':focus');
+		if (focusedChild) score += 30;
+		const panelId = el.getAttribute('aria-controls');
+		if (panelId) {
+			const panel = doc.getElementById(panelId);
+			if (panel && !panel.hasAttribute('hidden') && panel.getAttribute('aria-hidden') !== 'true') score += 80;
 		}
 		if (score > (best?.score || 0)) best = { tab, score };
 	}
 	return best && best.score > 0 ? best.tab : null;
-}
-
-function completionMedalSvg(): string {
-	return `<svg viewBox="0 0 48 54" width="48" height="54" aria-hidden="true"><path fill="#0787ec" d="M12 10 18 4h12l6 6v12l-6 6H18l-6-6V10Z"/><circle cx="24" cy="16" r="8" fill="#ffc52f" stroke="#ff9d23" stroke-width="2"/><path fill="#0787ec" d="m14 28 8 2-7 20-5-8-9 1 8-17 5 2Zm20 0-8 2 7 20 5-8 9 1-8-17-5 2Z"/></svg>`;
-}
-
-function featureSvg(kind: 'person' | 'achievement' | 'cloud' | 'family' | 'controller'): string {
-	switch (kind) {
-		case 'person': return `<svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="4" fill="currentColor"/><path d="M5 21c.4-5 2.7-7.4 7-7.4S18.6 16 19 21H5Z" fill="currentColor"/></svg>`;
-		case 'achievement': return `<svg viewBox="0 0 24 24"><path d="m12 1.5 2.3 3 3.7-.2.8 3.6 3.1 2-1.8 3.2 1.3 3.5-3.5 1.3-.8 3.6-3.6-.7L12 24l-2.6-3.2-3.6.7-.8-3.6-3.5-1.3 1.3-3.5L1 9.9l3.1-2 .8-3.6 3.7.2L12 1.5Z" fill="currentColor"/></svg>`;
-		case 'cloud': return `<svg viewBox="0 0 24 24"><path d="M6.6 19h11a4.6 4.6 0 0 0 .6-9.1A6.4 6.4 0 0 0 6 8.1 5.5 5.5 0 0 0 6.6 19Z" fill="currentColor"/></svg>`;
-		case 'family': return `<svg viewBox="0 0 24 24"><circle cx="8" cy="7" r="3" fill="currentColor"/><circle cx="17" cy="8" r="2.5" fill="currentColor"/><path d="M2 20c.3-5 2.3-7 6-7s5.7 2 6 7H2Zm11 0c.2-3.5 1.6-5.3 4.3-5.3 2.6 0 4.1 1.8 4.4 5.3H13Z" fill="currentColor"/></svg>`;
-		case 'controller': return `<svg viewBox="0 0 24 24"><path d="M7 7h10c2.1 0 3.4 1.5 4 4l.8 3.7c.5 2.3-2.2 3.7-3.7 1.9l-1.6-1.9h-9l-1.6 1.9c-1.5 1.8-4.2.4-3.7-1.9L3 11c.6-2.5 1.9-4 4-4Zm1.8 3H7v1.7H5.3v1.8H7v1.7h1.8v-1.7h1.7v-1.8H8.8V10Zm6.5 1a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Zm2.7 2.5a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Z" fill="currentColor"/></svg>`;
-	}
-}
-
-function escapeAttr(value: string): string {
-	return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
 function nextDetailGeneration(doc: Document): number {
@@ -350,6 +372,8 @@ function nextDetailGeneration(doc: Document): number {
 
 function isLiveDetailState(doc: Document, state: BigPictureDetailState): boolean {
 	const live = detailStates.get(doc);
+	if (!live || live !== state) return false;
+	if (!state.root.isConnected || !state.panel.isConnected) return false;
 	return live === state
 		&& live.generation === state.generation
 		&& live.shortcut.id === state.shortcut.id
@@ -359,9 +383,6 @@ function isLiveDetailState(doc: Document, state: BigPictureDetailState): boolean
 		&& live.root.dataset.gdlShortcutAppId === String(state.shortcut.id);
 }
 
-/** Seed Big Picture from the same durable, language-scoped snapshots as the
- * desktop library. A stale snapshot is deliberately useful here: it keeps a
- * revisit stable while the resource owner refreshes it in the background. */
 function cachedBigPictureDetailData(shortcut: MappedShortcut, language: string): BigPictureDetailData {
 	return {
 		game: getCachedGameData(shortcut.steamAppId, language)?.data || null,
@@ -379,9 +400,6 @@ function applyDetailPatch(doc: Document, state: BigPictureDetailState,
 	renderRoot(state);
 }
 
-/** Every resource starts independently and every completion is tied to this
- * exact Document + shortcut + Steam AppID + language generation. A slow or
- * delisted Store endpoint must not hold achievements, news or community data. */
 function startDetailHydration(doc: Document, state: BigPictureDetailState): void {
 	if (state.hydrationStarted) return;
 	state.hydrationStarted = true;
@@ -389,8 +407,6 @@ function startDetailHydration(doc: Document, state: BigPictureDetailState): void
 		request: Promise<BigPictureDetailData[K]>): void => {
 		void request.then(value => {
 			if (!isLiveDetailState(doc, state)) return;
-			// A transient nullable source must not erase a durable snapshot that is
-			// already on screen. Empty arrays remain meaningful terminal results.
 			if (value == null && state.data?.[key] != null) return;
 			applyDetailPatch(doc, state, { [key]: value } as Pick<BigPictureDetailData, K>);
 		}).catch(() => {});
@@ -413,18 +429,28 @@ function wrenchToolSvg(): string {
 	return `<svg viewBox="0 0 48 48" width="36" height="36" aria-hidden="true" style="display:block;color:#8f98a0;flex-shrink:0;"><path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M14.6 4.2a8.5 8.5 0 0 0-7.2 12.3l-5 5a2.5 2.5 0 0 0 0 3.5l3.5 3.5a2.5 2.5 0 0 0 3.5 0l5-5a8.5 8.5 0 0 0 12.3-7.2c0-1.4-.3-2.7-.9-3.8l-4.5 4.5-3.2-.8-.8-3.2 4.5-4.5a8.4 8.4 0 0 0-7.7-4.3Zm18.8 18.8a8.5 8.5 0 0 0-3.8.9l4.5 4.5-.8 3.2-3.2.8-4.5-4.5a8.5 8.5 0 0 0-7.2 12.3l-5 5a2.5 2.5 0 0 0 0 3.5l3.5 3.5a2.5 2.5 0 0 0 3.5 0l5-5a8.5 8.5 0 0 0 12.3-7.2 8.4 8.4 0 0 0-4.3-7.7Z"/></svg>`;
 }
 
+function completionMedalSvg(): string {
+	return `<svg width="40" height="40" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:block;"><path stroke="url(#gdl-bp-medal-grad)" fill="url(#gdl-bp-medal-grad)" d="M10.18 10.03L10.39 9.81V5.53H14.6l.22-.22L18 2.07l3.18 3.24.22.22h4.21v4.28l.21.22 2.74 2.78-2.74 2.78-.21.22v4.28h-4.21l-.22.22L18 23.54l-3.18-3.23-.22-.23H10.39v-4.28l-.21-.22-2.74-2.78 2.74-2.8zM14.74 28.03L11.56 33.42 9.85 29.95l-.2-.42H6.29l2.39-4.17h3.43l2.63 2.67zm12.08 1.5l-.2-.42-1.71 3.48-3.18-5.39 2.63-2.67h3.43l2.39 4.17h-3.36z" stroke-width="1.5"/><circle stroke="#FFAB2C" fill="#FFC82C" cx="18" cy="13" r="5.5"/><defs><linearGradient id="gdl-bp-medal-grad" x1="7.08" y1="3.72" x2="33.67" y2="25.07" gradientUnits="userSpaceOnUse"><stop stop-color="#0056D6"/><stop offset="1" stop-color="#1A9FFF"/></linearGradient></defs></svg>`;
+}
+
+function featureSvg(kind: 'person' | 'achievement' | 'cloud' | 'family' | 'controller'): string {
+	switch (kind) {
+		case 'person': return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
+		case 'achievement': return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z"/></svg>';
+		case 'cloud': return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/></svg>';
+		case 'family': return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>';
+		case 'controller': default: return '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H9v2H8v-2H6v-1h2v-2h1v2h2v1zm4.5 2c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm3-3c-.83 0-1.5-.67-1.5-1.5S17.67 9 18.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>';
+	}
+}
+
 function formatBigPictureFeedDate(ts: number): string {
 	if (!ts || ts <= 0) return gdlText('recent', 'Recent').toUpperCase();
 	const d = new Date(ts * 1000);
 	const now = new Date();
-	if (d.toDateString() === now.toDateString()) {
-		return gdlText('today', 'Today').toUpperCase();
-	}
+	if (d.toDateString() === now.toDateString()) return gdlText('today', 'Today').toUpperCase();
 	const yesterday = new Date(now);
 	yesterday.setDate(now.getDate() - 1);
-	if (d.toDateString() === yesterday.toDateString()) {
-		return gdlText('yesterday', 'Yesterday').toUpperCase();
-	}
+	if (d.toDateString() === yesterday.toDateString()) return gdlText('yesterday', 'Yesterday').toUpperCase();
 	const isCurrentYear = d.getFullYear() === now.getFullYear();
 	try {
 		const formatted = new Intl.DateTimeFormat(steamIntlLocale(), isCurrentYear
@@ -453,9 +479,7 @@ function renderActivity(data: BigPictureDetailData, shortcut: MappedShortcut, hy
 	].sort((a, b) => b.date - a.date);
 
 	if (allItems.length === 0) {
-		if (!hydrationStarted) {
-			return `<div class="gdl-bp-loading">${escapeHtml(loc('Loading', 'Loading…'))}</div>`;
-		}
+		if (!hydrationStarted) return `<div class="gdl-bp-loading">${escapeHtml(loc('Loading', 'Loading…'))}</div>`;
 		return `<div class="gdl-bp-empty">${escapeHtml(loc('AppActivity_NoActivity', gdlText('no_recent_activity', 'No recent activity.')))}</div>`;
 	}
 
@@ -480,9 +504,7 @@ function renderActivity(data: BigPictureDetailData, shortcut: MappedShortcut, hy
 				const p = entry.post;
 				feedHtml += `
 					<div class="gdl-bp-feed-card" tabindex="0">
-						<div class="gdl-bp-feed-icon-wrap">
-							<img class="gdl-bp-feed-avatar" src="${escapeAttr(p.user_avatar)}" alt="" />
-						</div>
+						<div class="gdl-bp-feed-icon-wrap"><img class="gdl-bp-feed-avatar" src="${escapeAttr(p.user_avatar)}" alt="" /></div>
 						<div class="gdl-bp-feed-body">
 							<div class="gdl-bp-feed-eyebrow">${escapeHtml(gdlText('user_status', 'Status Post').toUpperCase())}</div>
 							<div class="gdl-bp-feed-title">${escapeHtml(p.user_name)}</div>
@@ -505,34 +527,30 @@ function renderActivity(data: BigPictureDetailData, shortcut: MappedShortcut, hy
 					: '';
 
 				feedHtml += `
-					<a class="gdl-bp-feed-card" href="${escapeAttr(item.url || '#')}" data-gdl-bp-external="1" tabindex="0">
+					<a class="gdl-bp-feed-card" href="${escapeAttr(item.url || '#')}" ${item.url ? 'data-gdl-bp-external="1"' : ''} tabindex="0">
 						${thumbUrl
-							? `<img class="gdl-bp-feed-thumb" src="${escapeAttr(thumbUrl)}" alt="" />`
+							? `<div class="gdl-bp-feed-thumb-wrap"><img class="gdl-bp-feed-thumb" src="${escapeAttr(thumbUrl)}" alt="" loading="lazy" /></div>`
 							: `<div class="gdl-bp-feed-icon-wrap">${wrenchToolSvg()}</div>`
 						}
 						<div class="gdl-bp-feed-body">
 							<div class="gdl-bp-feed-eyebrow">${escapeHtml(label.toUpperCase())}</div>
-							<div class="gdl-bp-feed-title">${escapeHtml(item.title || '')}</div>
+							<div class="gdl-bp-feed-title">${escapeHtml(item.title)}</div>
 							${preview ? `<div class="gdl-bp-feed-desc">${escapeHtml(preview)}</div>` : ''}
+							${statsHtml}
 						</div>
-						${statsHtml}
 					</a>`;
 			}
 		}
-		feedHtml += `</div></div>`;
+		feedHtml += '</div></div>';
 	}
 
-	return feedHtml;
+	return `<div class="gdl-bp-activity-feed">${feedHtml}</div>`;
 }
 
 function renderAchievements(data: LocalAchievementData | null): string {
 	const title = escapeHtml(loc('AppDetails_SectionTitle_Achievements', gdlText('achievements_label', 'Achievements')));
-	if (!data) {
-		return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${title}</h2><div class="gdl-bp-empty">${escapeHtml(loc('Loading', 'Loading…'))}</div></section>`;
-	}
-	if (data.total <= 0) {
-		return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${title}</h2><div class="gdl-bp-empty">${escapeHtml(gdlText('no_achievements', 'No achievements found.'))}</div></section>`;
-	}
+	if (!data) return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${title}</h2><div class="gdl-bp-empty">${escapeHtml(loc('Loading', 'Loading…'))}</div></section>`;
+	if (data.total <= 0) return `<section class="gdl-bp-section"><h2 class="gdl-bp-section-title">${title}</h2><div class="gdl-bp-empty">${escapeHtml(gdlText('no_achievements', 'No achievements found.'))}</div></section>`;
 	const pct = Math.max(0, Math.min(100, Math.round((data.unlocked * 100) / Math.max(1, data.total))));
 	const complete = data.unlocked >= data.total;
 	const earned = data.achievements.filter(item => item.earned).sort(compareEarnedAchievementsForDisplay);
@@ -554,6 +572,7 @@ function renderAchievements(data: LocalAchievementData | null): string {
 			</div>
 			<div class="gdl-bp-ach-strip">
 				${featured ? `<div class="gdl-bp-ach-featured${isHighlighted(featured) ? ' is-rare' : ''}"><div class="gdl-bp-ach-img-frame${isHighlighted(featured) ? ' is-rare' : ''}"><div class="gdl-bp-ach-rare-glow"></div><div class="gdl-bp-ach-rare-ring"></div><div class="gdl-bp-ach-rare-beam"></div><img class="gdl-bp-ach-img" src="${escapeAttr(featured.earned ? featured.icon : (featured.icon_gray || featured.icon))}" alt=""></div><div><strong>${escapeHtml(featured.display_name || featured.name)}</strong><p>${escapeHtml(featured.description || '')}</p><p>${Number(featured.global_percent || 0).toFixed(1)}% ${escapeHtml(gdlText('players_have_achievement', 'of players have this achievement'))}</p></div></div>` : '<div></div>'}
+				<div id="gdl-bp-native-achievement-mount" class="gdl-bp-native-achievement-mount"></div>
 				<div class="gdl-bp-ach-icons">${strip.map(item => `<div class="gdl-bp-ach-icon-frame${isHighlighted(item) ? ' is-rare' : ''}" title="${escapeAttr(item.display_name || item.name)}"><div class="gdl-bp-ach-rare-glow"></div><div class="gdl-bp-ach-rare-ring"></div><div class="gdl-bp-ach-rare-beam"></div><img class="gdl-bp-ach-icon${!item.earned ? ' is-locked' : ''}" src="${escapeAttr(item.earned ? item.icon : (item.icon_gray || item.icon))}" alt=""></div>`).join('')}</div>
 			</div>
 		</div>
@@ -639,6 +658,7 @@ function markupSignature(tab: BigPictureTab, markup: string): string {
 
 function renderRoot(state: BigPictureDetailState): void {
 	const root = state.root;
+	try { steamWebpackRuntime.captureRuntime(root.ownerDocument); } catch {}
 	let markup = '<div class="gdl-bp-loading">Steam</div>';
 	if (state.data) {
 		switch (state.activeTab) {
@@ -649,10 +669,17 @@ function renderRoot(state: BigPictureDetailState): void {
 		}
 	}
 	const signature = markupSignature(state.activeTab, markup);
-	if (state.renderedRoot === root && state.renderSignature === signature) return;
+	if (state.renderedRoot === root && state.renderSignature === signature && root.children.length > 0) return;
 	root.innerHTML = markup;
 	state.renderedRoot = root;
 	state.renderSignature = signature;
+	if (state.activeTab === 'stuff' && state.data?.achievements?.achievements?.length && gamepadFeatureFlags.gamepadNativeAchievements) {
+		const nativeMount = root.querySelector<HTMLElement>('#gdl-bp-native-achievement-mount');
+		const featured = state.data.achievements.achievements[0];
+		if (nativeMount && featured) {
+			try { mountSingleNativeAchievement(nativeMount, featured); } catch {}
+		}
+	}
 	for (const link of Array.from(root.querySelectorAll<HTMLAnchorElement>('[data-gdl-bp-external="1"]'))) {
 		link.addEventListener('click', event => {
 			const href = link.href;
@@ -720,46 +747,39 @@ function bindTabs(
 	detailTabObservers.set(doc, { strip, observer });
 }
 
-/** One-time compatibility cleanup for builds that moved Steam's React-owned
- * tab strip into #gdl-bp-detail-shell. A hot reload can leave that old shell in
- * the document even though its JavaScript state no longer exists. */
 function retireLegacyDetailShell(doc: Document): void {
 	const placeholder = doc.getElementById('gdl-bp-native-strip-placeholder') as HTMLElement | null;
 	const shell = doc.getElementById('gdl-bp-detail-shell') as HTMLElement | null;
-	const tabsHost = doc.getElementById('gdl-bp-native-tabs-host') as HTMLElement | null;
-	const movedStrip = tabsHost?.querySelector<HTMLElement>('[data-gdl-bp-native-strip="1"]')
-		|| tabsHost?.firstElementChild as HTMLElement | null;
-	if (placeholder?.parentElement && movedStrip) {
-		delete movedStrip.dataset.gdlBpNativeStrip;
-		placeholder.parentElement.insertBefore(movedStrip, placeholder.nextSibling);
+	if (shell && placeholder && placeholder.parentElement) {
+		placeholder.parentElement.insertBefore(shell, placeholder);
+		placeholder.remove();
 	}
-	shell?.remove();
-	placeholder?.remove();
+	for (const stale of Array.from(doc.querySelectorAll('#gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder'))) {
+		stale.remove();
+	}
 }
 
 function removeBigPictureDetailsNodes(doc: Document): void {
-	const root = doc.getElementById('gdl-bp-detail-root');
-	if (detailStates.has(doc) || root) nextDetailGeneration(doc);
-	root?.remove();
-	removeBigPictureFallbackPanel(doc);
-	retireLegacyDetailShell(doc);
-	for (const panel of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-native-panel="1"]'))) {
-		delete panel.dataset.gdlBpNativePanel;
+	const live = detailStates.get(doc);
+	if (live) {
+		live.renderedRoot = null;
+		live.renderSignature = '';
+		detailStates.delete(doc);
 	}
-	detailTabObservers.get(doc)?.observer.disconnect();
-	detailTabObservers.delete(doc);
-	const retry = detailRetryTimers.get(doc);
-	if (retry) clearTimeout(retry);
-	detailRetryTimers.delete(doc);
-	detailRetryCounts.delete(doc);
-	const sync = detailTabSyncTimers.get(doc);
-	if (sync) clearTimeout(sync);
-	detailTabSyncTimers.delete(doc);
-	detailStates.delete(doc);
+	nextDetailGeneration(doc);
+	for (const el of Array.from(doc.querySelectorAll('#gdl-bp-detail-root, .gdl-bp-detail-panel, #gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder'))) {
+		el.remove();
+	}
+	removeBigPictureFallbackPanel(doc);
 }
 
 export async function refreshBigPictureShortcutDetails(doc: Document): Promise<void> {
 	if (!doc.body) return;
+	// Safety check: Abort if called on a Desktop window
+	if (doc.title?.includes('SP Desktop') || doc.body.classList.contains('DesktopUI') || doc.querySelector('.DesktopUI')) {
+		removeBigPictureDetailsNodes(doc);
+		return;
+	}
 	if (doc.getElementById('gdl-bp-detail-shell')) retireLegacyDetailShell(doc);
 	const shortcut = detectCurrentMappedShortcut(doc);
 	if (!shortcut) {
@@ -775,7 +795,6 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		|| state.shortcut.steamAppId !== shortcut.steamAppId
 		|| state.language !== language;
 	if (changedShortcut && state) {
-		// Retire A's route-owned content before looking for B's native panel.
 		removeBigPictureDetailsNodes(doc);
 		state = undefined;
 	}
@@ -800,8 +819,8 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 	nodes.root.dataset.gdlSteamAppId = shortcut.steamAppId;
 	nodes.root.dataset.gdlShortcutAppId = String(shortcut.id);
 
-	state = detailStates.get(doc);
-	if (!state) {
+	if (!state || changedShortcut || state.root !== nodes.root || state.panel !== nodes.panel) {
+		const generation = nextDetailGeneration(doc);
 		const cached = coldCached || cachedBigPictureDetailData(shortcut, language);
 		state = {
 			shortcut,
@@ -809,38 +828,37 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 			activeTab: nativeTab,
 			root: nodes.root,
 			panel: nodes.panel,
-			// Even a true cold visit gets a useful native-looking empty/loading state;
-			// optional resources then patch independently as they arrive.
 			data: cached,
-			generation: nextDetailGeneration(doc),
+			generation,
 			hydrationStarted: false,
 			renderSignature: '',
 			renderedRoot: null,
 		};
 		detailStates.set(doc, state);
 		renderRoot(state);
+		startDetailHydration(doc, state);
 	} else {
-		const rootChanged = state.root !== nodes.root;
-		state.root = nodes.root;
-		state.panel = nodes.panel;
-		if (nativeTab !== state.activeTab) state.activeTab = nativeTab;
-		if (rootChanged) {
-			state.renderSignature = '';
-			state.renderedRoot = null;
-		}
+		state.activeTab = nativeTab;
+		renderRoot(state);
 	}
+
 	bindTabs(doc, tabs.strip, tabs.controls);
-	renderRoot(state);
-	startDetailHydration(doc, state);
 }
 
 export function disposeBigPictureShortcutDetails(doc: Document | null): void {
 	if (!doc) return;
+	const retryTimer = detailRetryTimers.get(doc);
+	if (retryTimer) {
+		clearTimeout(retryTimer);
+		detailRetryTimers.delete(doc);
+	}
+	const tabSyncTimer = detailTabSyncTimers.get(doc);
+	if (tabSyncTimer) {
+		clearTimeout(tabSyncTimer);
+		detailTabSyncTimers.delete(doc);
+	}
+	detailRetryCounts.delete(doc);
+	detailTabObservers.get(doc)?.observer.disconnect();
+	detailTabObservers.delete(doc);
 	removeBigPictureDetailsNodes(doc);
-}
-
-export function clearBigPictureDetailCache(): void {
-	// Detail data is intentionally owned by the shared language-scoped resource
-	// caches. Route state is invalidated by dispose/remount instead of maintaining
-	// a second aggregate cache with a conflicting TTL.
 }

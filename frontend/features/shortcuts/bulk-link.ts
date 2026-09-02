@@ -8,6 +8,7 @@ import { linkShortcutToSteam, warmShortcutLinkResources } from './linking';
 import { undismissShortcut } from './dismissed';
 import { rememberedShortcutSteamAppId } from './link-history';
 import { findMappingForDuplicateShortcut, getAllShortcutRecords, shortcutAlreadyLinked } from './registry';
+import { shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { pauseLinkedGamePrefetch, resumeLinkedGamePrefetch } from '../library/prefetch';
 
 const BULK_ANALYSIS_CONCURRENCY = 6;
@@ -78,12 +79,10 @@ export async function linkAllShortcutsExperimental(
 				deferAssetSync: true, metadataTimeoutMs: 1_200, canonicalNameHint: item.candidate.name,
 				onStatus: message => backendLog(`Bulk link ${item.record.title}: ${message}`),
 			});
-			const resourcesComplete = Boolean(linked.setup?.artworkComplete && linked.setup?.iconApplied);
 			const resolvedShortcutId = Number(linked.shortcutAppId || item.record.id);
 			if (linked.ok) {
 				result.linked += 1; cancelPendingLinkJobs(item.record.id, item.context.title);
-				if (!resourcesComplete) enqueueBulkRetry(item, true, resolvedShortcutId);
-				result.outcomes.push({ title: item.record.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid, status: 'linked', resourceRepairQueued: !resourcesComplete });
+				result.outcomes.push({ title: item.record.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid, status: 'linked', resourceRepairQueued: false });
 			} else if (!['invalid_appid', 'refusing_to_modify_native_steam_app'].includes(String(linked.error || ''))) {
 				enqueueBulkRetry(item, false, resolvedShortcutId); result.queued += 1;
 				result.outcomes.push({ title: item.record.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid, status: 'queued', reason: String(linked.error || 'setup_incomplete') });
@@ -134,10 +133,17 @@ export async function linkAllShortcutsExperimental(
 		while (!signal?.aborted) { const index = nextRecord++; const record = records[index]; if (!record) return; await analyzeRecord(record, index); }
 	});
 	await Promise.all(workers);
-	for (const item of matchedItems.sort((left, right) => left.index - right.index)) {
-		if (signal?.aborted) break;
-		await linkItem(item);
+	const optimisticSet: Record<string, string> = {};
+	for (const item of matchedItems) {
+		optimisticSet[shortcutMappingKey(item.record.id)] = item.candidate.appid;
 	}
+	if (Object.keys(optimisticSet).length > 0) {
+		void updateMappingsChecked({ set: optimisticSet });
+	}
+	await Promise.all(matchedItems.sort((left, right) => left.index - right.index).map(async item => {
+		if (signal?.aborted) return;
+		await linkItem(item);
+	}));
 	// Resource traffic starts only after every mapping has committed, so slow
 	// artwork providers cannot delay detection or the remaining identity writes.
 	for (const item of matchedItems) {

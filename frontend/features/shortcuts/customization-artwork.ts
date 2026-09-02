@@ -244,7 +244,7 @@ function installCustomizationObserver(doc: Document, popupTitle: string, gameTit
 		state.timer = setTimeout(() => {
 			state.timer = null;
 			tryInjectCustomizationArtwork(doc, state.popupTitle, state.gameTitleHint);
-		}, 60);
+		}, 0);
 	});
 	state.observer = observer;
 	observer.observe(doc.body, {

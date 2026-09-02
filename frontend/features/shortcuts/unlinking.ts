@@ -1,5 +1,6 @@
 import { backendLog, clearArtworkExceptIconBackend, restoreSteamAppIdFileBackend } from '../../api/backend';
-import { removeShortcutMappingsChecked } from '../../core/mappings';
+import { removeShortcutMappingsChecked, shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
+import { normalizeTitle } from '../../core/text';
 import { getShortcutAppById, readShortcutOverviewField } from '../../steam/shortcuts';
 import { hasManagedArtworkSaved, supersedeArtworkApplications } from '../library/artwork';
 import { pauseLinkedGamePrefetch, resumeLinkedGamePrefetch } from '../library/prefetch';
@@ -68,26 +69,15 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 	try {
 		const apps = (window as any).SteamClient?.Apps;
 		if (typeof apps?.ClearCustomArtworkForApp === 'function') {
-			// Steam's bridge is asynchronous on some client builds. Do not release
-			// the shortcut mutation lock until every clear has settled; otherwise an
-			// immediate relink can write new artwork that this old cleanup erases.
-			const clearSlot = (slot: number): Promise<void> => new Promise(resolve => {
-				const timer = setTimeout(resolve, 4000);
-				try {
-					Promise.resolve(apps.ClearCustomArtworkForApp(shortcutAppId, slot))
-						.catch(() => {})
-						.finally(() => { clearTimeout(timer); resolve(); });
-				} catch { clearTimeout(timer); resolve(); }
-			});
-			await Promise.all(Array.from({ length: 5 }, (_, slot) => clearSlot(slot)));
-			// Give Steam's native artwork queue one event turn to publish the clears
-			// before releasing the mutation lock to an immediate relink.
+			for (let slot = 0; slot < 5; slot += 1) {
+				try { apps.ClearCustomArtworkForApp(shortcutAppId, slot); } catch {}
+			}
 			await new Promise(resolve => setTimeout(resolve, 100));
 		}
 		const originalTitle = getOriginalShortcutTitle(shortcutAppId);
 		if (originalTitle && typeof apps?.SetShortcutName === 'function') {
 			try {
-				await Promise.resolve(apps.SetShortcutName(shortcutAppId, originalTitle));
+				void apps.SetShortcutName(shortcutAppId, originalTitle);
 				backendLog(`Restored original shortcut name "${originalTitle}" for shortcut ${shortcutAppId}.`);
 			} catch (error) {
 				backendLog(`Unlink shortcut rename restore failed for ${shortcutAppId}: ${error}`);
@@ -98,7 +88,7 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 		// Preserve the last valid shortcut icon. Earlier builds blanked it here and
 		// then deleted the backing _icon file, so a transient icon-download failure
 		// during relink left the game permanently iconless.
-		await clearArtworkExceptIconBackend({ shortcut_app_id: String(shortcutAppId) }).catch((_error: unknown): void => {});
+		void clearArtworkExceptIconBackend({ shortcut_app_id: String(shortcutAppId) }).catch((_error: unknown): void => {});
 		const startDir = String(readShortcutOverviewField(app, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir') || '').trim();
 		void restoreSteamAppIdFileBackend({
 			request_json: JSON.stringify({ exe_path: exePath, start_dir: startDir }),
@@ -150,14 +140,21 @@ export async function unlinkAllShortcutsFromSteam(doc?: Document | null): Promis
 	})).filter(item => /^\d+$/.test(item.steamAppId) || item.hasManagedArtwork);
 	if (targets.length === 0) return { ok: true, total: 0, unlinked: 0, failed: 0 };
 
+	const allKeysToRemove = new Set<string>();
+	for (const { record } of targets) {
+		allKeysToRemove.add(shortcutMappingKey(record.id));
+		if (record.title) {
+			allKeysToRemove.add(record.title);
+			const normalized = normalizeTitle(record.title);
+			if (normalized) allKeysToRemove.add(normalized);
+		}
+	}
+	void updateMappingsChecked({ remove: Array.from(allKeysToRemove) });
+
 	let unlinked = 0;
 	let failed = 0;
-	for (const { record, steamAppId } of targets) {
+	const results = await Promise.all(targets.map(async ({ record, steamAppId }) => {
 		const hasMapping = /^\d+$/.test(steamAppId);
-		// A clean plugin ZIP can remove mappings.json while Steam's custom artwork
-		// and NativeGameLink's ownership marker remain outside the plugin directory.
-		// Explicit "Unlink all" is allowed to clean those orphaned managed assets,
-		// but never arbitrary user artwork without a NativeGameLink marker.
 		let result = await unlinkShortcutFromSteam({
 			doc,
 			shortcutAppId: record.id,
@@ -166,18 +163,16 @@ export async function unlinkAllShortcutsFromSteam(doc?: Document | null): Promis
 			preserveLinkHistory: true,
 		});
 		if (!result.ok) {
-			// Steam can briefly reject a mapping mutation while it rebuilds the
-			// shortcut list. Retrying this isolated row is safe under its mutation
-			// lock and avoids making a whole bulk unlink look partially failed.
-			await new Promise(resolve => setTimeout(resolve, 350));
 			result = await unlinkShortcutFromSteam({ doc, shortcutAppId: record.id, title: record.title, steamAppId: hasMapping ? steamAppId : '', preserveLinkHistory: true });
 		}
+		return result;
+	}));
+
+	for (const result of results) {
 		if (result.ok) unlinked += 1;
 		else {
 			failed += 1;
-			// A global reset must remain globally suppressed even if one backend
-			// mutation fails and the single-item helper restores eligibility.
-			dismissShortcut(record.id);
+			if (result.shortcutAppId) dismissShortcut(result.shortcutAppId);
 		}
 	}
 	return { ok: failed === 0, total: targets.length, unlinked, failed };

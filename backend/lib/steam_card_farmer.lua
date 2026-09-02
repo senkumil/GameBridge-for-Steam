@@ -2,6 +2,7 @@ return function(deps)
 local logger = deps.logger
 local fs = deps.fs
 local cjson = deps.cjson
+local process = deps.process
 local M = {}
 
 local active_session = {
@@ -11,7 +12,21 @@ local active_session = {
     started_at = 0,
 }
 
-local function get_farmer_path()
+local function find_csc()
+    local windir = os.getenv("WINDIR") or "C:\\Windows"
+    local candidates = {
+        fs.join(windir, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
+        fs.join(windir, "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe"),
+    }
+    for _, path in ipairs(candidates) do
+        if fs.exists(path) then
+            return path
+        end
+    end
+    return nil
+end
+
+local function get_or_compile_helper()
     local backend_dir = tostring(MILLENNIUM_PLUGIN_SECRET_BACKEND_ABSOLUTE or "")
     if backend_dir ~= "" and backend_dir:lower():match("%.lua$") then
         backend_dir = fs.parent_path(backend_dir)
@@ -19,7 +34,39 @@ local function get_farmer_path()
     if backend_dir == "" then
         backend_dir = "C:\\Program Files (x86)\\Steam\\millennium\\plugins\\NativeGameLinkForSteam\\backend"
     end
-    return fs.join(backend_dir, "bin", "steam_card_farmer.exe")
+    local cs_path = fs.join(backend_dir, "src", "steam_card_farmer.cs")
+    if not fs.exists(cs_path) then
+        return nil, "source_not_found"
+    end
+
+    local temp_dir = os.getenv("TEMP") or os.getenv("TMP") or "C:\\Windows\\Temp"
+    local exe_path = fs.join(temp_dir, "ngl_steam_card_farmer.exe")
+
+    if fs.exists(exe_path) then
+        return exe_path
+    end
+
+    local csc = find_csc()
+    if csc and process and process.run_silent then
+        local compile_cmd = string.format('"%s" /nologo /target:winexe /out:"%s" "%s"', csc, exe_path, cs_path)
+        process.run_silent(compile_cmd, 10000)
+    end
+
+    if not fs.exists(exe_path) and process and process.run_silent then
+        local ps_cmd = string.format('powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Add-Type -Path \'%s\' -OutputType WindowsApplication -OutputAssembly \'%s\'"', cs_path, exe_path)
+        process.run_silent(ps_cmd, 10000)
+    end
+
+    if fs.exists(exe_path) then
+        return exe_path
+    end
+
+    local ps1_path = fs.join(backend_dir, "src", "steam_card_farmer.ps1")
+    if fs.exists(ps1_path) then
+        return ps1_path, "is_ps1"
+    end
+
+    return nil, "compilation_failed"
 end
 
 local function extract_request(req)
@@ -64,11 +111,19 @@ function M.get_card_farming_status()
 end
 
 function M.stop_card_farming()
-    local exe = get_farmer_path()
-    if fs.exists(exe) then
-        local bin_dir = fs.parent_path(exe)
-        local cmd = string.format('cd /d "%s" && steam_card_farmer.exe stop', bin_dir)
-        pcall(os.execute, cmd)
+    local helper_path, helper_type = get_or_compile_helper()
+    if helper_path then
+        local cmd
+        if helper_type == "is_ps1" then
+            cmd = string.format('powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%s" stop', helper_path)
+        else
+            cmd = string.format('"%s" stop', helper_path)
+        end
+        if process and process.run_silent then
+            process.run_silent(cmd, 5000)
+        else
+            pcall(os.execute, cmd)
+        end
     end
     active_session.active = false
     active_session.steam_app_id = nil
@@ -84,9 +139,9 @@ function M.start_card_farming(request)
         return cjson.encode({ ok = false, error = "invalid_appid" })
     end
 
-    local exe = get_farmer_path()
-    if not fs.exists(exe) then
-        return cjson.encode({ ok = false, error = "farmer_not_found" })
+    local helper_path, helper_type = get_or_compile_helper()
+    if not helper_path then
+        return cjson.encode({ ok = false, error = helper_type or "farmer_not_found" })
     end
 
     -- If another game is farming, stop it first
@@ -94,12 +149,18 @@ function M.start_card_farming(request)
         M.stop_card_farming()
     end
 
-    local bin_dir = fs.parent_path(exe)
-    -- Launch in background using start "" /b on Windows
-    local cmd = string.format('cd /d "%s" && start "" /b steam_card_farmer.exe run %s', bin_dir, appid)
-    local ok = pcall(os.execute, cmd)
-    if not ok then
-        return cjson.encode({ ok = false, error = "launch_failed" })
+    local cmd
+    if helper_type == "is_ps1" then
+        cmd = string.format('powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%s" run %s', helper_path, appid)
+    else
+        cmd = string.format('"%s" run %s', helper_path, appid)
+    end
+
+    -- Launch asynchronously in background with CREATE_NO_WINDOW (zero console/cmd window)
+    if process and process.run_silent then
+        process.run_silent(cmd, nil)
+    else
+        pcall(os.execute, 'start "" /b ' .. cmd)
     end
 
     active_session.active = true

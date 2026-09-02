@@ -18,6 +18,7 @@ import {
 	revealPendingAchievementSidebar,
 	renderLocalAchievementSidebar,
 } from '../achievements/runtime';
+import { getCachedLocalAchievementsForGame } from '../achievements/cache';
 import { fetchLocalAchievementData } from '../achievements/service';
 import { ensureCloudStatus } from './cloud-status';
 
@@ -125,6 +126,18 @@ async function injectPlayBarAchievements(doc: Document, context: LinkedAchieveme
 
 /** Resolves local read-only progress first, then the Steam client cache. */
 export async function finalizeLinkedAchievements(doc: Document, context: LinkedAchievementChromeContext): Promise<void> {
+	// Instant synchronous fast path:
+	// If local achievement snapshot or Steam fallback total exists in cache,
+	// mount the playbar stat and sidebar immediately (0ms) without waiting for async IPC.
+	const cachedLocal = getCachedLocalAchievementsForGame(context.steamAppId, context.stateAppId);
+	if (cachedLocal?.found && Array.isArray(cachedLocal.achievements) && cachedLocal.total > 0) {
+		renderLocalAchievementSidebar(doc, cachedLocal);
+		ensureLocalPlaybarStat(doc, cachedLocal);
+		ensureCloudStatus(doc);
+	} else if (context.fallbackTotal > 0) {
+		void injectPlayBarAchievements(doc, context);
+	}
+
 	try {
 		const local = await fetchLocalAchievementData(context.steamAppId, { stateAppId: context.stateAppId });
 		if (!context.isCurrent()) return;

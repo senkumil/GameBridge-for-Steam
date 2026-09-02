@@ -325,7 +325,7 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 			const assetTimeoutMs = Math.min(45_000, Math.max(8_000, Number(options.assetTimeoutMs) || 12_000));
 			const [artworkResult, iconResult] = await Promise.all([
 				withTimeout(
-					spoofArtwork(shortcutAppId, options.steamAppId, officialName || options.currentTitle, false,
+					spoofArtwork(shortcutAppId, options.steamAppId, officialName || options.currentTitle, Boolean(options.clearStaleArtwork),
 						isLegacyGame(options.steamAppId, data)),
 					assetTimeoutMs,
 					'artwork_timeout',
@@ -334,7 +334,7 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 					return { complete: false, slots: [], missing: ['timeout'], communitySlots: [] } as ArtworkApplyResult;
 				}),
 				withTimeout(
-					applyOfficialShortcutIcon(shortcutAppId, options.steamAppId, false),
+					applyOfficialShortcutIcon(shortcutAppId, options.steamAppId, Boolean(options.clearStaleArtwork)),
 					assetTimeoutMs,
 					'icon_timeout',
 				).catch(error => {

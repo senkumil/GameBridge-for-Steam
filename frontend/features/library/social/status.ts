@@ -217,6 +217,7 @@ export function setupStatusPostBox(
 
 		const feedContainer = doc.getElementById('gdl-activity-feed');
 		if (feedContainer) {
+			delete feedContainer.dataset.gdlFeedSignature;
 			applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
 			setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
 		}

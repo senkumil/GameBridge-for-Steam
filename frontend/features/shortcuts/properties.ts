@@ -1,12 +1,13 @@
 import type { ShortcutDetectionCandidate, ShortcutDetectionContext } from '../../domain/types';
 import { backendLog } from '../../api/backend';
 import { escapeHtml, templateToRegex } from '../../core/text';
-import { gdlText, loc, setLocalizationDocumentProvider } from '../../steam/localization';
+import { gdlText, loc, setLocalizationDocumentProvider, steamLanguageSync } from '../../steam/localization';
+import { getCachedGameData } from '../../core/game-data';
 import { findActiveShortcutAppId, findShortcutAppIdByName, shortcutPathBasename } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForShortcut } from './registry';
 import { buildShortcutDetectionContext, detectShortcutCandidates } from './detection';
-import { subscribeMappings } from '../../core/mappings';
+import { shortcutMappingKey, subscribeMappings, updateMappingsChecked } from '../../core/mappings';
 import { linkShortcutToSteam, shouldAutoApplyNoLauncher } from './linking';
 import { unlinkShortcutFromSteam } from './unlinking';
 import { undismissShortcut } from './dismissed';
@@ -14,267 +15,25 @@ import { rememberedShortcutSteamAppId } from './link-history';
 import { bindShortcutAchievementSettings, shortcutAchievementSettingsHtml } from './achievement-properties';
 import { tryInjectNativePropertiesField } from './native-properties';
 import { tryInjectCustomizationArtwork } from './customization-artwork';
-import { cancelPendingLinkJobs, enqueueLinkJob } from './link-job-queue';
+import { cancelPendingLinkJobs, enqueueLinkJob, hasPendingLinkJob } from './link-job-queue';
+import { SHORTCUT_PROPERTIES_STYLE } from './properties-style';
 
 const GDL_PROP = 'gdl-properties-injected';
 
-const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-style">
-	.gdl-properties-injected,
-	.gdl-properties-injected * { box-sizing: border-box; }
-	.gdl-properties-injected {
-		--gdl-text: #dcdedf;
-		--gdl-muted: #8f98a0;
-		--gdl-faint: #6f7882;
-		--gdl-blue: #1a9fff;
-		--gdl-blue-text: #66c0f4;
-		--gdl-control: #1e2837;
-		--gdl-row: rgba(32, 38, 48, .78);
-		--gdl-border: rgba(255, 255, 255, .08);
-		color: var(--gdl-text);
+export function mutationMayContainProperties(roots: Iterable<Node>): boolean {
+	for (const root of roots) {
+		if (root instanceof Element) {
+			const className = String(root.className || '');
+			if (/PagedSettingsDialog|pagedsettings|SettingsNav|DialogNav|Modal|DialogContent|DialogBody|properties|shortcut|customization/i.test(className)) {
+				return true;
+			}
+			if (root.querySelector?.('[class*="PagedSettingsDialog"], [class*="pagedsettings"], [class*="SettingsNav"], [class*="DialogNav"], [class*="Modal"], [class*="DialogContent"], [class*="DialogBody"], input[type="text"]')) {
+				return true;
+			}
+		}
 	}
-	.gdl-properties-injected .gdl-native-section {
-		padding-top: 18px;
-		border-top: 1px solid var(--gdl-border);
-	}
-	.gdl-properties-injected .gdl-native-section + .gdl-native-section {
-		margin-top: 22px;
-	}
-	.gdl-properties-injected .gdl-native-section-heading {
-		font-size: 12px;
-		font-weight: 700;
-		line-height: 1.3;
-		letter-spacing: .55px;
-		text-transform: uppercase;
-		color: #9aa8bb;
-	}
-	.gdl-properties-injected .gdl-native-section-description {
-		max-width: 720px;
-		margin: 7px 0 13px;
-		font-size: 12px;
-		line-height: 1.45;
-		color: var(--gdl-muted);
-	}
-	.gdl-properties-injected .gdl-native-setting-row {
-		display: grid;
-		grid-template-columns: minmax(155px, .56fr) minmax(300px, 1fr);
-		gap: 18px;
-		align-items: center;
-		min-height: 58px;
-		padding: 11px 14px;
-		background: var(--gdl-row);
-		border: 1px solid rgba(255, 255, 255, .035);
-		border-radius: 2px;
-	}
-	.gdl-properties-injected .gdl-native-setting-copy { min-width: 0; }
-	.gdl-properties-injected .gdl-native-setting-title {
-		font-size: 13px;
-		font-weight: 400;
-		line-height: 1.35;
-		color: var(--gdl-text);
-	}
-	.gdl-properties-injected .gdl-native-setting-description {
-		margin-top: 3px;
-		font-size: 11px;
-		line-height: 1.35;
-		color: var(--gdl-muted);
-	}
-	.gdl-properties-injected .gdl-native-controls {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 8px;
-		min-width: 0;
-	}
-	.gdl-properties-injected .gdl-native-input,
-	.gdl-properties-injected .gdl-native-select {
-		min-width: 0;
-		padding: 8px 11px;
-		background: var(--gdl-control);
-		border: 1px solid rgba(255, 255, 255, .12);
-		border-radius: 2px;
-		outline: none;
-		color: var(--gdl-text);
-		font: inherit;
-		font-size: 13px;
-	}
-	.gdl-properties-injected .gdl-native-input { flex: 1 1 230px; }
-	.gdl-properties-injected .gdl-native-select { width: 100%; }
-	.gdl-properties-injected .gdl-native-input:focus,
-	.gdl-properties-injected .gdl-native-select:focus { border-color: rgba(102, 192, 244, .72); }
-	.gdl-properties-injected .gdl-native-button {
-		min-height: 34px;
-		padding: 7px 14px;
-		border: 0;
-		border-radius: 2px;
-		background: #3d4450;
-		color: var(--gdl-text);
-		font: inherit;
-		font-size: 12px;
-		font-weight: 500;
-		white-space: nowrap;
-		cursor: pointer;
-	}
-	.gdl-properties-injected .gdl-native-button:hover:not(:disabled) { filter: brightness(1.12); }
-	.gdl-properties-injected .gdl-native-button:disabled { cursor: default; }
-	.gdl-properties-injected .gdl-native-button-primary { background: var(--gdl-blue); color: #fff; }
-	.gdl-properties-injected .gdl-native-status {
-		min-height: 16px;
-		margin-top: 8px;
-		padding: 0 2px;
-		font-size: 11.5px;
-		line-height: 1.4;
-		color: var(--gdl-muted);
-	}
-	.gdl-properties-injected .gdl-native-status:empty { display: none; }
-	.gdl-properties-injected .gdl-native-disclosure {
-		margin-top: 10px;
-		background: rgba(14, 18, 24, .28);
-		border: 1px solid var(--gdl-border);
-		border-radius: 2px;
-		overflow: hidden;
-	}
-	.gdl-properties-injected .gdl-auto-detect-header {
-		display: flex;
-		align-items: center;
-		padding: 10px 13px 4px;
-		color: var(--gdl-text);
-		font-size: 12.5px;
-		font-weight: 500;
-	}
-	.gdl-properties-injected .gdl-native-disclosure-body {
-		padding: 4px 13px 13px;
-	}
-	.gdl-properties-injected .gdl-auto-detect-title {
-		margin-bottom: 8px;
-		font-size: 11.5px;
-		line-height: 1.4;
-		color: var(--gdl-muted);
-	}
-	.gdl-properties-injected .gdl-candidate-primary {
-		display: flex;
-		align-items: center;
-		gap: 11px;
-		min-width: 0;
-		margin-top: 9px;
-		padding: 9px 10px;
-		background: rgba(0, 0, 0, .2);
-		border: 1px solid rgba(255, 255, 255, .045);
-		border-radius: 2px;
-	}
-	.gdl-properties-injected .gdl-candidate-primary img {
-		width: 104px;
-		height: 48px;
-		flex: 0 0 104px;
-		object-fit: cover;
-		border: 1px solid rgba(255, 255, 255, .1);
-		border-radius: 2px;
-	}
-	.gdl-properties-injected .gdl-candidate-name {
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--gdl-text);
-	}
-	.gdl-properties-injected .gdl-candidate-meta { margin-top: 3px; font-size: 11.5px; color: var(--gdl-blue-text); }
-	.gdl-properties-injected .gdl-auto-candidate-strip {
-		display: flex;
-		gap: 6px;
-		margin-top: 7px;
-		padding: 1px 1px 4px;
-		overflow-x: auto;
-	}
-	.gdl-properties-injected .gdl-native-option {
-		display: none;
-		align-items: flex-start;
-		gap: 9px;
-		margin-top: 8px;
-		padding: 10px 12px;
-		background: rgba(32, 38, 48, .62);
-		border: 1px solid rgba(255, 255, 255, .045);
-		color: #acb2b8;
-		font-size: 11px;
-		line-height: 1.4;
-		cursor: pointer;
-	}
-	.gdl-properties-injected .gdl-native-option input { margin-top: 2px; }
-	.gdl-properties-injected .gdl-native-option strong { font-weight: 500; color: var(--gdl-text); }
-	.gdl-properties-injected .gdl-game-achievement-options { display: grid; gap: 8px; }
-	.gdl-properties-injected .gdl-achievement-setting-row { align-items: start; }
-	.gdl-properties-injected .gdl-game-achievement-online-row > .gdl-native-setting-copy { flex: .56 1 155px; }
-	.gdl-properties-injected .gdl-game-achievement-online-row > .gdl-achievement-control { flex: 1 1 300px; }
-	.gdl-properties-injected .gdl-achievement-control {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		gap: 8px 12px;
-		align-items: center;
-		min-width: 0;
-	}
-	.gdl-properties-injected .gdl-achievement-count {
-		grid-column: 2;
-		font-size: 12px;
-		font-weight: 600;
-		color: var(--gdl-blue-text);
-		white-space: nowrap;
-	}
-	.gdl-properties-injected .gdl-game-achievement-slider {
-		grid-column: 1 / -1;
-		-webkit-appearance: none;
-		appearance: none;
-		accent-color: transparent !important;
-		width: 100%;
-		height: 6px;
-		margin: 6px 0 3px;
-		background-color: var(--gdl-control);
-		background-repeat: no-repeat !important;
-		border: 1px solid rgba(255, 255, 255, .08);
-		border-radius: 3px;
-		outline: none;
-		cursor: pointer;
-	}
-	.gdl-properties-injected .gdl-game-achievement-slider::-webkit-slider-runnable-track {
-		-webkit-appearance: none;
-		height: 6px;
-		background: transparent !important;
-		border-radius: 3px;
-	}
-	.gdl-properties-injected .gdl-game-achievement-slider::-webkit-slider-thumb {
-		-webkit-appearance: none;
-		appearance: none;
-		box-sizing: border-box;
-		width: 16px;
-		height: 16px;
-		margin-top: -5px;
-		background: var(--gdl-blue);
-		border: 2px solid #fff;
-		border-radius: 50%;
-		box-shadow: 0 1px 4px rgba(0, 0, 0, .6);
-		cursor: pointer;
-		transition: transform .08s ease, background .12s ease;
-	}
-	.gdl-properties-injected .gdl-game-achievement-slider::-webkit-slider-thumb:hover { background: #47b2ff; transform: scale(1.12); }
-	.gdl-properties-injected .gdl-game-achievement-slider::-webkit-slider-thumb:active { background: #0d82d4; transform: scale(1.2); }
-	.gdl-properties-injected .gdl-achievement-actions {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 8px;
-		margin-top: 10px;
-	}
-	.gdl-properties-injected .gdl-achievement-actions .gdl-native-status { flex: 1 1 180px; margin: 0; padding: 0; }
-	.gdl-properties-injected .gdl-game-achievement-picker-btn { display: inline-flex; align-items: center; gap: 6px; }
-	.gdl-properties-injected .gdl-achievement-path-controls { display: flex; align-items: center; gap: 8px; }
-	.gdl-properties-injected .gdl-achievement-hint { margin-top: 7px; font-size: 11px; line-height: 1.4; color: var(--gdl-muted); }
-	@media (max-width: 720px) {
-		.gdl-properties-injected .gdl-native-setting-row { grid-template-columns: 1fr; gap: 9px; }
-		.gdl-properties-injected .gdl-game-achievement-online-row { flex-direction: column; }
-		.gdl-properties-injected .gdl-native-controls { justify-content: stretch; flex-wrap: wrap; }
-		.gdl-properties-injected .gdl-native-input { flex-basis: 100%; }
-		.gdl-properties-injected .gdl-achievement-path-controls { flex-wrap: wrap; }
-		.gdl-properties-injected .gdl-achievement-path-controls .gdl-native-input { flex-basis: 100%; }
-	}
-</style>`;
+	return false;
+}
 
 export function tryInjectPropertiesField(doc: Document, popupTitle: string): void {
 	if (!doc || !doc.body) return;
@@ -302,7 +61,8 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		'steam cloud', 'habilitar la interfaz superpuesta', 'ativar a sobreposição steam', 'activer la superposition steam', 'enable the steam overlay',
 	];
 
-	const walker = doc.createTreeWalker(doc.body || doc.documentElement, NodeFilter.SHOW_TEXT, null);
+	const searchRoot = doc.querySelector<HTMLElement>('.DialogContent, [class*="PagedSettingsDialog"], [class*="ModalDialog"], [class*="pagedsettings"], [class*="DialogBody"], [role="dialog"], [aria-modal="true"]') || doc.body || doc.documentElement;
+	const walker = doc.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT, null);
 	let tn: Text | null;
 	let anchor: Element | null = null;
 	let foundShortcutOnlyField = false;
@@ -404,7 +164,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			'properties', 'propiedades', 'propriedades', 'propriétés', 'eigenschaften', 'proprietà', 'свойства', '属性', 'プロパティ', '속성',
 			'target', 'start in', 'search', 'browse', 'destino', 'iniciar en', 'iniciar em', 'buscar', 'explorar', 'цель', 'поиск', 'обзор',
 		]);
-		const textWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null);
+		const textWalker = doc.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT, null);
 		let tNode: Text | null;
 		while ((tNode = textWalker.nextNode() as Text | null)) {
 			const t = tNode.textContent?.trim();
@@ -443,6 +203,14 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	const rememberedAppId = rememberedShortcutSteamAppId(managedShortcutId);
 	const initialAppId = currentLinked || rememberedAppId;
 
+	const cachedGame = initialAppId ? getCachedGameData(initialAppId, steamLanguageSync() || 'english')?.data : null;
+	const initialGameName = cachedGame?.name || gameTitle;
+	const initialHeaderUrl = cachedGame?.header_image || `https://cdn.cloudflare.steamstatic.com/steam/apps/${initialAppId}/header.jpg`;
+
+	const initialOptionHtml = initialAppId
+		? `<option value="${escapeHtml(initialAppId)}">${escapeHtml(currentLinked ? `${initialGameName} — AppID ${initialAppId}` : (cachedGame?.name ? `${initialGameName} — AppID ${initialAppId}` : `Steam AppID ${initialAppId}`))}</option>`
+		: `<option value="">${escapeHtml(gdlText('detecting_game', 'Detecting the game automatically...'))}</option>`;
+
 	// Build UI section
 	const section = doc.createElement('div');
 	section.className = GDL_PROP;
@@ -472,7 +240,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				<div class="gdl-native-disclosure-body">
 					<div class="gdl-auto-detect-title" style="display:none;"></div>
 					<select class="gdl-auto-candidates gdl-native-select">
-						<option value="">${escapeHtml(gdlText('detecting_game', 'Detecting the game automatically...'))}</option>
+						${initialOptionHtml}
 					</select>
 					<div class="gdl-auto-candidate-preview" style="display:none;"></div>
 				</div>
@@ -504,6 +272,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	const trackingExecutableInput = section.querySelector('.gdl-tracking-executable-input') as HTMLInputElement;
 	const trackingExecutableCopy = section.querySelector('.gdl-tracking-executable-copy') as HTMLElement;
 	let detectionContext: ShortcutDetectionContext | null = null;
+	let achievementBinding: { sync: (appId?: string) => void } | null = null;
 	// A properties window stays open while several asynchronous operations finish.
 	// Keep a revision for the requested target so a late status from a previous
 	// AppID can never describe the AppID the user has just entered.
@@ -513,65 +282,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		statusEl.textContent = '';
 		statusEl.style.color = '#8f98a0';
 	};
-
-	const updateButtonStates = (): void => {
-		const val = input.value.trim();
-		const isSameAppIdLinked = Boolean(currentLinked && val === currentLinked);
-		if (isSameAppIdLinked) {
-			saveBtn.disabled = true;
-			saveBtn.textContent = gdlText('game_linked_status', 'Linked');
-			saveBtn.style.background = '#3d4450';
-			saveBtn.style.color = '#8f98a0';
-			saveBtn.style.cursor = 'default';
-			saveBtn.style.opacity = '.65';
-
-			unlinkBtn.disabled = false;
-			unlinkBtn.textContent = gdlText('unlink', 'Unlink');
-			unlinkBtn.style.background = '#3d4450';
-			unlinkBtn.style.color = '#dcdedf';
-			unlinkBtn.style.cursor = 'pointer';
-			unlinkBtn.style.opacity = '1';
-		} else {
-			saveBtn.disabled = false;
-			saveBtn.textContent = gdlText('link_button', 'Link');
-			saveBtn.style.background = '#1a9fff';
-			saveBtn.style.color = '#fff';
-			saveBtn.style.cursor = 'pointer';
-			saveBtn.style.opacity = '1';
-
-			if (currentLinked) {
-				unlinkBtn.disabled = false;
-				unlinkBtn.textContent = gdlText('unlink', 'Unlink');
-				unlinkBtn.style.background = '#3d4450';
-				unlinkBtn.style.color = '#dcdedf';
-				unlinkBtn.style.cursor = 'pointer';
-				unlinkBtn.style.opacity = '1';
-			} else {
-				unlinkBtn.disabled = true;
-				unlinkBtn.textContent = gdlText('game_unlinked_status', 'Unlinked');
-				unlinkBtn.style.background = '#3d4450';
-				unlinkBtn.style.color = '#68737f';
-				unlinkBtn.style.cursor = 'default';
-				unlinkBtn.style.opacity = '.65';
-			}
-		}
-	};
-
-	updateButtonStates();
-	input.addEventListener('input', () => {
-		clearTargetStatus();
-		updateButtonStates();
-	});
-	const unsubscribeMappings = subscribeMappings(() => {
-		if (!section.isConnected) {
-			unsubscribeMappings();
-			return;
-		}
-		const shortcutId = managedShortcutId || Number(findActiveShortcutAppId(doc, gameTitle) || 0) || findShortcutAppIdByName(gameTitle);
-		const mapped = findMappingForShortcut(shortcutId, gameTitle);
-		currentLinked = (mapped && /^\d+$/.test(mapped)) ? mapped : '';
-		updateButtonStates();
-	});
 
 	const renderCandidatePreview = (candidates: ShortcutDetectionCandidate[], selectedAppId: string): void => {
 		if (!candidatePreview || !Array.isArray(candidates)) return;
@@ -623,37 +333,139 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				autoTitle.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name: candidate.name });
 				renderCandidatePreview(candidates, candidate.appid);
 				updateButtonStates();
+				achievementBinding?.sync(candidate.appid);
 			});
 			strip?.appendChild(button);
 		}
 	};
 
-	bindShortcutAchievementSettings({
+	const updateButtonStates = (): void => {
+		const val = input.value.trim();
+		const isSameAppIdLinked = Boolean(currentLinked && val === currentLinked);
+		if (isSameAppIdLinked) {
+			saveBtn.disabled = true;
+			saveBtn.textContent = gdlText('game_linked_status', 'Linked');
+			saveBtn.style.background = '#3d4450';
+			saveBtn.style.color = '#8f98a0';
+			saveBtn.style.cursor = 'default';
+			saveBtn.style.opacity = '.65';
+
+			unlinkBtn.disabled = false;
+			unlinkBtn.textContent = gdlText('unlink', 'Unlink');
+			unlinkBtn.style.background = '#3d4450';
+			unlinkBtn.style.color = '#dcdedf';
+			unlinkBtn.style.cursor = 'pointer';
+			unlinkBtn.style.opacity = '1';
+		} else {
+			saveBtn.disabled = false;
+			saveBtn.textContent = gdlText('link_button', 'Link');
+			saveBtn.style.background = '#1a9fff';
+			saveBtn.style.color = '#fff';
+			saveBtn.style.cursor = 'pointer';
+			saveBtn.style.opacity = '1';
+
+			if (currentLinked) {
+				unlinkBtn.disabled = false;
+				unlinkBtn.textContent = gdlText('unlink', 'Unlink');
+				unlinkBtn.style.background = '#3d4450';
+				unlinkBtn.style.color = '#dcdedf';
+				unlinkBtn.style.cursor = 'pointer';
+				unlinkBtn.style.opacity = '1';
+			} else {
+				unlinkBtn.disabled = true;
+				unlinkBtn.textContent = gdlText('game_unlinked_status', 'Unlinked');
+				unlinkBtn.style.background = '#3d4450';
+				unlinkBtn.style.color = '#68737f';
+				unlinkBtn.style.cursor = 'default';
+				unlinkBtn.style.opacity = '.65';
+			}
+		}
+	};
+
+	updateButtonStates();
+	if (initialAppId) {
+		renderCandidatePreview([{ name: initialGameName, appid: initialAppId, image: initialHeaderUrl, score: 100, confidence: 'exact' }], initialAppId);
+		if (shouldAutoApplyNoLauncher(initialAppId)) {
+			skipLauncherLabel.style.display = 'flex';
+			skipLauncherInput.checked = true;
+		}
+	}
+	input.addEventListener('input', () => {
+		clearTargetStatus();
+		updateButtonStates();
+		achievementBinding?.sync(input.value.trim());
+	});
+	const syncLinkStatusFromState = (): void => {
+		if (!section.isConnected) return;
+		const shortcutId = managedShortcutId || Number(findActiveShortcutAppId(doc, gameTitle) || 0) || findShortcutAppIdByName(gameTitle);
+		const mapped = findMappingForShortcut(shortcutId, gameTitle);
+		currentLinked = (mapped && /^\d+$/.test(mapped)) ? mapped : '';
+		updateButtonStates();
+		achievementBinding?.sync();
+		if (currentLinked) {
+			const isPending = hasPendingLinkJob(shortcutId, gameTitle);
+			if (isPending) {
+				statusEl.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
+				statusEl.style.color = '#e5ad37';
+			} else {
+				statusEl.textContent = gdlText('manual_link_success', 'Shortcut linked to Steam successfully.');
+				statusEl.style.color = '#5ba32b';
+			}
+		}
+	};
+
+	syncLinkStatusFromState();
+
+	const onJobsChanged = (): void => {
+		if (!section.isConnected) {
+			window.removeEventListener('gdl:pending-link-jobs-changed', onJobsChanged);
+			return;
+		}
+		syncLinkStatusFromState();
+	};
+	window.addEventListener('gdl:pending-link-jobs-changed', onJobsChanged);
+
+	const unsubscribeMappings = subscribeMappings(() => {
+		if (!section.isConnected) {
+			unsubscribeMappings();
+			window.removeEventListener('gdl:pending-link-jobs-changed', onJobsChanged);
+			return;
+		}
+		syncLinkStatusFromState();
+	});
+
+	achievementBinding = bindShortcutAchievementSettings({
 		section,
 		shortcutAppId: () => managedShortcutId ? String(managedShortcutId) : '',
 		steamAppId: () => /^\d+$/.test(input.value.trim()) ? input.value.trim() : currentLinked,
 		gameTitle: () => gameTitle || '',
 	});
 	if (managedShortcutId && input && autoSelect && autoTitle) {
-		autoTitle.style.display = 'none';
-		autoTitle.textContent = '';
-		if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
+		if (!initialAppId) {
+			autoTitle.style.display = 'none';
+			autoTitle.textContent = '';
+			if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
+		}
 		void (async () => {
 			detectionContext = await buildShortcutDetectionContext(doc, gameTitle, managedShortcutId!);
 			if (!detectionContext) {
-				if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
-				autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</option>`;
-				autoTitle.style.display = 'block';
-				autoTitle.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
+				if (!initialAppId) {
+					if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
+					autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</option>`;
+					autoTitle.style.display = 'block';
+					autoTitle.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
+				}
 				return;
 			}
 			const detection = await detectShortcutCandidates(detectionContext);
 			const viable = detection?.candidates || [];
 			if (!viable.length) {
-				if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
-				autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</option>`;
-				autoTitle.style.display = 'block';
-				autoTitle.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
+				if (!initialAppId) {
+					if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
+					autoSelect.innerHTML = `<option value="">${escapeHtml(gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</option>`;
+					autoTitle.style.display = 'block';
+					autoTitle.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
+				}
 				return;
 			}
 			const options: HTMLOptionElement[] = [];
@@ -686,6 +498,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			}
 			renderCandidatePreview(viable, autoSelect.value || viable[0].appid);
 			updateButtonStates();
+			achievementBinding?.sync(autoSelect.value || viable[0]?.appid);
 			const selectedAppId = autoSelect.value || viable[0]?.appid || '';
 			if (shouldAutoApplyNoLauncher(selectedAppId)) {
 				skipLauncherLabel.style.display = 'flex';
@@ -727,6 +540,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 						}
 					}
 					updateButtonStates();
+					achievementBinding?.sync(autoSelect.value);
 				}
 			});
 		})().catch(e => {
@@ -746,36 +560,26 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				statusEl.style.color = '#ff6b6b';
 				return;
 			}
-			unlinkBtn.disabled = true;
-			saveBtn.disabled = true;
-			statusEl.textContent = gdlText('unlinking', 'Removing the link and its saved artwork...');
-			statusEl.style.color = '#8f98a0';
-			try {
-				const result = await unlinkShortcutFromSteam({
-					doc,
-					shortcutAppId: shortcutId,
-					title: gameTitle,
-					steamAppId: currentLinked || undefined,
-					exePath: detectionContext?.exePath || '',
-				});
-				if (result.ok) {
-					if (result.shortcutAppId) managedShortcutId = result.shortcutAppId;
-					// Keep the AppID in the field after unlinking so the shortcut can be
-					// linked again without requiring the user to type it a second time.
-					currentLinked = '';
-					statusEl.textContent = gdlText('unlink_success', 'Link removed. You can link this same shortcut again without deleting it from Steam.');
-					statusEl.style.color = '#5ba32b';
-				} else {
-					statusEl.textContent = gdlText('unlink_failed', 'The link could not be removed.');
-					statusEl.style.color = '#ff6b6b';
+			const unlinkedAppId = currentLinked;
+			currentLinked = '';
+			updateButtonStates();
+			statusEl.textContent = gdlText('unlink_success', 'Link removed. You can link this same shortcut again without deleting it from Steam.');
+			statusEl.style.color = '#5ba32b';
+
+			void (async () => {
+				try {
+					const result = await unlinkShortcutFromSteam({
+						doc,
+						shortcutAppId: shortcutId,
+						title: gameTitle,
+						steamAppId: unlinkedAppId || undefined,
+						exePath: detectionContext?.exePath || '',
+					});
+					if (result.ok && result.shortcutAppId) managedShortcutId = result.shortcutAppId;
+				} catch (error) {
+					backendLog('Direct properties unlink error: ' + String(error));
 				}
-			} catch (error) {
-				backendLog('Direct properties unlink error: ' + String(error));
-				statusEl.textContent = gdlText('unlink_failed', 'The link could not be removed.');
-				statusEl.style.color = '#ff6b6b';
-			} finally {
-				updateButtonStates();
-			}
+			})();
 		});
 	}
 
@@ -796,88 +600,84 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			if (shortcutId) {
 				cancelPendingLinkJobs(shortcutId, gameTitle);
 				undismissShortcut(shortcutId);
+				void updateMappingsChecked({ set: { [shortcutMappingKey(shortcutId)]: val } });
 			}
 			const requestRevision = ++targetRevision;
 
-			saveBtn.disabled = true;
-			saveBtn.textContent = gdlText('linking_progress_button', 'Linking...');
-			saveBtn.style.opacity = '.75';
-			unlinkBtn.disabled = true;
-			// The shortcut title can still be the title from its former mapping.
-			// Until Steam verifies the target, show the requested AppID instead.
-			statusEl.textContent = gdlText('bulk_link_progress', 'Linking {done}/{total}: {game}', { done: '1', total: '1', game: `AppID ${val}` });
-			statusEl.style.color = '#66c0f4';
-			input.disabled = true;
-			autoSelect.disabled = true;
+			currentLinked = val;
+			updateButtonStates();
+			statusEl.textContent = gdlText('manual_link_success', 'Shortcut linked to Steam successfully.');
+			statusEl.style.color = '#5ba32b';
 
-			try {
-				const result = await linkShortcutToSteam({
-					doc,
-					title: gameTitle,
-					shortcutAppId: shortcutId,
-					steamAppId: val,
-					skipLauncher: !!skipLauncherInput?.checked,
-					existingLaunchOptions: detectionContext?.launchOptions || '',
-					trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
-					trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
-					shortcutExecutable: detectionContext?.exePath || '',
-					onStatus: (message, color) => {
-						if (requestRevision !== targetRevision || !section.isConnected) return;
-						statusEl.textContent = message;
-						statusEl.style.color = color;
-					},
-				});
-				if (requestRevision !== targetRevision || !section.isConnected) return;
-				if (result.ok) {
-					if (result.shortcutAppId) managedShortcutId = result.shortcutAppId;
-					currentLinked = val;
-					const resourcesComplete = Boolean(result.setup?.artworkComplete && result.setup?.iconApplied);
-					if (!resourcesComplete) {
-						enqueueLinkJob({
-							title: gameTitle, shortcutAppId: result.shortcutAppId || shortcutId || null, steamAppId: val,
-							skipLauncher: !!skipLauncherInput?.checked, existingLaunchOptions: detectionContext?.launchOptions || '',
-							trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
-							trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
-							shortcutExecutable: detectionContext?.exePath || '', repairResources: true,
-						});
-						statusEl.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
-						statusEl.style.color = '#e5ad37';
+			void (async () => {
+				try {
+					const result = await linkShortcutToSteam({
+						doc,
+						title: gameTitle,
+						shortcutAppId: shortcutId,
+						steamAppId: val,
+						skipLauncher: !!skipLauncherInput?.checked,
+						existingLaunchOptions: detectionContext?.launchOptions || '',
+						trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
+						trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
+						shortcutExecutable: detectionContext?.exePath || '',
+						onStatus: (message, color) => {
+							if (requestRevision !== targetRevision || !section.isConnected) return;
+							if (color && color !== '#5ba32b') {
+								statusEl.textContent = message;
+								statusEl.style.color = color;
+							}
+						},
+					});
+					if (requestRevision !== targetRevision || !section.isConnected) return;
+					if (result.ok) {
+						if (result.shortcutAppId) managedShortcutId = result.shortcutAppId;
+						const resourcesComplete = Boolean(result.setup?.artworkComplete && result.setup?.iconApplied);
+						if (!resourcesComplete) {
+							enqueueLinkJob({
+								title: gameTitle, shortcutAppId: result.shortcutAppId || shortcutId || null, steamAppId: val,
+								skipLauncher: !!skipLauncherInput?.checked, existingLaunchOptions: detectionContext?.launchOptions || '',
+								trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
+								trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
+								shortcutExecutable: detectionContext?.exePath || '', repairResources: true,
+							});
+							statusEl.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
+							statusEl.style.color = '#e5ad37';
+						} else {
+							statusEl.textContent = gdlText('manual_link_success', 'Shortcut linked to Steam successfully.');
+							statusEl.style.color = '#5ba32b';
+						}
 					} else {
-						statusEl.textContent = gdlText('manual_link_success', 'Shortcut linked to Steam successfully.');
-						statusEl.style.color = '#5ba32b';
+						const retryable = !['invalid_appid', 'refusing_to_modify_native_steam_app'].includes(String(result.error || ''));
+						if (retryable) {
+							enqueueLinkJob({
+								title: gameTitle,
+								shortcutAppId: result.shortcutAppId || shortcutId || null,
+								steamAppId: val,
+								skipLauncher: !!skipLauncherInput?.checked,
+								existingLaunchOptions: detectionContext?.launchOptions || '',
+								trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
+								trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
+								shortcutExecutable: detectionContext?.exePath || '',
+							});
+							statusEl.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
+							statusEl.style.color = '#e5ad37';
+						} else {
+							statusEl.textContent = gdlText('save_failed', 'Could not complete the link.');
+							statusEl.style.color = '#d94126';
+						}
 					}
-				} else {
-					const retryable = !['invalid_appid', 'refusing_to_modify_native_steam_app'].includes(String(result.error || ''));
-					if (retryable) {
-						enqueueLinkJob({
-							title: gameTitle,
-							shortcutAppId: result.shortcutAppId || shortcutId || null,
-							steamAppId: val,
-							skipLauncher: !!skipLauncherInput?.checked,
-							existingLaunchOptions: detectionContext?.launchOptions || '',
-							trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
-							trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
-							shortcutExecutable: detectionContext?.exePath || '',
-						});
-						statusEl.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
-						statusEl.style.color = '#e5ad37';
-					} else {
-						statusEl.textContent = gdlText('save_failed', 'Could not complete the link.');
-						statusEl.style.color = '#d94126';
+				} catch (error) {
+					if (requestRevision !== targetRevision || !section.isConnected) return;
+					backendLog('Direct properties link error: ' + String(error));
+					statusEl.textContent = gdlText('save_failed', 'Could not complete the link.');
+					statusEl.style.color = '#d94126';
+				} finally {
+					if (requestRevision === targetRevision && section.isConnected) {
+						updateButtonStates();
 					}
 				}
-			} catch (error) {
-				if (requestRevision !== targetRevision || !section.isConnected) return;
-				backendLog('Direct properties link error: ' + String(error));
-				statusEl.textContent = gdlText('save_failed', 'Could not complete the link.');
-				statusEl.style.color = '#d94126';
-			} finally {
-				if (requestRevision === targetRevision && section.isConnected) {
-					input.disabled = false;
-					autoSelect.disabled = false;
-					updateButtonStates();
-				}
-			}
+			})();
 		});
 	}
 }

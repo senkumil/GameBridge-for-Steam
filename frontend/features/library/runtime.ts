@@ -2,6 +2,7 @@ import type { CommunityContentItem, FriendCategories, NewsItem, SteamGameData } 
 import { backendLog, neutralizeSteamAppIdFileBackend } from '../../api/backend';
 import { getCachedGameData, getGameData, gameDataCache, gameDataLanguageKey } from '../../core/game-data';
 import { mappings, loadMappings, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
+import { perfMark, perfMeasure } from '../../core/perf';
 import { steamLanguageSync } from '../../steam/localization';
 import { installSteamNavigation } from '../../steam/navigation';
 import { findActiveShortcutAppId, findShortcutAppIdByName, findShortcutAppIdsByName, getShortcutAppById, looseMatchTitle } from '../../steam/shortcuts';
@@ -384,6 +385,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 	}
 	const generation = setCurrentInjection(doc, steamAppId, resolvedShortcutAppId);
 	removeManualLinkNoticeButton(doc);
+	perfMark('game-select-' + steamAppId);
 	backendLog(`Library page: "${gameTitle}" -> injecting data for ${steamAppId}`);
 
 	const numShortcutId = Number(resolvedShortcutAppId || 0);
@@ -401,6 +403,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 	if (cachedData) {
 		renderedFromCache = renderLinkedPage(doc, notice, cachedData, steamAppId, cachedNews, cachedFriends, cachedCommunity, generation);
 		if (renderedFromCache) {
+			perfMeasure('game-selection -> first-render', 'game-select-' + steamAppId);
 			finalizeAchievements(doc, steamAppId, cachedData.achievements?.total || 0, generation);
 		} else {
 			scheduleLinkedRenderRetry(doc, navigationGeneration);
@@ -448,9 +451,6 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		const latestNotice = findNonSteamNotice(doc);
 		if (!latestNotice || !renderLinkedPage(doc, latestNotice.element, data, steamAppId,
 			cachedNews, cachedFriends, cachedCommunity, generation)) {
-			// Steam can detach its native notice while a background stream is
-			// resolving or publish its two-column layout a moment later. Keep the
-			// loading stage and retry this same route from cached game data.
 			if (isCurrentNavigation(doc, navigationGeneration)
 				&& isCurrentRender(doc, steamAppId, generation)) {
 				stageLinkedShortcutLoading(doc, notice, navigationGeneration);
@@ -458,10 +458,12 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 			}
 			return;
 		}
+		perfMeasure('game-selection -> first-render', 'game-select-' + steamAppId);
 	}
 	finalizeAchievements(doc, steamAppId, data.achievements?.total || 0, generation);
 	hydrateLinkedRouteResources(doc, steamAppId, resolvedShortcutAppId, language,
 		() => isCurrentRender(doc, steamAppId, generation), data);
+	perfMeasure('background-revalidation', 'game-select-' + steamAppId);
 }
 
 export function getCurrentInjectedAppId(): string | null { return currentInjectedAppId; }

@@ -1,7 +1,8 @@
 import { backendLog } from '../../api/backend';
 import { normalizeTitle } from '../../core/text';
 import { loc, officialSteamText, steamIntlLocale } from '../../steam/localization';
-import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes } from '../../steam/shortcuts';
+import { findMappingForTitle } from '../../core/mappings';
+import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes, toSignedShortcutAppId } from '../../steam/shortcuts';
 import { fetchPlaytimeStatsBatch } from '../playtime/service';
 import { disposeBigPictureAchievementCards, refreshBigPictureAchievementCards } from './achievement-cards';
 import { disposeBigPictureShortcutDetails, refreshBigPictureShortcutDetails } from './details';
@@ -167,16 +168,22 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 // The original shortcut classification is restored when Big Picture closes.
 function isBigPictureShortcutObject(app: any): boolean {
 	if (!app || typeof app !== 'object') return false;
-	const appId = Number(app.appid);
+	const rawId = Number(app.appid);
+	const unsignedId = rawId < 0 ? (rawId >>> 0) : rawId;
 	const appType = Number(app.app_type || 0);
-	return appType === 1073741824 || appId >= 2147483648;
+	return appType === 1073741824 || unsignedId >= 2147483648;
 }
 
 function isManagedBigPictureShortcutObject(app: any): boolean {
-	if (!isBigPictureShortcutObject(app)) return false;
+	if (!app || typeof app !== 'object') return false;
 	const rawId = Number(app?.appid);
 	const shortcutId = rawId < 0 ? (rawId >>> 0) : rawId;
-	return Number.isFinite(shortcutId) && gdlBigPictureMappedShortcutIds.has(shortcutId);
+	if (shortcutId < 2147483648 && Number(app?.app_type || 0) !== 1073741824) return false;
+	if (Number.isFinite(shortcutId) && gdlBigPictureMappedShortcutIds.has(shortcutId)) return true;
+	if (Number.isFinite(rawId) && gdlBigPictureMappedShortcutIds.has(rawId)) return true;
+	const title = String(app?.display_name || app?.m_strDisplayName || app?.name || '').trim();
+	if (title && findMappingForTitle(title, shortcutId)) return true;
+	return false;
 }
 
 function installBigPicturePrototypeShim(app: any): void {
@@ -275,60 +282,27 @@ function setBigPicturePlaytimeField(target: any, key: BigPicturePlaytimeKey, val
 }
 
 function hideBigPictureShortcutTab(doc: Document): void {
-	const styleId = 'gdl-big-picture-hide-shortcut-tab';
-	if (!doc.getElementById(styleId)) {
-		const style = doc.createElement('style');
-		style.id = styleId;
-		style.textContent = '[data-gdl-hidden-shortcut-tab="1"]{display:none!important;}';
-		(doc.head || doc.documentElement).appendChild(style);
-	}
-	// Steam keeps the category strip mounted during ordinary focus/controller
-	// changes. Once its exact shortcut pill is marked there is nothing to scan.
-	if (doc.querySelector('[data-gdl-hidden-shortcut-tab="1"]')) return;
-	const labels = [
-		'fuera de steam', 'no de steam', 'non-steam', 'non steam', 'nicht-steam',
-		'hors steam', 'fora da steam', 'fuori da steam', 'poza steam', '非steam', '非 steam',
-	];
-	const isShortcutTabText = (value: string, label: string): boolean => {
-		const compactValue = value.replace(/\s+/g, '');
-		const compactLabel = label.replace(/\s+/g, '');
-		return compactValue === compactLabel || new RegExp(`^${compactLabel}\\d+$`).test(compactValue);
-	};
-	const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null);
-	let node: Node | null;
-	while ((node = walker.nextNode())) {
-		const text = (node.textContent || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
-		const label = labels.find(candidate => isShortcutTabText(text, candidate));
-		if (!label) continue;
-		let target = node.parentElement as HTMLElement | null;
-		let pill: HTMLElement | null = null;
-		for (let depth = 0; target && depth < 5; depth++, target = target.parentElement) {
-			const targetText = (target.textContent || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
-			// The title and count are separate descendants in current Big Picture.
-			// Keep the highest compact ancestor whose text is only "label + count";
-			// the next parent is the complete category row and must remain visible.
-			if (isShortcutTabText(targetText, label)
-				&& targetText.length <= label.length + 10) pill = target;
-			else if (pill) break;
-		}
-		if (pill) {
-			pill.dataset.gdlHiddenShortcutTab = '1';
-			pill.style.setProperty('display', 'none', 'important');
-		}
+	const style = doc.getElementById('gdl-big-picture-hide-shortcut-tab');
+	if (style) style.remove();
+	for (const el of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-hidden-shortcut-tab="1"]'))) {
+		delete el.dataset.gdlHiddenShortcutTab;
+		el.style.removeProperty('display');
 	}
 }
 
 export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
-	// The category strip can render before Steam exposes appStore. Hide the
-	// shortcut-only tab immediately so an empty "Non-Steam 0" pill never flashes
-	// or survives after a shortcut is added/removed.
 	hideBigPictureShortcutTab(_doc);
 	const appStore = (window as any).appStore;
 	if (!appStore?.m_mapApps) return;
 	const mappedShortcuts = getMappedShortcuts();
 	gdlBigPictureMappedShortcutIds.clear();
-	for (const shortcut of mappedShortcuts) gdlBigPictureMappedShortcutIds.add(shortcut.id);
-	if (gdlBigPictureMappedShortcutIds.size === 0) return;
+	for (const shortcut of mappedShortcuts) {
+		gdlBigPictureMappedShortcutIds.add(shortcut.id);
+		const signed = toSignedShortcutAppId(shortcut.id);
+		if (Number.isFinite(signed)) gdlBigPictureMappedShortcutIds.add(signed);
+		const unsigned = shortcut.id < 0 ? (shortcut.id >>> 0) : shortcut.id;
+		gdlBigPictureMappedShortcutIds.add(unsigned);
+	}
 	gdlBigPictureActive = true;
 
 	const candidates: any[] = [];
@@ -342,8 +316,14 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 		seen.add(app);
 		const rawId = Number(app.appid);
 		const shortcutId = rawId < 0 ? (rawId >>> 0) : rawId;
-		if (!gdlBigPictureMappedShortcutIds.has(shortcutId)) continue;
-		const isShortcut = isBigPictureShortcutObject(app) || (typeof app.BIsShortcut === 'function' && app.BIsShortcut() === true);
+		const title = String(app.display_name || app.m_strDisplayName || app.name || '').trim();
+		const isMapped = gdlBigPictureMappedShortcutIds.has(shortcutId)
+			|| gdlBigPictureMappedShortcutIds.has(rawId)
+			|| (title && Boolean(findMappingForTitle(title, shortcutId)));
+		if (!isMapped) continue;
+		gdlBigPictureMappedShortcutIds.add(shortcutId);
+		gdlBigPictureMappedShortcutIds.add(rawId);
+		const isShortcut = isBigPictureShortcutObject(app);
 		if (!isShortcut) continue;
 		installBigPicturePrototypeShim(app);
 

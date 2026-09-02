@@ -99,11 +99,12 @@ function installPrimaryLinksResponsiveLayout(inner: HTMLElement): void {
  */
 export function createPrimaryLinksBar(
 	doc: Document,
-	layout: NativeLibraryLayout,
+	_layout: NativeLibraryLayout,
 	options: PrimaryLinksOptions,
 ): HTMLElement {
 	const links = linkedGameDestinations(options);
 	const linkBar = doc.createElement('div');
+	linkBar.id = 'gdl-link-bar';
 	linkBar.className = 'gdl-link-bar-inner';
 	const primaryLinks = links.map(([label, url], index) =>
 		`<a class="gdl-primary-link" data-gdl-primary-index="${index}" href="${url}" data-gdl-open-url="${url}">${label}</a>`,
@@ -113,29 +114,7 @@ export function createPrimaryLinksBar(
 	).join('');
 	linkBar.innerHTML = `${primaryLinks}<details class="gdl-primary-more"><summary aria-label="${gdlText('more_links', 'More links')}">•••</summary><div class="gdl-primary-more-menu">${overflowLinks}</div></details>`;
 	installPrimaryLinksResponsiveLayout(linkBar);
-
-	if (layout.anchorRegion) {
-		const linkBarOuter = doc.createElement('div');
-		linkBarOuter.className = layout.anchorRegion.className;
-		linkBarOuter.style.margin = '0';
-		const regionChildren = Array.from(layout.anchorRegion.children);
-		const sourceBody = regionChildren.find(c => c.tagName === 'DIV') as HTMLElement | undefined;
-		if (sourceBody) {
-			const linkBarPanel = doc.createElement('div');
-			linkBarPanel.className = sourceBody.className;
-			linkBarPanel.appendChild(linkBar);
-			linkBarOuter.appendChild(linkBarPanel);
-		} else {
-			linkBarOuter.appendChild(linkBar);
-		}
-		linkBar.id = '';
-		linkBarOuter.id = 'gdl-link-bar';
-		return linkBarOuter;
-	} else {
-		linkBar.id = 'gdl-link-bar';
-		linkBar.style.cssText = 'display:flex;align-items:center;padding:8px 16px;background:#2a3040;border-bottom:1px solid rgba(255,255,255,0.06);';
-		return linkBar;
-	}
+	return linkBar;
 }
 
 export function insertPrimaryLinksBar(

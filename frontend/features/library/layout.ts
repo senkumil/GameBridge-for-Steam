@@ -169,12 +169,19 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 		while (cur && cur !== doc.body) {
 			const parent: HTMLElement | null = cur.parentElement;
 			if (parent && parent.children.length >= 2) {
+				const isPlaybarOrHeader = (el: HTMLElement): boolean => {
+					const className = String(el.className || '');
+					if (/playbar|gamestats|header|hero/i.test(className)) return true;
+					if (el.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"]')) return true;
+					return false;
+				};
 				const siblings = Array.from(parent.children).filter(c => c !== cur) as HTMLElement[];
-				const foundSidebar = siblings.find(s => {
+				const validSiblings = siblings.filter(s => !isPlaybarOrHeader(s));
+				const foundSidebar = validSiblings.find(s => {
 					const txt = (s.textContent || '').toLowerCase();
 					return txt.includes('nota') || txt.includes('note') || txt.includes('captura') || txt.includes('screenshot') || s.querySelector('[role="region"]');
-				}) || (siblings.length === 1 ? siblings[0] : null);
-				if (foundSidebar) {
+				}) || (validSiblings.length === 1 ? validSiblings[0] : null);
+				if (foundSidebar && !isPlaybarOrHeader(parent)) {
 					twoColumnRow = parent;
 					contentColumn = cur;
 					sidebarColumn = foundSidebar;

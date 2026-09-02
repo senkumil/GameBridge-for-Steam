@@ -5,6 +5,8 @@ import { mappings, loadMappings } from '../core/mappings';
 import { clearGameDataCache } from '../core/game-data';
 import { pruneCacheStorage, setProtectedCacheAppIds } from '../core/cache';
 import { getSteamLanguage, subscribeSteamLanguageChange, startSteamLanguageWatcher, stopSteamLanguageWatcher, officialSteamText, setLocalizationDocumentProvider } from '../steam/localization';
+import { steamUIModeService } from '../steam/ui/SteamUIModeService';
+import { steamComponents } from '../steam/modules/SteamComponentResolver';
 import { SettingsContent } from '../settings/SettingsContent';
 import { clearShortcutRuntimeCaches, findActiveShortcutAppId, isSteamLibraryActive } from '../steam/shortcuts';
 import { clearLibraryAssetCaches } from '../features/library/artwork';
@@ -12,7 +14,7 @@ import { clearCommunityItemCaches } from '../features/library/community-items';
 import { clearSocialRuntimeCaches, configureSocialRuntimeHost } from '../features/library/social';
 import { configureLibraryRuntimeHost, disposeLibraryRuntime, findNonSteamNotice, getCurrentInjectedAppId, getCurrentInjectedShortcutAppId, handleLibraryNavigation, refreshLibraryArtwork, resetLibraryInjection, tryInjectLibraryData } from '../features/library/runtime';
 import { DisposableRegistry } from '../core/disposables';
-import { configureShortcutRuntimeHost, disposeCustomizationArtwork, startNativeAddAutoDetector, stopNativeAddAutoDetector, tryInjectCustomizationArtwork, tryInjectPropertiesField } from '../features/shortcuts/runtime';
+import { configureShortcutRuntimeHost, disposeCustomizationArtwork, mutationMayContainProperties, startNativeAddAutoDetector, stopNativeAddAutoDetector, tryInjectCustomizationArtwork, tryInjectPropertiesField } from '../features/shortcuts/runtime';
 import { GDL_INJECTED } from '../features/library/constants';
 import { activateBigPicture, deactivateBigPicture, getBigPictureDocument, isBigPictureActive, refreshBigPicture } from '../features/big-picture/runtime';
 import { captureNativeUiBlueprints, clearNativeUiBlueprints } from '../steam/native-dom';
@@ -39,58 +41,39 @@ import { installMappingRefresh } from './mapping-refresh';
 let mainWindowDoc: Document | null = null;
 setLocalizationDocumentProvider(() => mainWindowDoc);
 function normalizedDomText(value: unknown): string { return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase(); }
-const copiedFeedbackCleanupScheduled = new WeakSet<Element>();
 function currentCopiedFeedbackLabels(): Set<string> {
 	return new Set(['copied!', 'copied', '¡copiado!', 'copiado!', 'copiado', normalizedDomText(officialSteamText('Copied!')), normalizedDomText(officialSteamText('Copied'))].filter(Boolean));
 }
-/**
- * Millennium sometimes leaves our transient "Copied" feedback portal mounted
- * after its owning settings view closes. Only target a floating, non-interactive
- * element whose complete text matches Steam's current localized copied-feedback label.
- */
-function scheduleCopiedFeedbackCleanup(doc: Document, roots: Iterable<Node>): void {
+
+function sweepCopiedFeedbackTooltips(doc: Document): void {
+	if (!doc || !doc.body) return;
 	const copiedFeedbackLabels = currentCopiedFeedbackLabels();
-	if (!doc.body || copiedFeedbackLabels.size === 0) return;
-	const candidates = new Set<HTMLElement>();
-	for (const root of roots) {
-		if (root.nodeType !== Node.ELEMENT_NODE) continue;
-		const element = root as HTMLElement;
-		const subtreeText = normalizedDomText(element.textContent);
-		if (![...copiedFeedbackLabels].some(label => subtreeText.includes(label))) continue;
-		if (element.matches('div, span')) candidates.add(element);
-		for (const candidate of Array.from(element.querySelectorAll<HTMLElement>('div, span'))) candidates.add(candidate);
-	}
-	for (const candidate of candidates) {
-		const label = normalizedDomText(candidate.textContent);
-		if (!copiedFeedbackLabels.has(label)) continue;
-		if (candidate.matches('button, a, input, textarea, [role="button"]')
-			|| candidate.closest('button, a, input, textarea, [role="button"]')) continue;
-		// Work from the deepest text node so a matching portal is not scheduled
-		// once for every wrapper around the same feedback label.
-		if (Array.from(candidate.children).some(child => copiedFeedbackLabels.has(normalizedDomText(child.textContent)))) continue;
-		let target: HTMLElement = candidate;
-		let cursor: HTMLElement | null = candidate;
-		let floating = false;
-		for (let depth = 0; cursor && depth < 5; depth += 1) {
-			if (normalizedDomText(cursor.textContent) !== label) break;
-			const style = doc.defaultView?.getComputedStyle(cursor);
-			const marker = `${String(cursor.className || '')} ${cursor.id || ''}`;
-			if (/^(fixed|absolute|sticky)$/i.test(style?.position || '') || /tooltip|toast|copied|notification/i.test(marker)) {
-				target = cursor;
-				floating = true;
+	if (copiedFeedbackLabels.size === 0) return;
+
+	try {
+		const candidates = doc.querySelectorAll<HTMLElement>('div, span, p, [class*="tooltip" i], [class*="popup" i], [class*="toast" i], [class*="copied" i], [class*="badge" i], [class*="bubble" i]');
+		for (const el of Array.from(candidates)) {
+			const text = normalizedDomText(el.textContent);
+			if (!copiedFeedbackLabels.has(text)) continue;
+			if (el.matches('button, a, input, textarea, [role="button"]') || el.closest('button, a, input, textarea, [role="button"]')) {
+				continue;
 			}
-			cursor = cursor.parentElement;
+			let target: HTMLElement = el;
+			let parent = el.parentElement;
+			while (parent && parent !== doc.body && normalizedDomText(parent.textContent) === text) {
+				target = parent;
+				parent = parent.parentElement;
+			}
+			target.style.setProperty('display', 'none', 'important');
+			target.style.setProperty('visibility', 'hidden', 'important');
+			target.style.setProperty('opacity', '0', 'important');
+			target.style.setProperty('pointer-events', 'none', 'important');
 		}
-		if (!floating || copiedFeedbackCleanupScheduled.has(target)) continue;
-		copiedFeedbackCleanupScheduled.add(target);
-		setTimeout(() => {
-			// Do not detach a React-owned Steam node. Hiding the stale transient
-			// portal avoids the removeChild reconciliation crash seen in CEF.
-			if (target.isConnected && copiedFeedbackLabels.has(normalizedDomText(target.textContent))) {
-				target.style.setProperty('display', 'none', 'important');
-			}
-		}, 300);
-	}
+	} catch {}
+}
+
+function scheduleCopiedFeedbackCleanup(doc: Document, _roots?: Iterable<Node>): void {
+	sweepCopiedFeedbackTooltips(doc);
 }
 const observedDocs = new WeakSet<Document>();
 const activeSteamDocuments = new Set<Document>();
@@ -116,8 +99,12 @@ function windowCreated(context: any): void {
 		|| (!popupName && popupWin === window && !isBigPictureWindow && !isOverlayWindow);
 	// Steam can turn SP Desktop into Big Picture in place; its captured window
 	// name stays unchanged, so classify the live document instead of the hook name.
-	const isBigPictureSurface = (): boolean => isBigPictureWindow
-		|| (isMainWindow && isBigPictureActive() && getBigPictureDocument() === popupDoc);
+	const isBigPictureSurface = (): boolean => {
+		if (isBigPictureWindow) return true;
+		if (popupDoc.body && (popupDoc.body.classList.contains('GamepadUI') || popupDoc.body.classList.contains('gamepadui'))) return true;
+		if (/(?:gamepadui|bigpicture)/i.test(popupWin.location?.href || popupDoc.location?.href || '')) return true;
+		return false;
+	};
 	let lifecycle!: DisposableRegistry;
 	lifecycle = new DisposableRegistry(() => {
 		documentLifecycles.delete(lifecycle);
@@ -142,6 +129,15 @@ function windowCreated(context: any): void {
 		registerNativeAchievementToastWindow(popupWin, 'desktop', `${popupName} ${popupTitle}`.trim());
 	}
 	if (isBigPictureWindow) {
+		const onBpmClose = () => {
+			deactivateBigPicture();
+			if (mainWindowDoc) {
+				resetLibraryInjection(true);
+				void tryInjectLibraryData(mainWindowDoc).catch(() => {});
+			}
+		};
+		lifecycle.listen(popupWin, 'beforeunload', onBpmClose, { once: true });
+		lifecycle.listen(popupWin, 'unload', onBpmClose, { once: true });
 		activateBigPicture(popupDoc);
 		// Keep the real-achievement watcher alive when the game was launched
 		// from Big Picture. Persistent baselines suppress duplicate toasts if the
@@ -159,7 +155,10 @@ function windowCreated(context: any): void {
 		// document owns the executor, so the task is independent of that popup.
 		void processPendingLinkJobs(mainWindowDoc);
 		installLocalAchievementUI(popupDoc);
-		scheduleCopiedFeedbackCleanup(popupDoc, [popupDoc.body]);
+		scheduleCopiedFeedbackCleanup(popupDoc);
+		lifecycle.interval(() => {
+			sweepCopiedFeedbackTooltips(popupDoc);
+		}, 500);
 		// A full CEF document replacement does require a new observer. Wait until
 		// the replacement document actually exists, then hand ownership over; do
 		// not tear the active observer down on Steam's earlier unload signal.
@@ -201,6 +200,7 @@ function windowCreated(context: any): void {
 		if (reason === 'mutation') lastMutationInjectionAt = Date.now();
 		// This precedes the static main-window branch because Steam reuses that document.
 		if (isBigPictureSurface()) {
+			activateBigPicture(popupDoc);
 			lastBigPictureRefreshAt = Date.now();
 			void refreshBigPicture(popupDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
 			return;
@@ -271,13 +271,11 @@ function windowCreated(context: any): void {
 		// are already complete, so feeding them back into the navigation observer
 		// used to schedule redundant injection/cleanup passes and visible flicker.
 		if (isGdlOnlyMutation(records)) return;
-		if (isMainWindow) {
-			const addedRoots = records.flatMap(record => Array.from(record.addedNodes));
-			if (mutationMayContainNonSteamNotice(addedRoots)) {
-				if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
-				runInjection('mutation');
-				return;
-			}
+		const addedRoots = records.flatMap(record => Array.from(record.addedNodes));
+		if (mutationMayContainNonSteamNotice(addedRoots) || mutationMayContainProperties(addedRoots)) {
+			if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
+			runInjection('mutation');
+			return;
 		}
 		// Steam emits a burst of separate mutations while rebuilding its first
 		// library route. Coalesce that burst into one pass instead of mounting,
@@ -338,9 +336,9 @@ function windowCreated(context: any): void {
 		}, 10000);
 	}
 
-	// One settled startup pass is sufficient: observer/route signals cover late
-	// content, while an already-visible linked shortcut can use its cache at once.
-	const linkedShortcutAlreadyVisible = isMainWindow && Boolean(findNonSteamNotice(popupDoc));
+	// Instant startup pass for visible linked shortcut or properties dialog
+	const isPropertiesWindow = !isMainWindow && /properties|propiedades|propriedades|propriétés|eigenschaften|proprietà|shortcut/i.test(popupTitle || popupDoc.title || '');
+	const linkedShortcutAlreadyVisible = (isMainWindow && Boolean(findNonSteamNotice(popupDoc))) || isPropertiesWindow;
 	lifecycle.timeout(() => {
 		runInjection('startup');
 	}, linkedShortcutAlreadyVisible ? 0 : 350);
@@ -387,18 +385,20 @@ export default definePlugin(() => {
 		backendLog('Instant startup mapping snapshot: ' + Object.keys(mappings).length + ' entrie(s)');
 	}
 
-	const refreshForUIMode = (mode: number): void => {
-		if (Number(mode) === 4) {
+	steamUIModeService.initialize();
+	const unsubscribeUIMode = steamUIModeService.subscribe((state) => {
+		if (state.isGamepadUI) {
 			const doc = getBigPictureDocument() || mainWindowDoc;
 			if (doc) void refreshBigPicture(doc).catch(error => backendLog('Big Picture mode refresh error: ' + error));
 			return;
 		}
-		if (Number(mode) === 7 && isBigPictureActive()) deactivateBigPicture();
-	};
+		if (state.isDesktop && isBigPictureActive()) deactivateBigPicture();
+	});
 
 	try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.startsWith('events8_') || k.startsWith('events7_') || k.startsWith('friends_') || k.startsWith('gdl_cache_friends_'))) localStorage.removeItem(k); } } catch {}
 	loadMappings().then(() => {
 		backendLog('Loaded ' + Object.keys(mappings).length + ' mapping(s)');
+		steamComponents.prewarmComponents();
 		startLinkedGamePrefetch(getCurrentInjectedAppId);
 		startPlaytimeTracker();
 		startFirstLaunchAchievementWatcher();
@@ -422,7 +422,7 @@ export default definePlugin(() => {
 		resetLibrary: () => resetLibraryInjection(true),
 		refreshBigPicture: () => { const doc = getBigPictureDocument(); if (doc) void refreshBigPicture(doc).catch(() => {}); },
 	});
-	const repaintArtwork = (event: Event): void => { const steamAppId = String((event as CustomEvent<{ steamAppId?: unknown }>).detail?.steamAppId || ''); if (steamAppId && steamAppId === getCurrentInjectedAppId()) resetLibraryInjection(true); };
+	const repaintArtwork = (event: Event): void => { const d = (event as CustomEvent<{ steamAppId?: unknown; user_action?: boolean; user_choice?: boolean }>).detail; if (d && String(d.steamAppId || '') === getCurrentInjectedAppId() && (d.user_action || d.user_choice)) resetLibraryInjection(true); };
 	window.addEventListener('gdl:artwork-changed', repaintArtwork);
 
 	const onPlaytimeChanged = (): void => {
@@ -453,17 +453,6 @@ export default definePlugin(() => {
 	startSteamLanguageWatcher();
 
 	getSteamLanguage(true).catch(() => {});
-	let unregisterUIModeChanged: (() => void) | null = null;
-	try {
-		const registration = (window as any).SteamClient?.UI?.RegisterForUIModeChanged?.(refreshForUIMode);
-		if (typeof registration === 'function') unregisterUIModeChanged = registration;
-		void (async () => {
-			try {
-				const currentMode = await (window as any).SteamClient?.UI?.GetUIMode?.();
-				if (currentMode !== undefined) refreshForUIMode(Number(currentMode));
-			} catch {}
-		})();
-	} catch {}
 
 	try { Millennium.AddWindowCreateHook(windowCreated); } catch (e) { console.error('[GDL] Failed to register window hook:', e); }
 	const existingWindowAdoptionTimers = [0, 250, 1000, 2500].map(delay => setTimeout(() => {
@@ -481,9 +470,10 @@ export default definePlugin(() => {
 			for (const timer of existingWindowAdoptionTimers) clearTimeout(timer);
 			disposeDocumentLifecycles();
 			unsubscribeLanguageRefresh();
+			unsubscribeUIMode();
+			steamUIModeService.dispose();
 			disposeMappingRefresh();
 			disposeLinkedGamePrefetch();
-			unregisterUIModeChanged?.();
 			stopSteamLanguageWatcher();
 			stopNativeAddAutoDetector();
 			stopPlaytimeTracker();
@@ -493,6 +483,7 @@ export default definePlugin(() => {
 			disposeAchievementRuntime();
 			clearNativeUiBlueprints();
 			resetResolvedCssClassModules();
+			steamComponents.clearCache();
 		},
 	};
 });

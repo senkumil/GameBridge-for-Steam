@@ -4,6 +4,7 @@ import { escapeHtml } from '../../../core/text';
 import { EVENT_CLASSES, FEED_CLASSES } from '../../../steam/css';
 import { gdlText, loc, steamIntlLocale } from '../../../steam/localization';
 import { eventTypeLabel, formatNewsDate, isPatchNoteItem, newsExcerpt } from '../news';
+import { deleteStatusPostOnSteam } from '../../../steam/social';
 import { socialRuntimeHost } from './host';
 
 export interface LocalActivityPost {
@@ -46,21 +47,41 @@ export function getCurrentSteamUser(doc: Document): { name: string; avatar: stri
 	let avatar = '';
 	try {
 		const anyWin = (doc.defaultView || window) as any;
-		if (anyWin?.SteamClient?.User?.GetPersonaName) {
+		if (typeof anyWin?.SteamClient?.User?.GetPersonaName === 'function') {
 			name = anyWin.SteamClient.User.GetPersonaName();
 		}
 		if (!name && anyWin?.g_AccountInfo?.m_strPersonaName) {
 			name = anyWin.g_AccountInfo.m_strPersonaName;
 		}
+		if (!name && anyWin?.userStore?.m_strPersonaName) {
+			name = anyWin.userStore.m_strPersonaName;
+		}
 	} catch {}
+
 	if (!name) {
 		const topProfile = doc.querySelector('[class*="AccountName"], [class*="accountName"], [class*="personaName"], .persona') as HTMLElement | null;
-		if (topProfile?.textContent) name = topProfile.textContent.trim();
+		if (topProfile?.textContent) {
+			const clone = topProfile.cloneNode(true) as HTMLElement;
+			clone.querySelectorAll('[class*="Wallet"], [class*="wallet"], [class*="Balance"], [class*="balance"]').forEach(el => el.remove());
+			name = clone.textContent?.trim() || '';
+		}
 	}
 	if (!name) {
 		const btn = doc.querySelector('[class*="AccountMenu"], [class*="accountMenu"], [class*="TopBarAccount"]') as HTMLElement | null;
-		if (btn?.textContent) name = btn.textContent.trim();
+		if (btn?.textContent) {
+			const clone = btn.cloneNode(true) as HTMLElement;
+			clone.querySelectorAll('[class*="Wallet"], [class*="wallet"], [class*="Balance"], [class*="balance"]').forEach(el => el.remove());
+			name = clone.textContent?.trim() || '';
+		}
 	}
+
+	if (name) {
+		name = name.replace(/[\$€£¥₹₩]\s*\d+(?:[.,]\d+)?/g, '')
+			.replace(/\d+(?:[.,]\d+)?\s*[\$€£¥₹₩]/g, '')
+			.replace(/\s+/g, ' ')
+			.trim();
+	}
+
 	if (!name) name = gdlText('steam_user', 'Steam User');
 
 	const avatarImg = doc.querySelector('[class*="Avatar"] img, [class*="avatar"] img, .avatarHolder img, [class*="AccountAvatar"] img') as HTMLImageElement | null;
@@ -132,9 +153,15 @@ export const STEAM_EMOTICONS: { char: string; name: string }[] = [
 	{ char: '👑', name: 'crown king' },
 ];
 
-const lastInjectedNews = new Map<string, NewsItem[]>();
+export interface FriendActivityFeedItem {
+	id: string;
+	date: number;
+	html: string;
+}
 
+const lastInjectedNews = new Map<string, NewsItem[]>();
 const lastInjectedFriendActivity = new Map<string, string>();
+const lastInjectedFriendItems = new Map<string, FriendActivityFeedItem[]>();
 
 const friendActivityFreshUntil = new Map<string, number>();
 
@@ -150,6 +177,7 @@ const FRIEND_ACTIVITY_TTL_MS = 5 * 60 * 1000;
 function deleteActivityCacheEntry(appId: string): void {
 	lastInjectedNews.delete(appId);
 	lastInjectedFriendActivity.delete(appId);
+	lastInjectedFriendItems.delete(appId);
 	friendActivityFreshUntil.delete(appId);
 	activityCacheAccessAt.delete(appId);
 	visibleActivityNewsCount.delete(appId);
@@ -188,24 +216,64 @@ function effectiveActivityNews(steamAppId: string, newsItems: NewsItem[]): NewsI
 		: (lastInjectedNews.get(steamAppId) || []);
 }
 
+function parseFriendActivityItems(input: unknown): FriendActivityFeedItem[] {
+	if (Array.isArray(input)) {
+		return input.filter((item): item is FriendActivityFeedItem =>
+			Boolean(item && typeof item === 'object' && typeof (item as any).html === 'string' && typeof (item as any).date === 'number')
+		);
+	}
+	if (typeof input === 'string' && input.trim().startsWith('[')) {
+		try {
+			const parsed = JSON.parse(input);
+			if (Array.isArray(parsed)) {
+				return parsed.filter((item): item is FriendActivityFeedItem =>
+					Boolean(item && typeof item === 'object' && typeof item.html === 'string' && typeof item.date === 'number')
+				);
+			}
+		} catch {}
+	}
+	return [];
+}
+
 function rememberActivityFeedInputs(
 	steamAppId: string,
 	newsItems: NewsItem[],
-	friendActivityHtml: string,
-): { newsItems: NewsItem[]; friendActivityHtml: string } {
+	friendActivity: string | FriendActivityFeedItem[],
+): { newsItems: NewsItem[]; friendItems: FriendActivityFeedItem[]; legacyFriendHtml: string } {
 	touchActivityCache(steamAppId);
 	if (Array.isArray(newsItems) && newsItems.length > 0) {
 		lastInjectedNews.set(steamAppId, newsItems);
 	} else {
 		newsItems = lastInjectedNews.get(steamAppId) || [];
 	}
-	if (friendActivityHtml) {
-		lastInjectedFriendActivity.set(steamAppId, friendActivityHtml);
+
+	const parsedItems = parseFriendActivityItems(friendActivity);
+	let legacyFriendHtml = '';
+	if (parsedItems.length > 0) {
+		lastInjectedFriendItems.set(steamAppId, parsedItems);
+		lastInjectedFriendActivity.set(steamAppId, JSON.stringify(parsedItems));
 		friendActivityFreshUntil.set(steamAppId, Date.now() + FRIEND_ACTIVITY_TTL_MS);
+	} else if (typeof friendActivity === 'string' && friendActivity.trim().length > 0) {
+		lastInjectedFriendActivity.set(steamAppId, friendActivity);
+		friendActivityFreshUntil.set(steamAppId, Date.now() + FRIEND_ACTIVITY_TTL_MS);
+		legacyFriendHtml = friendActivity;
 	} else {
-		friendActivityHtml = lastInjectedFriendActivity.get(steamAppId) || '';
+		const cachedItems = lastInjectedFriendItems.get(steamAppId);
+		if (cachedItems && cachedItems.length > 0) {
+			parsedItems.push(...cachedItems);
+		} else {
+			const cachedRaw = lastInjectedFriendActivity.get(steamAppId) || '';
+			const fromRaw = parseFriendActivityItems(cachedRaw);
+			if (fromRaw.length > 0) {
+				parsedItems.push(...fromRaw);
+				lastInjectedFriendItems.set(steamAppId, fromRaw);
+			} else {
+				legacyFriendHtml = cachedRaw;
+			}
+		}
 	}
-	return { newsItems, friendActivityHtml };
+
+	return { newsItems, friendItems: parsedItems, legacyFriendHtml };
 }
 
 function hashFeedPart(hash: number, value: unknown): number {
@@ -225,15 +293,21 @@ export function activityFeedContentSignature(
 	shortcutAppId: string | null | undefined,
 	newsItems: NewsItem[],
 	fallbackImage: string,
-	friendActivityHtml: string = '',
+	friendActivity: string | FriendActivityFeedItem[] = '',
 ): string {
 	const effectiveNews = effectiveActivityNews(steamAppId, newsItems);
-	const effectiveFriend = friendActivityHtml || lastInjectedFriendActivity.get(steamAppId) || '';
+	const parsedItems = parseFriendActivityItems(friendActivity);
+	const effectiveFriendItems = parsedItems.length > 0
+		? parsedItems
+		: (lastInjectedFriendItems.get(steamAppId) || parseFriendActivityItems(lastInjectedFriendActivity.get(steamAppId) || ''));
+	const rawLegacy = (typeof friendActivity === 'string' && !friendActivity.trim().startsWith('['))
+		? friendActivity
+		: (lastInjectedFriendActivity.get(steamAppId) || '');
 	const posts = loadLocalActivityPosts(steamAppId, shortcutAppId);
 	let hash = 2166136261;
 	for (const value of [steamAppId, shortcutAppId || '', fallbackImage,
 		visibleActivityNewsCount.get(steamAppId) || ACTIVITY_NEWS_PAGE_SIZE,
-		activityEndReached.get(steamAppId) === true ? 1 : 0, effectiveFriend]) {
+		activityEndReached.get(steamAppId) === true ? 1 : 0, rawLegacy]) {
 		hash = hashFeedPart(hash, value);
 	}
 	for (const item of effectiveNews) {
@@ -245,7 +319,12 @@ export function activityFeedContentSignature(
 			hash = hashFeedPart(hash, value);
 		}
 	}
-	return `${effectiveNews.length}:${posts.length}:${effectiveFriend.length}:${(hash >>> 0).toString(16)}`;
+	for (const friend of effectiveFriendItems) {
+		for (const value of [friend.id, friend.date, friend.html]) {
+			hash = hashFeedPart(hash, value);
+		}
+	}
+	return `${effectiveNews.length}:${posts.length}:${effectiveFriendItems.length}:${rawLegacy.length}:${(hash >>> 0).toString(16)}`;
 }
 
 export interface UnifiedActivityFeedSnapshot {
@@ -258,12 +337,12 @@ export function renderUnifiedActivityFeedSnapshot(
 	shortcutAppId: string | null | undefined,
 	newsItems: NewsItem[],
 	fallbackImage: string,
-	friendActivityHtml: string = '',
+	friendActivity: string | FriendActivityFeedItem[] = '',
 ): UnifiedActivityFeedSnapshot {
-	const html = renderUnifiedActivityFeed(steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivityHtml);
+	const html = renderUnifiedActivityFeed(steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivity);
 	return {
 		html,
-		signature: activityFeedContentSignature(steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivityHtml),
+		signature: activityFeedContentSignature(steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivity),
 	};
 }
 
@@ -273,15 +352,15 @@ export function applyUnifiedActivityFeed(
 	shortcutAppId: string | null | undefined,
 	newsItems: NewsItem[],
 	fallbackImage: string,
-	friendActivityHtml: string = '',
+	friendActivity: string | FriendActivityFeedItem[] = '',
 ): boolean {
-	rememberActivityFeedInputs(steamAppId, newsItems, friendActivityHtml);
+	rememberActivityFeedInputs(steamAppId, newsItems, friendActivity);
 	const signature = activityFeedContentSignature(
-		steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivityHtml,
+		steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivity,
 	);
 	if (container.dataset.gdlFeedSignature === signature) return false;
 	const snapshot = renderUnifiedActivityFeedSnapshot(
-		steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivityHtml,
+		steamAppId, shortcutAppId, newsItems, fallbackImage, friendActivity,
 	);
 	container.innerHTML = snapshot.html;
 	container.dataset.gdlFeedSignature = snapshot.signature;
@@ -293,11 +372,11 @@ export function renderUnifiedActivityFeed(
 	shortcutAppId: string | null | undefined,
 	newsItems: NewsItem[],
 	fallbackImage: string,
-	friendActivityHtml: string = ''
+	friendActivity: string | FriendActivityFeedItem[] = '',
 ): string {
-	({ newsItems, friendActivityHtml } = rememberActivityFeedInputs(
-		steamAppId, newsItems, friendActivityHtml,
-	));
+	const { friendItems, legacyFriendHtml } = rememberActivityFeedInputs(
+		steamAppId, newsItems, friendActivity,
+	);
 
 	const localPosts = loadLocalActivityPosts(steamAppId, shortcutAppId);
 	const sortedNews = (Array.isArray(newsItems) ? [...newsItems] : [])
@@ -307,13 +386,19 @@ export function renderUnifiedActivityFeed(
 		Math.max(ACTIVITY_NEWS_PAGE_SIZE, visibleActivityNewsCount.get(steamAppId) || ACTIVITY_NEWS_PAGE_SIZE),
 		sortedNews.length
 	);
-	type FeedItem = { type: 'post'; post: LocalActivityPost; date: number } | { type: 'news'; item: NewsItem; date: number };
+
+	type FeedItem =
+		| { type: 'post'; post: LocalActivityPost; date: number }
+		| { type: 'news'; item: NewsItem; date: number }
+		| { type: 'friend'; item: FriendActivityFeedItem; date: number };
+
 	const allItems: FeedItem[] = [
 		...localPosts.map(p => ({ type: 'post' as const, post: p, date: p.timestamp })),
 		...sortedNews.slice(0, visibleNews).map(item => ({ type: 'news' as const, item, date: Number(item.date || 0) })),
+		...friendItems.map(f => ({ type: 'friend' as const, item: f, date: f.date })),
 	].sort((a, b) => b.date - a.date);
 
-	if (allItems.length === 0 && !friendActivityHtml) {
+	if (allItems.length === 0 && !legacyFriendHtml) {
 		return `<div style="color:#4a5562;font-size:13px;padding:20px 0;">${escapeHtml(gdlText('no_recent_activity', loc('AppActivity_NoActivity', "There's no recent activity from the developers of this title or from your friends.")))}</div>`;
 	}
 
@@ -330,9 +415,9 @@ export function renderUnifiedActivityFeed(
 
 	const n = EVENT_CLASSES();
 	let feedHtml = '';
-	if (sortedNews.length > 0) {
+	if (legacyFriendHtml && friendItems.length === 0) {
+		feedHtml += legacyFriendHtml;
 	}
-	if (friendActivityHtml) feedHtml += friendActivityHtml;
 
 	let firstNewsMarked = false;
 	for (const group of groups) {
@@ -341,6 +426,8 @@ export function renderUnifiedActivityFeed(
 			if (entry.type === 'post') {
 				const p = entry.post;
 				feedHtml += `<div class="gdl-local-post" data-post-id="${escapeHtml(p.id)}" style="margin-bottom:20px;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><img src="${escapeHtml(p.user_avatar)}" style="width:28px;height:28px;border-radius:2px;object-fit:cover;" data-gdl-fallback-src="https://avatars.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg" /><div style="font-size:13px;line-height:1.3;"><span style="font-weight:700;color:#66c0f4;">${escapeHtml(p.user_name)}</span><span style="color:#8f98a0;margin-left:4px;">${escapeHtml(gdlText('status_posted_at', 'posted a status update at'))} ${formatPostTime(p.timestamp)}</span></div><button type="button" class="gdl-delete-post-btn" data-post-id="${escapeHtml(p.id)}" title="${escapeHtml(gdlText('delete_post', 'Delete post'))}" style="margin-left:auto;background:transparent;border:none;color:#56606c;cursor:pointer;padding:4px 6px;border-radius:3px;display:flex;align-items:center;justify-content:center;transition:color 0.15s, background 0.15s;"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button></div><div style="background:#1f252e;border:1px solid rgba(255,255,255,0.025);border-radius:2px;padding:14px 18px;"><div style="font-size:14px;color:#d6d7d8;line-height:1.45;word-break:break-word;">${escapeHtml(p.text)}</div></div></div>`;
+			} else if (entry.type === 'friend') {
+				feedHtml += entry.item.html;
 			} else {
 				const item = entry.item;
 				const eventType = Number(item.event_type || 0);
@@ -408,6 +495,7 @@ function deleteLocalActivityPost(steamAppId: string, postId: string, shortcutApp
 				}
 			} catch {}
 		}
+		void deleteStatusPostOnSteam(postId).catch(() => {});
 	} catch (e) {
 		backendLog('Failed to delete local activity post: ' + e);
 	}

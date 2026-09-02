@@ -277,7 +277,7 @@ function M.fetch_library_assets(request_json)
         local cached_ok, cached_value = pcall(cjson.decode, cached_entry.value)
         if cached_ok and type(cached_value) == "table" and cached_value.install_size ~= nil
             and tonumber(cached_value.install_size_algorithm) == 3
-            and tonumber(cached_value.shortcut_icon_algorithm) == 2
+            and tonumber(cached_value.shortcut_icon_algorithm) == 3
             and tonumber(cached_value.library_asset_language_algorithm) == 2
             and tonumber(cached_value.library_metadata_algorithm) == 1
             and tonumber(cached_value.historical_metadata_algorithm) == 1 then
@@ -292,7 +292,7 @@ function M.fetch_library_assets(request_json)
         timeout = 20,
     })
     if not ok_http or not res or res.status ~= 200 or not res.body then
-        logger:warn("Library assets lookup failed for " .. appid .. " (HTTP "
+        logger:info("Library assets lookup failed for " .. appid .. " (HTTP "
             .. tostring(res and res.status or "error") .. ")")
         return cjson.encode({ error = "request_failed" })
     end
@@ -359,12 +359,21 @@ function M.fetch_library_assets(request_json)
     local client_jpg_legacy = community_asset_url(appid, common.clienticon or common.icon, "jpg")
     local client_jpg_modern = community_icon_asset_url(appid, common.clienticon or common.icon, "jpg")
     local community_icon = community_icon_url(appid, common.icon)
+    local community_icon_legacy = community_asset_url(appid, common.icon, "jpg")
+    local community_icon_modern = community_icon_asset_url(appid, common.icon, "jpg")
+    local community_icon_png = community_asset_url(appid, common.icon, "png")
 
+    -- 1. Official Steam client & sidebar artwork icon (exact 1:1 match with Steam native sidebar)
+    if community_icon_legacy ~= "" then table.insert(shortcut_icons, { url = community_icon_legacy, extension = "jpg" }) end
+    if community_icon_modern ~= "" and community_icon_modern ~= community_icon_legacy then table.insert(shortcut_icons, { url = community_icon_modern, extension = "jpg" }) end
+    if community_icon_png ~= "" then table.insert(shortcut_icons, { url = community_icon_png, extension = "png" }) end
+
+    -- 2. Official executable and community icon variants
+    if client_jpg_legacy ~= "" and client_jpg_legacy ~= community_icon_legacy then table.insert(shortcut_icons, { url = client_jpg_legacy, extension = "jpg" }) end
+    if client_jpg_modern ~= "" and client_jpg_modern ~= community_icon_modern then table.insert(shortcut_icons, { url = client_jpg_modern, extension = "jpg" }) end
     if client_ico_legacy ~= "" then table.insert(shortcut_icons, { url = client_ico_legacy, extension = "ico" }) end
     if client_ico_modern ~= "" and client_ico_modern ~= client_ico_legacy then table.insert(shortcut_icons, { url = client_ico_modern, extension = "ico" }) end
     if client_tga ~= "" then table.insert(shortcut_icons, { url = client_tga, extension = "tga" }) end
-    if client_jpg_legacy ~= "" then table.insert(shortcut_icons, { url = client_jpg_legacy, extension = "jpg" }) end
-    if client_jpg_modern ~= "" and client_jpg_modern ~= client_jpg_legacy then table.insert(shortcut_icons, { url = client_jpg_modern, extension = "jpg" }) end
 
     local result = {
         found = has_library_assets or #shortcut_icons > 0 or community_icon ~= "" or legacy_header ~= "" or legacy_logo ~= "",
@@ -379,7 +388,7 @@ function M.fetch_library_assets(request_json)
         shortcut_icon = shortcut_icons[1] and shortcut_icons[1].url or "",
         shortcut_icon_extension = shortcut_icons[1] and shortcut_icons[1].extension or "",
         shortcut_icons = shortcut_icons,
-        shortcut_icon_algorithm = 2,
+        shortcut_icon_algorithm = 3,
         library_asset_language_algorithm = 2,
         franchise = franchise,
         developers = developers,
@@ -751,12 +760,22 @@ end
 
 local function remove_grid_files(grid_dir, sid, suffixes)
     local removed = 0
-    for _, suffix in ipairs(suffixes) do
-        for _, ext in ipairs({ "jpg", "jpeg", "png", "tga", "ico" }) do
-            local filepath = fs.join(grid_dir, sid .. suffix .. "." .. ext)
-            if fs.exists(filepath) then
-                os.remove(filepath)
-                removed = removed + 1
+    if not fs.exists(grid_dir) then return 0 end
+    local sid_str = tostring(sid or ""):match("(%d+)") or ""
+    if sid_str == "" then return 0 end
+    local sid_num = tonumber(sid_str)
+    local signed_sid = (sid_num and sid_num >= 2147483648) and tostring(math.floor(sid_num - 4294967296)) or nil
+    local ids = { sid_str }
+    if signed_sid then table.insert(ids, signed_sid) end
+
+    for _, id in ipairs(ids) do
+        for _, suffix in ipairs(suffixes) do
+            for _, ext in ipairs({ "jpg", "jpeg", "png", "tga", "ico" }) do
+                local filepath = fs.join(grid_dir, id .. suffix .. "." .. ext)
+                if fs.exists(filepath) then
+                    os.remove(filepath)
+                    removed = removed + 1
+                end
             end
         end
     end

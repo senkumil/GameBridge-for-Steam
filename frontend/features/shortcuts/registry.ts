@@ -1,5 +1,5 @@
 import { findMappingByExe, findMappingForTitle, mappings, shortcutMappingKey } from '../../core/mappings';
-import { getSteamAppStore, readShortcutOverviewField, shortcutExecutableIdentity, shortcutPathBasename } from '../../steam/shortcuts';
+import { getSteamAppStore, readShortcutOverviewField, shortcutExecutableIdentity, shortcutPathBasename, toSignedShortcutAppId } from '../../steam/shortcuts';
 
 export interface ShortcutRecord {
 	id: number;
@@ -79,9 +79,6 @@ export function findMappingForDuplicateShortcut(shortcutAppId: number): string |
 }
 
 export function shortcutAlreadyLinked(id: number): boolean {
-	// Two Steam shortcuts may intentionally launch the same executable/title.
-	// Only this concrete row's mapping marks it linked; never hide the Link
-	// action because a sibling duplicate happens to be linked already.
 	return /^\d+$/.test(String(mappings[shortcutMappingKey(id)] || ''));
 }
 
@@ -90,10 +87,8 @@ export function getCommittedShortcutSteamAppId(id: number): string | null {
 	return /^\d+$/.test(value) ? value : null;
 }
 
-/** Resolve an existing mapping without allowing one shortcut to inherit the
- * identity of another duplicate library row. Once a concrete Shortcut AppID
- * is known, only its exact ID is accepted; executable/title aliases are used
- * only when no concrete shortcut identity is available. */
+/** Resolve an existing mapping. Checks exact shortcut AppID first, then signed/unsigned
+ * variants, and gracefully falls back to title and executable mappings. */
 export function findMappingForShortcut(
 	shortcutAppId?: string | number | null,
 	title?: string | null,
@@ -101,11 +96,18 @@ export function findMappingForShortcut(
 ): string | null {
 	const numId = normalizedShortcutAppId(shortcutAppId);
 	if (numId) {
-		const exact = mappings[shortcutMappingKey(numId)];
-		// Once Steam gives us a concrete shortcut AppID, this row is the only
-		// authoritative owner. Never fall back to title/executable aliases here:
-		// duplicate shortcuts intentionally share both and must link independently.
-		return exact && /^\d+$/.test(String(exact)) ? String(exact) : null;
+		const signedId = toSignedShortcutAppId(numId);
+		const exact = mappings[shortcutMappingKey(numId)]
+			|| mappings[shortcutMappingKey(signedId)]
+			|| (title ? findMappingForTitle(title, numId) : null)
+			|| (exePath ? findMappingByExe(exePath) : null);
+		if (exact && /^\d+$/.test(String(exact))) {
+			const strExact = String(exact);
+			if (!mappings[shortcutMappingKey(numId)]) {
+				mappings[shortcutMappingKey(numId)] = strExact;
+			}
+			return strExact;
+		}
 	}
 
 	if (exePath) {

@@ -77,10 +77,10 @@ export function getCachedNews(steamAppId: string, language = steamLanguageSync()
 
 export function getCachedCommunityContent(steamAppId: string, language = steamLanguageSync() || 'english'):
 	{ data: CommunityContentItem[]; fresh: boolean } | null {
-	const key = `community7_${language}_${steamAppId}`;
+	const key = `community14_${language}_${steamAppId}`;
 	const entry = cacheRead<CommunityContentItem[]>(key, CACHE_TTL.communityContent, CACHE_RETENTION.communityContent);
 	if (entry) return { data: entry.data, fresh: entry.fresh };
-	const legacy = cacheRead<CommunityContentItem[]>(`community6_${language}_${steamAppId}`,
+	const legacy = cacheRead<CommunityContentItem[]>(`community13_${language}_${steamAppId}`,
 		CACHE_TTL.communityContent, CACHE_RETENTION.communityContent);
 	return legacy ? { data: legacy.data, fresh: false } : null;
 }
@@ -104,7 +104,7 @@ export function eventTypeLabel(t: number): string {
 
 export async function getCommunityContent(steamAppId: string, requestedLanguage?: string): Promise<CommunityContentItem[]> {
 	const language = requestedLanguage || await getSteamLanguage().catch(() => steamLanguageSync() || 'english');
-	const cacheKey = `community7_${language}_${steamAppId}`;
+	const cacheKey = `community14_${language}_${steamAppId}`;
 	const cached = cacheGet<CommunityContentItem[]>(cacheKey, CACHE_TTL.communityContent);
 	if (cached !== null) return cached;
 	const stale = getCachedCommunityContent(steamAppId, language)?.data || [];
@@ -113,7 +113,7 @@ export async function getCommunityContent(steamAppId: string, requestedLanguage?
 			const json = await fetchCommunityContentBackend({ steam_app_id: steamAppId, language });
 			const parsed = JSON.parse(json);
 			if (parsed?.error || parsed?.transient_error === true) return null;
-			const items = Array.isArray(parsed.items) ? parsed.items.slice(0, 24) as CommunityContentItem[] : [];
+			const items = Array.isArray(parsed.items) ? parsed.items.slice(0, 80) as CommunityContentItem[] : [];
 			cacheSet(cacheKey, items);
 			return items;
 		} catch (e) {

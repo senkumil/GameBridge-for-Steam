@@ -28,7 +28,7 @@ export function findVisibleTextElement(doc: Document, wanted: string, root?: Nod
 function achievementMedalSvg(extraClass = '', isComplete = false): string {
 	if (isComplete) {
 		return `<svg class="${extraClass}" width="33" height="33" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:block;">
-			<path stroke="url(#gdl-playbar-ribbon-grad)" fill="url(#gdl-playbar-ribbon-grad)" d="M10.1777 10.0258L10.3929 9.80693V9.49999V5.52777H14.2857H14.6001L14.8205 5.30358L18 2.06976L21.1795 5.30358L21.3999 5.52777H21.7143H25.6071V9.50001V9.80696L25.8223 10.0258L28.5553 12.8055L25.8223 15.5853L25.6071 15.8041V16.1111V20.0833H21.7143H21.3999L21.1795 20.3075L18 23.5413L14.8205 20.3075L14.6001 20.0833H14.2857H10.3929V16.1111V15.8042L10.1777 15.5853L7.44464 12.8055L10.1777 10.0258ZM14.7399 28.0317L11.56 33.4221L9.85164 29.9469L9.6456 29.5278H9.17857H6.29474L8.68445 25.3611H12.1142L14.7399 28.0317ZM26.8214 29.5278H26.3544L26.1484 29.9469L24.44 33.4221L21.2601 28.0317L23.8858 25.3611H27.3155L29.7053 29.5278H26.8214Z" stroke-width="1.5"/>
+			<path stroke="url(#gdl-playbar-ribbon-grad)" fill="url(#gdl-playbar-ribbon-grad)" d="M10.1777 10.0258L10.3929 9.80693V9.49999V5.52777H14.2857H14.6001L14.8205 5.30358L18 2.06976L21.1795 5.30358L21.3999 5.52777H21.7143H21.7143H25.6071V9.50001V9.80696L25.8223 10.0258L28.5553 12.8055L25.8223 15.5853L25.6071 15.8041V16.1111V20.0833H21.7143H21.3999L21.1795 20.3075L18 23.5413L14.8205 20.3075L14.6001 20.0833H14.2857H10.3929V16.1111V15.8042L10.1777 15.5853L7.44464 12.8055L10.1777 10.0258ZM14.7399 28.0317L11.56 33.4221L9.85164 29.9469L9.6456 29.5278H9.17857H6.29474L8.68445 25.3611H12.1142L14.7399 28.0317ZM26.8214 29.5278H26.3544L26.1484 29.9469L24.44 33.4221L21.2601 28.0317L23.8858 25.3611H27.3155L29.7053 29.5278H26.8214Z" stroke-width="1.5"/>
 			<circle stroke="#FFAB2C" fill="#FFC82C" cx="18" cy="13" r="5.5"/>
 			<defs>
 				<linearGradient id="gdl-playbar-ribbon-grad" x1="7.08" y1="3.72" x2="33.6694" y2="25.0697" gradientUnits="userSpaceOnUse">
@@ -65,8 +65,15 @@ export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData
 		const cloud = doc.querySelector('[data-gdl-cloud-status="1"]') as HTMLElement | null;
 		if (cloud?.parentElement) sections = [cloud.parentElement];
 		else {
-			const fallback = doc.querySelector('[class*="GameStatsSection"], [class*="gameStatsSection"], [class*="PlayBarStats"], [class*="playBarStats"]') as HTMLElement | null;
-			if (fallback) sections = [fallback];
+			const playtime = doc.querySelector('[data-gdl-playtime="1"], .SVGIcon_PlayTime') as HTMLElement | null;
+			if (playtime?.parentElement?.parentElement) {
+				const candidate = playtime.closest('[class*="GameStatsSection"], [class*="gameStatsSection"], [class*="PlayBarStats"], [class*="playBarStats"]') as HTMLElement | null
+					|| playtime.parentElement.parentElement;
+				if (candidate) sections = [candidate];
+			} else {
+				const fallback = doc.querySelector('[class*="GameStatsSection"], [class*="gameStatsSection"], [class*="PlayBarStats"], [class*="playBarStats"]') as HTMLElement | null;
+				if (fallback) sections = [fallback];
+			}
 		}
 	}
 	if (sections.length === 0) return null;
@@ -95,6 +102,7 @@ export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData
 				|| elementsWithCssModuleClass(stat, classes.DetailsProgressBar)[0]
 				|| null;
 			if (fill) fill.style.width = `${pct}%`;
+			stat.classList.toggle('is-complete', isComplete);
 			updateAchievementMedal(stat, classes, isComplete);
 			applyNativePlaybarTypography(stat, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
 			lastStat = stat;
@@ -102,6 +110,7 @@ export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData
 		}
 		let wrapper = buildNativeAchievementPlaybarBlueprint(doc, data.unlocked, data.total, open);
 		if (wrapper) {
+			wrapper.classList.toggle('is-complete', isComplete);
 			updateAchievementMedal(wrapper, classes, isComplete);
 			applyNativePlaybarTypography(wrapper, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
 			stats.appendChild(wrapper);

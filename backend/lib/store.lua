@@ -132,7 +132,7 @@ function M.fetch_game_data(steam_app_id, language)
     -- failure (HTTP, parse or success=false), not only after a negative JSON.
     local recovered = recover_delisted_game(appid)
     if recovered then return cjson.encode(recovered) end
-    if request_error then logger:warn("Store request failed for " .. appid .. ": " .. request_error) end
+    if request_error then logger:info("Store request failed for " .. appid .. ": " .. request_error) end
     return cjson.encode({ error = "App not found in Steam Store or Steam Community" })
 end
 

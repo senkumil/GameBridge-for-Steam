@@ -216,10 +216,12 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 			// A previous attempt may have committed the mapping before its UI
 			// request was interrupted. Retire that stale queue entry immediately
 			// instead of waiting for its exponential backoff to elapse.
-			if (!job.repairResources && findMappingForShortcut(job.shortcutAppId, job.title, job.shortcutExecutable) === job.steamAppId) {
-				jobs = jobs.filter(candidate => candidate.id !== job.id);
-				writeJobs(jobs);
-				continue;
+			if (findMappingForShortcut(job.shortcutAppId, job.title, job.shortcutExecutable) === job.steamAppId) {
+				if (job.attempts >= 1 || !job.repairResources) {
+					jobs = jobs.filter(candidate => candidate.id !== job.id);
+					writeJobs(jobs);
+					continue;
+				}
 			}
 			if ((job.nextAttemptAt || 0) > Date.now()) continue;
 			job.status = 'running';
@@ -246,14 +248,15 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 				current.shortcutAppId = result.shortcutAppId;
 			}
 			const resourcesComplete = Boolean(result?.setup?.artworkComplete && result?.setup?.iconApplied);
-			if (result?.ok && (!current.repairResources || resourcesComplete)) {
+			const isMapped = findMappingForShortcut(current.shortcutAppId, current.title, current.shortcutExecutable) === current.steamAppId;
+			if (result?.ok || (isMapped && (current.attempts >= 1 || !current.repairResources || resourcesComplete))) {
 				jobs = jobs.filter(candidate => candidate.id !== job.id);
 				writeJobs(jobs);
 				continue;
 			}
 			current.attempts += 1;
 			current.lastError = resourcesComplete ? String(result?.error || 'link_failed') : 'resource_sync_incomplete';
-			const hardFailure = new Set(['invalid_appid', 'refusing_to_modify_native_steam_app']).has(current.lastError);
+			const hardFailure = current.attempts >= 2 || new Set(['invalid_appid', 'refusing_to_modify_native_steam_app']).has(current.lastError);
 			if (hardFailure) {
 				current.status = 'failed';
 				current.nextAttemptAt = 0;

@@ -12,6 +12,7 @@ export const getAllMappings        = callable<[], string>('get_all_mappings');
 export const fetchGameData         = callable<[{ steam_app_id: string; language: string }], string>('fetch_game_data');
 
 export const fetchFriendPersonasBackend = callable<[{ steam_ids_csv: string }], string>('fetch_friend_personas');
+export const fetchCommunityActivityBackend = callable<[{ steam_app_id: string; steam_id64?: string }], string>('fetch_community_activity');
 
 export const fetchCommunityContentBackend = callable<[{ steam_app_id: string; language: string }], string>('fetch_community_content');
 

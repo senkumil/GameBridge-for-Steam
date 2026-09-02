@@ -1,6 +1,6 @@
 import type { CommunityContentItem, SteamGameData } from '../../domain/types';
 import { escapeHtml } from '../../core/text';
-import { gdlText, loc } from '../../steam/localization';
+import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
 import type { NativeLibraryLayout } from './layout';
 
 const progressiveRevealCleanup = new WeakMap<HTMLElement, () => void>();
@@ -96,7 +96,7 @@ export function setupCommunityProgressiveReveal(doc: Document, root: HTMLElement
 
 	let disposed = false;
 	const revealNext = (): void => {
-		for (const card of hiddenCards().slice(0, 6)) card.removeAttribute('hidden');
+		for (const card of hiddenCards().slice(0, 8)) card.removeAttribute('hidden');
 		if (hiddenCards().length === 0) sentinel.style.display = 'none';
 	};
 	const checkScrollPosition = (): void => {
@@ -105,7 +105,7 @@ export function setupCommunityProgressiveReveal(doc: Document, root: HTMLElement
 			return;
 		}
 		const bounds = sentinel.getBoundingClientRect();
-		if (bounds.top <= (doc.defaultView?.innerHeight || 0) + 360) revealNext();
+		if (bounds.top <= (doc.defaultView?.innerHeight || 0) + 480) revealNext();
 	};
 
 	const scrollTargets: EventTarget[] = [doc.defaultView || doc];
@@ -129,7 +129,7 @@ export function setupCommunityProgressiveReveal(doc: Document, root: HTMLElement
 			if (!entries.some(entry => entry.isIntersecting)) return;
 			revealNext();
 			if (hiddenCards().length === 0) intersectionObserver?.disconnect();
-		}, { root: null, rootMargin: '320px 0px' })
+		}, { root: null, rootMargin: '480px 0px' })
 		: null;
 	if (intersectionObserver) intersectionObserver.observe(sentinel);
 	else while (hiddenCards().length > 0) revealNext();
@@ -147,9 +147,8 @@ export function setupCommunityProgressiveReveal(doc: Document, root: HTMLElement
 	return cleanup;
 }
 
-/** Delay optional network community content until its already-rendered section
- * approaches the viewport. Store screenshots remain visible immediately, then
- * the richer community response replaces them in place. */
+/** Eagerly start community content in background and seamlessly hydrate
+ * the community section with rich cards. */
 export function scheduleCommunityHydration(
 	doc: Document,
 	data: SteamGameData,
@@ -169,11 +168,15 @@ export function scheduleCommunityHydration(
 		observer?.disconnect();
 		deferredHydrationCleanup.delete(root);
 	};
+
+	// Eagerly dispatch the request immediately in background without blocking Frame 0
+	const pendingLoad = load();
+
 	const start = (): void => {
 		if (started || disposed) return;
 		started = true;
 		observer?.disconnect();
-		void load().then(items => {
+		void pendingLoad.then(items => {
 			if (disposed || !root.isConnected || !isCurrent()) return;
 			onHydrated?.(items);
 			const inner = root.querySelector<HTMLElement>('#gdl-community-inner');
@@ -190,6 +193,17 @@ export function scheduleCommunityHydration(
 			}
 		}).finally(cleanup);
 	};
+
+	// If inner is empty or has only placeholder screenshots, trigger start as soon as pendingLoad settles
+	void pendingLoad.then(items => {
+		if (!disposed && root.isConnected && isCurrent() && items.length > 0) {
+			const inner = root.querySelector<HTMLElement>('#gdl-community-inner');
+			if (!inner || !inner.querySelector('.gdl-community-card') || root.dataset.gdlCommunitySignature !== communityItemsSignature(items)) {
+				start();
+			}
+		}
+	});
+
 	const Observer = (doc.defaultView as any)?.IntersectionObserver as typeof IntersectionObserver | undefined;
 	if (typeof Observer === 'function') {
 		observer = new Observer(entries => {
@@ -207,17 +221,68 @@ export function communityItemsSignature(items: CommunityContentItem[]): string {
 	return `${items.length}:` + items.map(item => `${item.type}|${item.image}|${item.link || ''}`).join('|');
 }
 
+function hasForeignScript(text: string): boolean {
+	if (!text) return false;
+	return /[\u0400-\u04FF\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(text);
+}
+
+function isSpanishText(text: string): boolean {
+	if (!text) return false;
+	const lower = text.toLowerCase();
+	if (/[áéíóúñ¿¡]/.test(lower)) return true;
+	return /\b(guia|guía|logro|logros|español|castellano|juego|juegos|historia|final|todos|como|cómo|trucos|consejos|secreto|secretos|jefe|jefes|completo|completa|mapa|armas|herramientas|requisitos|diario|alma|acero)\b/i.test(lower);
+}
+
 export function renderCommunityContentHtml(data: SteamGameData, communityItems: CommunityContentItem[] | undefined): string {
 	const items = communityItems && communityItems.length > 0 ? communityItems : [];
 	const fallbackScreenshots = items.length === 0 && !!data.screenshots?.length;
 	const displayItems: CommunityContentItem[] = fallbackScreenshots
-		? data.screenshots!.slice(0, 15).map(screenshot => ({ type: 'screenshot', image: screenshot.path_thumbnail, link: screenshot.path_full }))
+		? data.screenshots!.slice(0, 30).map(screenshot => ({ type: 'screenshot', image: screenshot.path_thumbnail, link: screenshot.path_full }))
 		: items;
 	if (displayItems.length === 0) return '';
 
-	const screenshots = displayItems.filter(item => item.type !== 'guide');
-	const guides = displayItems.filter(item => item.type === 'guide');
-	const ordered = [...screenshots.slice(0, 3), ...guides.slice(0, 3), ...screenshots.slice(3), ...guides.slice(3)];
+	const safeLang = (steamLanguageSync() || 'english').toLowerCase();
+	const isLatinClient = safeLang !== 'russian' && safeLang !== 'schinese' && safeLang !== 'tchinese' && safeLang !== 'japanese' && safeLang !== 'koreana';
+	const isSpanishClient = safeLang === 'spanish' || safeLang === 'latam';
+
+	const filteredItems = displayItems.filter(item => {
+		if (isLatinClient && (hasForeignScript(item.title || '') || hasForeignScript(item.description || ''))) {
+			return false;
+		}
+		return true;
+	});
+
+	const sortByLanguage = (list: CommunityContentItem[]) => {
+		if (!isSpanishClient) return list;
+		return [...list].sort((a, b) => {
+			const aSpanish = (isSpanishText(a.title || '') || isSpanishText(a.description || '')) ? 1 : 0;
+			const bSpanish = (isSpanishText(b.title || '') || isSpanishText(b.description || '')) ? 1 : 0;
+			return bSpanish - aSpanish;
+		});
+	};
+
+	const videos = sortByLanguage(filteredItems.filter(item => item.type === 'video'));
+	const guides = sortByLanguage(filteredItems.filter(item => item.type === 'guide'));
+	const artworks = sortByLanguage(filteredItems.filter(item => item.type === 'artwork'));
+	const screenshots = sortByLanguage(filteredItems.filter(item => item.type === 'screenshot' || (item.type !== 'video' && item.type !== 'guide' && item.type !== 'artwork')));
+
+	const ordered: CommunityContentItem[] = [];
+	const vList = [...videos];
+	const gList = [...guides];
+	const aList = [...artworks];
+	const sList = [...screenshots];
+
+	while (vList.length > 0 || gList.length > 0 || aList.length > 0 || sList.length > 0) {
+		if (vList.length > 0) ordered.push(vList.shift()!);
+		if (aList.length > 0) ordered.push(aList.shift()!);
+		else if (sList.length > 0) ordered.push(sList.shift()!);
+		if (sList.length > 0) ordered.push(sList.shift()!);
+		else if (aList.length > 0) ordered.push(aList.shift()!);
+		if (gList.length > 0) ordered.push(gList.shift()!);
+		if (gList.length > 0) ordered.push(gList.shift()!);
+		if (aList.length > 0) ordered.push(aList.shift()!);
+		if (sList.length > 0) ordered.push(sList.shift()!);
+	}
 
 	const authorBar = (item: CommunityContentItem): string => {
 		if (!item.author_name && !item.author_avatar) return '';
@@ -229,20 +294,32 @@ export function renderCommunityContentHtml(data: SteamGameData, communityItems: 
 
 	const card = (item: CommunityContentItem, index: number): string => {
 		const click = item.link ? ` data-gdl-open-url="${escapeHtml(item.link)}"` : '';
-		const hidden = index >= 9 ? ' hidden' : '';
 		if (item.type === 'guide') {
-			return `<div class="gdl-community-card" data-gdl-community-card="${index}"${hidden}${click}>
+			return `<div class="gdl-community-card gdl-community-card-guide" data-gdl-community-card="${index}"${click}>
 				<div style="padding:8px 12px;background:rgba(0,0,0,.25);font-size:11px;letter-spacing:.5px;font-weight:500;color:#9da4ab;text-transform:uppercase;">${escapeHtml(gdlText('community_guide', 'Community guide').toUpperCase())}</div>
 				<div style="display:flex;gap:12px;padding:12px;align-items:flex-start;">
-					<img src="${escapeHtml(item.image || '')}" style="width:92px;height:92px;object-fit:cover;flex-shrink:0;" data-gdl-hide-on-error="1" />
+					<img src="${escapeHtml(item.image || '')}" loading="lazy" decoding="async" style="width:92px;height:92px;object-fit:cover;flex-shrink:0;" data-gdl-hide-on-error="1" />
 					<div class="gdl-community-card-title" style="font-size:15px;font-weight:500;color:#dcdedf;line-height:1.35;min-width:0;">${escapeHtml(item.title || '')}</div>
 				</div>
 				${item.description ? `<div class="gdl-community-card-description" style="font-size:13px;color:#9da4ab;line-height:1.5;padding:0 12px 12px;">${escapeHtml(item.description)}</div>` : ''}
 				${authorBar(item)}
 			</div>`;
 		}
-		return `<div class="gdl-community-card" data-gdl-community-card="${index}"${hidden}${click}>
-			<img src="${escapeHtml(item.image || '')}" style="width:100%;max-width:100%;aspect-ratio:16/9;object-fit:cover;display:block;" data-gdl-hide-on-error="1" />
+		if (item.type === 'video') {
+			const ytAttr = item.youtube_id ? ` data-gdl-youtube-id="${escapeHtml(item.youtube_id)}"` : '';
+			return `<div class="gdl-community-card gdl-community-card-video" data-gdl-community-card="${index}"${ytAttr}${click}>
+				<div class="gdl-community-video-thumb" style="position:relative;width:100%;max-width:100%;aspect-ratio:16/9;overflow:hidden;background:#000;">
+					<img src="${escapeHtml(item.image || '')}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block;" data-gdl-hide-on-error="1" />
+					<div class="gdl-community-play-button">
+						<svg viewBox="0 0 24 24" style="width:26px;height:26px;fill:#fff;margin-left:3px;"><path d="M8 5v14l11-7z"/></svg>
+					</div>
+				</div>
+				${item.title ? `<div class="gdl-community-card-title" style="padding:8px 12px 4px;font-size:13px;color:#dcdedf;line-height:1.35;">${escapeHtml(item.title)}</div>` : ''}
+				${authorBar(item)}
+			</div>`;
+		}
+		return `<div class="gdl-community-card" data-gdl-community-card="${index}"${click}>
+			<img src="${escapeHtml(item.image || '')}" loading="lazy" decoding="async" style="width:100%;max-width:100%;aspect-ratio:16/9;object-fit:cover;display:block;" data-gdl-hide-on-error="1" />
 			${item.title ? `<div class="gdl-community-card-title" style="padding:8px 12px 4px;font-size:13px;color:#dcdedf;line-height:1.35;">${escapeHtml(item.title)}</div>` : ''}
 			${authorBar(item)}
 		</div>`;

@@ -34,7 +34,11 @@ export async function postStatusUpdate(appId: number, text: string): Promise<boo
 		}
 		if (!playerService) playerService = findModuleExport((candidate: any) => typeof candidate?.PostStatusToFriends === 'function');
 		const MessageClass = findProtoMessageClass('CPlayer_PostStatusToFriends_Request');
-		const transport = (window as any).appAchievementProgressCache?.m_CMInterface?.GetServiceTransport?.();
+		const transport = (window as any).appAchievementProgressCache?.m_CMInterface?.GetServiceTransport?.()
+			|| (window as any).CMInterface?.GetServiceTransport?.()
+			|| (window as any).SteamClient?.Stats?.GetServiceTransport?.()
+			|| (window as any).appActivityStore?.m_CMInterface?.GetServiceTransport?.()
+			|| (findModuleExport((candidate: any) => typeof candidate?.GetServiceTransport === 'function') as any)?.GetServiceTransport?.();
 		if (!messageWrapper || !playerService || !MessageClass || !transport) {
 			backendLog(`Post status: missing Steam internals (wrapper=${!!messageWrapper} service=${!!playerService} msg=${!!MessageClass} transport=${!!transport})`);
 			return false;
@@ -50,6 +54,36 @@ export async function postStatusUpdate(appId: number, text: string): Promise<boo
 		backendLog('Post status error: ' + error);
 		return false;
 	}
+}
+
+export async function deleteStatusPostOnSteam(postId: string): Promise<boolean> {
+	try {
+		const protoDelete = findProtoMessageClass('CPlayer_DeleteStatus_Request')
+			|| findProtoMessageClass('CPlayer_DeletePost_Request')
+			|| findProtoMessageClass('CCommunity_DeletePost_Request');
+		if (protoDelete && playerService && messageWrapper) {
+			const transport = (window as any).appAchievementProgressCache?.m_CMInterface?.GetServiceTransport?.()
+				|| (window as any).CMInterface?.GetServiceTransport?.()
+				|| (window as any).SteamClient?.Stats?.GetServiceTransport?.()
+				|| (window as any).appActivityStore?.m_CMInterface?.GetServiceTransport?.();
+			if (transport) {
+				const message = messageWrapper.Init(protoDelete);
+				if (typeof message.Body().set_post_id === 'function') message.Body().set_post_id(postId);
+				if (typeof message.Body().set_postid === 'function') message.Body().set_postid(postId);
+				if (typeof playerService.DeleteStatus === 'function') {
+					await playerService.DeleteStatus(transport, message);
+					return true;
+				}
+				if (typeof playerService.DeletePost === 'function') {
+					await playerService.DeletePost(transport, message);
+					return true;
+				}
+			}
+		}
+	} catch (e) {
+		backendLog('deleteStatusPostOnSteam RPC error: ' + e);
+	}
+	return false;
 }
 
 export function clearSteamSocialCaches(): void {

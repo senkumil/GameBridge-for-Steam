@@ -7,7 +7,7 @@ using System.Threading;
 
 namespace SteamAchievementSync
 {
-    class Program
+    public class Program
     {
         static string ResultFilePath;
 
@@ -159,7 +159,7 @@ namespace SteamAchievementSync
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
         }
 
-        static void Main(string[] args)
+        public static void Main(string[] args)
         {
             try
             {

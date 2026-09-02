@@ -6,6 +6,12 @@ export async function clearShortcutArtworkForAppIdChange(shortcutAppId: number):
 	if (!Number.isFinite(shortcutAppId) || shortcutAppId < 2147483648) return;
 	await supersedeArtworkApplications(shortcutAppId);
 	try {
+		for (let i = localStorage.length - 1; i >= 0; i--) {
+			const key = localStorage.key(i);
+			if (key && (key.startsWith(`gdl_art_${shortcutAppId}`) || key.startsWith(`gdl_logo_pos_${shortcutAppId}`) || key.startsWith(`gdl_comm_art_${shortcutAppId}`))) {
+				localStorage.removeItem(key);
+			}
+		}
 		// The backend removes the persisted icon/grid files. Await it so a slow
 		// cleanup cannot delete the replacement icon after relinking finishes.
 		await clearArtworkBackend({ shortcut_app_id: String(shortcutAppId) });

@@ -156,14 +156,12 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 	const [preferences, setPreferencesState] = React.useState(() => getPreferences());
 	React.useEffect(() => subscribePreferences(setPreferencesState), []);
 	const [shortcutRevision, setShortcutRevision] = React.useState(0);
-	const [localActionBusy, setLocalActionBusy] = React.useState<string>('');
 	const [shortcutActionStatus, setShortcutActionStatus] = React.useState<{ text: string; color: string } | null>(null);
 	const [bulkLinkGlobal, setBulkLinkGlobal] = React.useState(() => getBulkLinkState());
 	React.useEffect(() => subscribeBulkLinkState(setBulkLinkGlobal), []);
 
-	const shortcutActionBusy = bulkLinkGlobal.busy || localActionBusy;
+	const shortcutActionBusy = bulkLinkGlobal.busy;
 	const bulkLinkProgress = bulkLinkGlobal.progress;
-	const bulkLinkStatus = bulkLinkGlobal.status;
 	const bulkLinkReport = bulkLinkGlobal.report;
 	React.useEffect(() => {
 		const refresh = (): void => setShortcutRevision(value => value + 1);
@@ -192,6 +190,47 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 	const bulkNotLinked = bulkLinkReport?.outcomes.filter(item => item.status === 'skipped' || item.status === 'failed') || [];
 	const bulkQueued = bulkLinkReport?.outcomes.filter(item => (item.status === 'queued' || item.resourceRepairQueued)
 		&& hasPendingLinkJob(item.shortcutAppId, item.title)) || [];
+
+	const dynamicBulkLinkStatus = React.useMemo(() => {
+		if (!bulkLinkGlobal.status) return null;
+		if (bulkLinkGlobal.busy === 'bulk-link') return bulkLinkGlobal.status;
+		if (!bulkLinkReport) return bulkLinkGlobal.status;
+		if (bulkLinkReport.total === 0) {
+			return { text: gdlText('bulk_link_none', 'There are no unlinked games to review.'), color: '#8f98a0' };
+		}
+		const pendingCount = bulkQueued.length;
+		const notLinkedCount = bulkNotLinked.length;
+		const totalConsidered = bulkLinkReport.total;
+		const successfullyLinkedCount = Math.max(0, totalConsidered - notLinkedCount);
+
+		if (notLinkedCount === 0) {
+			if (pendingCount > 0) {
+				return {
+					text: gdlText('bulk_link_success_pending', 'Bulk linking completed: {linked} of {total} linked ({pending} downloading artwork in background).', {
+						linked: String(successfullyLinkedCount),
+						total: String(totalConsidered),
+						pending: String(pendingCount),
+					}),
+					color: '#59bf40',
+				};
+			}
+			return {
+				text: gdlText('bulk_link_all_success', 'Bulk linking completed: all {total} game(s) linked successfully.', {
+					total: String(totalConsidered),
+				}),
+				color: '#59bf40',
+			};
+		}
+		return {
+			text: gdlText('bulk_link_result', 'Bulk link completed: {linked} linked, {queued} in background, {skipped} ambiguous skipped, {failed} failed.', {
+				linked: String(successfullyLinkedCount - pendingCount),
+				queued: String(pendingCount),
+				skipped: String(bulkLinkReport.skipped),
+				failed: String(bulkLinkReport.failed),
+			}),
+			color: '#d6b25e',
+		};
+	}, [bulkLinkGlobal.status, bulkLinkGlobal.busy, bulkLinkReport, bulkQueued.length, bulkNotLinked.length]);
 
 	const updatePreferences = (patch: Parameters<typeof setPreferences>[0]): void => {
 		const next = setPreferences(patch);
@@ -370,7 +409,7 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 			const finishedStatus = result.total === 0
 				? { text: gdlText('bulk_link_none', 'There are no unlinked games to review.'), color: '#8f98a0' }
 				: {
-					text: gdlText('bulk_link_result', 'Bulk link finished: {linked} linked, {queued} queued for retry, {skipped} ambiguous skipped, {failed} failed.', {
+					text: gdlText('bulk_link_result', 'Bulk link finished: {linked} linked, {queued} in background, {skipped} ambiguous skipped, {failed} failed.', {
 						linked: String(result.linked), queued: String(result.queued), skipped: String(result.skipped), failed: String(result.failed),
 					}),
 					color: result.failed > 0 || result.skipped > 0 ? '#d6b25e' : '#59bf40',
@@ -400,41 +439,51 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 
 	const unlinkAllShortcuts = async (): Promise<void> => {
 		if (shortcutActionBusy) return;
-		setLocalActionBusy('all');
 		setBulkLinkState({ progress: null, status: null, report: null });
-		setShortcutActionStatus({ text: gdlText('bulk_unlinking', 'Unlinking all NativeGameLink games...'), color: '#8f98a0' });
-		try {
-			const result = await unlinkAllShortcutsFromSteam();
-			setShortcutRevision(value => value + 1);
-			setShortcutActionStatus({
-				text: result.ok
-					? gdlText('bulk_unlink_success', 'All linked games were unlinked. Automatic prompts remain suppressed until you explicitly link again.')
-					: gdlText('bulk_unlink_partial', 'Some games could not be unlinked ({failed} failed).', { failed: String(result.failed) }),
-				color: result.ok ? '#59bf40' : '#d6b25e',
-			});
-		} catch (error) {
-			backendLog('Bulk unlink failed: ' + String(error));
-			setShortcutActionStatus({ text: gdlText('bulk_unlink_failed', 'Could not unlink all games.'), color: '#d94126' });
-		} finally {
-			setLocalActionBusy('');
-		}
+		setShortcutActionStatus({
+			text: gdlText('bulk_unlink_success', 'All linked games were unlinked. Automatic prompts remain suppressed until you explicitly link again.'),
+			color: '#59bf40',
+		});
+		setShortcutRevision(value => value + 1);
+
+		void (async () => {
+			try {
+				const result = await unlinkAllShortcutsFromSteam();
+				setShortcutRevision(value => value + 1);
+				if (!result.ok) {
+					setShortcutActionStatus({
+						text: gdlText('bulk_unlink_partial', 'Some games could not be unlinked ({failed} failed).', { failed: String(result.failed) }),
+						color: '#d6b25e',
+					});
+				}
+			} catch (error) {
+				backendLog('Bulk unlink failed: ' + String(error));
+				setShortcutActionStatus({ text: gdlText('bulk_unlink_failed', 'Could not unlink all games.'), color: '#d94126' });
+			}
+		})();
 	};
 
 	const unlinkOneShortcut = async (row: { id: number; title: string; steamAppId: string }): Promise<void> => {
 		if (shortcutActionBusy) return;
-		setLocalActionBusy(String(row.id));
-		try {
-			const result = await unlinkShortcutFromSteam({ shortcutAppId: row.id, title: row.title, steamAppId: row.steamAppId || undefined });
-			setShortcutRevision(value => value + 1);
-			setShortcutActionStatus({
-				text: result.ok
-					? gdlText('settings_unlink_one_success', 'Unlinked: {game}', { game: row.title })
-					: gdlText('settings_unlink_one_failed', 'Could not unlink: {game}', { game: row.title }),
-				color: result.ok ? '#59bf40' : '#d94126',
-			});
-		} finally {
-			setLocalActionBusy('');
-		}
+		setShortcutRevision(value => value + 1);
+		setShortcutActionStatus({
+			text: gdlText('settings_unlink_one_success', 'Unlinked: {game}', { game: row.title }),
+			color: '#59bf40',
+		});
+		void (async () => {
+			try {
+				const result = await unlinkShortcutFromSteam({ shortcutAppId: row.id, title: row.title, steamAppId: row.steamAppId || undefined });
+				setShortcutRevision(value => value + 1);
+				if (!result.ok) {
+					setShortcutActionStatus({
+						text: gdlText('settings_unlink_one_failed', 'Could not unlink: {game}', { game: row.title }),
+						color: '#d94126',
+					});
+				}
+			} catch (error) {
+				backendLog('Single unlink failed: ' + String(error));
+			}
+		})();
 	};
 
 	const disabled = loadingPath || savingPath;
@@ -683,7 +732,7 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 							</div>
 						</div>
 						{shortcutActionStatus && <div style={{ marginTop: '8px', color: shortcutActionStatus.color, fontSize: '11.5px' }}>{shortcutActionStatus.text}</div>}
-						{bulkLinkStatus && <div style={{ marginTop: '8px', color: bulkLinkStatus.color, fontSize: '11.5px', lineHeight: 1.4 }}>{bulkLinkStatus.text}</div>}
+						{dynamicBulkLinkStatus && <div style={{ marginTop: '8px', color: dynamicBulkLinkStatus.color, fontSize: '11.5px', lineHeight: 1.4 }}>{dynamicBulkLinkStatus.text}</div>}
 						{bulkLinkProgress && shortcutActionBusy === 'bulk-link' && (
 							<div style={{ marginTop: '9px' }}>
 								<div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', color: '#c6d4df', fontSize: '11px' }}>

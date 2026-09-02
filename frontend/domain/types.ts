@@ -17,6 +17,7 @@ export interface FriendPlayInfo {
 export interface FriendCategories {
 	recentlyPlayed: FriendPlayInfo[];
 	previouslyPlayed: FriendPlayInfo[];
+	wishlisted?: FriendPlayInfo[];
 	totalCount: number;
 }
 
@@ -29,6 +30,7 @@ export interface CommunityContentItem {
 	author_name?: string;
 	author_avatar?: string;
 	link?: string;
+	youtube_id?: string;
 }
 
 export interface SteamCommunityCardAsset {

@@ -261,9 +261,12 @@ export function tryInjectNativePropertiesField(doc: Document, gameTitle: string,
 				return;
 			}
 
-			const rawData = await fetchLocalAchievementsBackend({
-				request_json: JSON.stringify({ steam_app_id: steamAppId, non_steam_id: steamAppId }),
-			});
+			const [rawData, rawStatus] = await Promise.all([
+				fetchLocalAchievementsBackend({
+					request_json: JSON.stringify({ steam_app_id: steamAppId, non_steam_id: steamAppId }),
+				}),
+				fetchSteamAccountAchievementsBackend({ steam_app_id: steamAppId }),
+			]);
 			const data = parseIpcObject<LocalAchievementData>(rawData);
 			if (!data || !Array.isArray(data.achievements) || data.achievements.length === 0) {
 				statusEl.textContent = gdlText('native_steam_achievements_no_achievements', 'This game has no achievements on Steam.');
@@ -272,8 +275,6 @@ export function tryInjectNativePropertiesField(doc: Document, gameTitle: string,
 				return;
 			}
 
-			// Also fetch live Steam account status if available
-			const rawStatus = await fetchSteamAccountAchievementsBackend({ steam_app_id: steamAppId });
 			const statusData = parseIpcObject<{ ok?: boolean; achievements?: Record<string, { achieved?: boolean }> }>(rawStatus);
 
 			if (statusData?.ok && statusData.achievements) {

@@ -4,6 +4,10 @@ export function escapeHtml(str: string): string {
 	return d.innerHTML;
 }
 
+export function escapeAttr(str: string): string {
+	return escapeHtml(str).replace(/"/g, '&quot;');
+}
+
 export function stripSurroundingQuotes(value: string): string {
 	let text = (value || '').trim();
 	// Remove outer matching quotes (e.g. "Game", «Game», “Game”, 'Game')

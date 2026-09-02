@@ -53,7 +53,7 @@ export async function applyCommunityArtworkSelection(
 	if (complete) {
 		saveCommunityArtworkSelection(targetAppId, steamAppId, selection);
 		recordUserArtworkApplication(targetAppId, steamAppId, successfulSlots, selection);
-		try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId: targetAppId, steamAppId } })); } catch {}
+		try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId: targetAppId, steamAppId, user_action: true } })); } catch {}
 	}
 	return { complete, slots: successfulSlots, missing, communitySlots: complete ? [...slotNames] : [] };
 }

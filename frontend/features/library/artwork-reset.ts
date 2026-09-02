@@ -21,7 +21,7 @@ export async function resetShortcutArtworkToDefault(
 	}
 	// For native Steam games, clearing custom artwork allows Steam to display its native artwork
 	if (shortcutAppId < 2147483648) {
-		try { window.dispatchEvent(new Event('gdl:artwork-changed')); } catch {}
+		try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId, user_action: true } })); } catch {}
 		return { complete: true, slots: [0, 1, 2, 3], missing: [], communitySlots: [] };
 	}
 	// The backend endpoint preserves the shortcut icon, so resetting artwork
@@ -31,7 +31,7 @@ export async function resetShortcutArtworkToDefault(
 	});
 	const result = await spoofArtwork(shortcutAppId, steamAppId, gameTitle, true);
 	if (result.slots.length) {
-		try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId } })); } catch {}
+		try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId, user_action: true } })); } catch {}
 	}
 	return result;
 }

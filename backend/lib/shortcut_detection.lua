@@ -408,7 +408,7 @@ local function detection_add_reason(candidate, reason)
     end
 end
 
-local function detection_direct_result(appid, source, request, language, launcher, generic_launcher)
+local function detection_direct_result(appid, source, request, language, launcher, generic_launcher, fallback_name)
     local data = detection_fetch_appdetails(appid, language)
     -- Local steam_appid.txt files are common in launchers and modified game
     -- folders. They are a useful hint, not proof: only promote one to an
@@ -419,15 +419,22 @@ local function detection_direct_result(appid, source, request, language, launche
     if not data or not data.name or data.name == "" then
         local appinfo = detection_fetch_appinfo(appid)
         local common = type(appinfo) == "table" and type(appinfo.common) == "table" and appinfo.common or nil
-        if not common or not common.name or tostring(common.name) == "" then return nil end
-        local app_type = tostring(common.type or ""):lower()
-        if app_type ~= "" and app_type ~= "game" and app_type ~= "app" then return nil end
-        data = { name = tostring(common.name) }
-        validation_source = "steam_appinfo"
+        if common and common.name and tostring(common.name) ~= "" then
+            local app_type = tostring(common.type or ""):lower()
+            if app_type == "" or app_type == "game" or app_type == "app" then
+                data = { name = tostring(common.name) }
+                validation_source = "steam_appinfo"
+            end
+        end
     end
+    if (not data or not data.name or data.name == "") and fallback_name and fallback_name ~= "" then
+        data = { name = fallback_name }
+        validation_source = "maintained_alias_catalogue"
+    end
+    if not data or not data.name or data.name == "" then return nil end
     local name = data.name
     local image = data.header_image or data.tiny_image
-        or ("https://cdn.cloudflare.steamstatic.com/steam/apps/" .. tostring(appid) .. "/header.jpg")
+        or ("https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/" .. tostring(appid) .. "/header.jpg")
     return {
         candidates = {{
             appid = tostring(appid),
@@ -525,16 +532,16 @@ function M.detect_game_candidates(request_json)
     -- AppID therefore falls back to the normal ranked-candidate path.
     local function automatic_alias_appid(value)
         local normalized = detection_normalize(value)
-        if normalized == "" then return nil end
+        if normalized == "" then return nil, nil end
         local alias = KNOWN_TITLE_ALIASES[normalized:gsub("%s+", "")]
             or KNOWN_TITLE_ALIASES[normalized]
         local appid = alias and tostring(alias.auto_appid or "") or ""
-        return appid:match("^%d+$") and appid or nil
+        return (appid:match("^%d+$") and appid or nil), (alias and alias.name or nil)
     end
     for _, identity_hint in ipairs({ title_hint, title_cleaned, exe_stem, raw_exe_stem }) do
-        local alias_appid = automatic_alias_appid(identity_hint)
+        local alias_appid, alias_name = automatic_alias_appid(identity_hint)
         if alias_appid then
-            local direct = detection_direct_result(alias_appid, "maintained_alias", request, language, launcher, generic_launcher)
+            local direct = detection_direct_result(alias_appid, "maintained_alias", request, language, launcher, generic_launcher, alias_name)
             if direct then
                 local encoded = detection_encode(direct)
                 detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 })

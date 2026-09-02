@@ -14,6 +14,26 @@ export function disposeTradingCardPreview(doc: Document): void {
 	tradingCardPreviewCleanup.get(doc)?.();
 }
 
+export function resetTradingCardTilts(doc: Document): void {
+	for (const card of Array.from(doc.querySelectorAll<HTMLElement>('.gdl-trading-card.gdl-card-tilt-active'))) {
+		card.classList.remove('gdl-card-tilt-active');
+		const surface = card.querySelector<HTMLElement>('.gdl-trading-card-surface');
+		const hitbox = card.querySelector<HTMLElement>('.gdl-trading-card-hitbox');
+		if (surface) {
+			for (const property of ['left', 'top', 'width', 'height', 'transform']) surface.style.removeProperty(property);
+		}
+		if (hitbox) {
+			for (const property of ['left', 'top', 'width', 'height']) hitbox.style.removeProperty(property);
+		}
+		card.style.removeProperty('--gdl-card-angle');
+		card.style.removeProperty('--gdl-sheen-alpha');
+		card.style.removeProperty('--gdl-sheen-brightness');
+		card.style.removeProperty('--gdl-card-pointer-x');
+		card.style.removeProperty('--gdl-card-pointer-y');
+		card.style.removeProperty('--gdl-cursor-glow-alpha');
+	}
+}
+
 export function disposeResponsiveTradingCardGrids(doc: Document): void {
 	for (const [section, cleanup] of Array.from(responsiveGridCleanups)) {
 		if (section.ownerDocument === doc) cleanup();
@@ -23,6 +43,7 @@ export function disposeResponsiveTradingCardGrids(doc: Document): void {
 function openTradingCardPreview(doc: Document, imageUrl: string, gameName: string): void {
 	if (!doc.body || !imageUrl) return;
 	disposeTradingCardPreview(doc);
+	resetTradingCardTilts(doc);
 
 	const overlay = doc.createElement('div');
 	overlay.id = 'gdl-trading-card-preview';
@@ -95,6 +116,7 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 		doc.defaultView?.removeEventListener('resize', onWindowResize);
 		overlay.remove();
 		tradingCardPreviewCleanup.delete(doc);
+		resetTradingCardTilts(doc);
 	};
 	const onPreviewPointerUp = (event: PointerEvent): void => {
 		const target = event.target instanceof Element
@@ -150,12 +172,25 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 	const trackDocumentPointer = (event: PointerEvent): void => {
 		lastClientX = event.clientX;
 		lastClientY = event.clientY;
-		if (!root.isConnected) doc.removeEventListener('pointermove', trackDocumentPointer, true);
+		if (!root.isConnected) {
+			doc.removeEventListener('pointermove', trackDocumentPointer, true);
+			doc.removeEventListener('pointerleave', onPointerLeaveOrScroll);
+			doc.defaultView?.removeEventListener('scroll', onPointerLeaveOrScroll, true);
+			doc.defaultView?.removeEventListener('blur', onPointerLeaveOrScroll);
+			doc.removeEventListener('visibilitychange', onPointerLeaveOrScroll);
+		}
+	};
+	const onPointerLeaveOrScroll = (): void => {
+		if (activeReset) activeReset();
 	};
 	// The pointer may leave the whole sidebar before the delayed leave check
 	// runs. Track it at document level so that check never uses stale in-panel
 	// coordinates and leaves a card expanded after the cursor moved away.
 	doc.addEventListener('pointermove', trackDocumentPointer, { capture: true, passive: true });
+	doc.addEventListener('pointerleave', onPointerLeaveOrScroll, { passive: true });
+	doc.defaultView?.addEventListener('scroll', onPointerLeaveOrScroll, { passive: true, capture: true });
+	doc.defaultView?.addEventListener('blur', onPointerLeaveOrScroll);
+	doc.addEventListener('visibilitychange', onPointerLeaveOrScroll);
 
 	// CEF does not always emit a fresh pointerenter after an expanded card is
 	// removed from beneath the cursor. Pointer movement therefore also acts as
@@ -364,6 +399,8 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 
 		card.addEventListener('pointercancel', reset);
 		const openPreview = (): void => {
+			reset();
+			resetTradingCardTilts(card.ownerDocument);
 			const image = card.querySelector<HTMLImageElement>('img');
 			const imageUrl = card.dataset.gdlFullImage || image?.currentSrc || image?.src || '';
 			const gameName = root.querySelector<HTMLElement>('.gdl-trading-badge')?.title || '';

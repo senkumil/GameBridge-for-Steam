@@ -139,13 +139,12 @@ function ensureFallbackPanel(doc: Document, strip: HTMLElement): HTMLElement | n
 	panel.id = 'gdl-bp-detail-fallback-panel';
 	panel.dataset.gdlBpFallbackPanel = '1';
 	panel.setAttribute('aria-live', 'polite');
+	panel.style.cssText = 'display: block !important; visibility: visible !important; width: 100%; min-height: 400px; position: relative; z-index: 10;';
 	mount.parent.insertBefore(panel, mount.anchor.nextSibling);
 	return panel;
 }
 
-/** Mount inside Steam's own active tabpanel. If a Steam version omits that
- * empty panel for shortcuts, create an adjacent owned region without moving
- * the React-owned tab strip or interfering with its controller focus. */
+/** Mount inside Steam's own active tabpanel or directly adjacent fallback region. */
 export function ensureNativePanelRoot(
 	doc: Document,
 	tabs: BigPictureNativeTabs,
@@ -160,6 +159,7 @@ export function ensureNativePanelRoot(
 		root.id = 'gdl-bp-detail-root';
 		root.dataset.gdlBigPictureDetails = '1';
 	}
+	root.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important; width: 100%; min-height: 350px;';
 	for (const previous of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-native-panel="1"]'))) {
 		if (previous !== panel) delete previous.dataset.gdlBpNativePanel;
 	}

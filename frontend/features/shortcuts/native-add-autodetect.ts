@@ -22,6 +22,7 @@ const knownShortcutIdentities = new Set<string>();
 const handledIds = new Set<number>();
 const handledIdentities = new Set<string>();
 const handledExecutables = new Set<string>();
+const reconciledLauncherBypassMap = new Map<number, string>();
 
 let baselineIds = new Set<number>();
 let baselineIdentities = new Set<string>();
@@ -139,13 +140,19 @@ function scanForNewlyAddedShortcuts(): void {
 				if (shouldAutoApplyNoLauncher(steamAppId)) {
 					if (!hasNoLauncherOption(currentOptions)) {
 						const updated = mergeNoLauncherOption(currentOptions, steamAppId);
-						void apps.SetShortcutLaunchOptions(record.id, updated);
-						backendLog(`Auto-reconciled launcher bypass for "${record.title}" (${record.id}): "${updated}"`);
+						if (reconciledLauncherBypassMap.get(record.id) !== updated) {
+							reconciledLauncherBypassMap.set(record.id, updated);
+							void apps.SetShortcutLaunchOptions(record.id, updated);
+							backendLog(`Auto-reconciled launcher bypass for "${record.title}" (${record.id}): "${updated}"`);
+						}
 					}
 				} else if (hasNoLauncherOption(currentOptions)) {
 					const cleaned = removeIncompatibleLauncherBypass(currentOptions, steamAppId);
-					void apps.SetShortcutLaunchOptions(record.id, cleaned);
-					backendLog(`Cleaned incompatible launcher bypass for "${record.title}" (${record.id}): "${cleaned}"`);
+					if (reconciledLauncherBypassMap.get(record.id) !== cleaned) {
+						reconciledLauncherBypassMap.set(record.id, cleaned);
+						void apps.SetShortcutLaunchOptions(record.id, cleaned);
+						backendLog(`Cleaned incompatible launcher bypass for "${record.title}" (${record.id}): "${cleaned}"`);
+					}
 				}
 			}
 		}
@@ -336,5 +343,6 @@ export function stopNativeAddAutoDetector(): void {
 	handledIds.clear();
 	handledIdentities.clear();
 	handledExecutables.clear();
+	reconciledLauncherBypassMap.clear();
 	clearInteractionListeners();
 }

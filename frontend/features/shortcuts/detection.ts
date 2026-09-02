@@ -92,8 +92,7 @@ export async function buildShortcutDetectionContext(
 		}
 	}
 
-	{
-		const neededPathFallback = !exePath || !startDir;
+	if (!exePath || !startDir) {
 		try {
 			const raw = await getShortcutDetailsBackend({ shortcut_app_id: String(shortcutAppId), title: title || '' });
 			let details: any = raw;
@@ -107,7 +106,7 @@ export async function buildShortcutDetectionContext(
 				recommendedExePath = cleanShortcutPath(details.recommended_exe_path || '');
 				recommendedStartDir = cleanShortcutPath(details.recommended_start_dir || '');
 				trackingExecutableAutoApply = details.tracking_executable_auto_apply === true;
-				if (neededPathFallback && exePath) backendLog(`Resolved shortcut executable from shortcuts.vdf for ${title || backendTitle || shortcutAppId}`);
+				if (exePath) backendLog(`Resolved shortcut executable from shortcuts.vdf for ${title || backendTitle || shortcutAppId}`);
 			}
 		} catch (error) {
 			backendLog(`Could not read shortcut ${shortcutAppId} from shortcuts.vdf: ${error}`);

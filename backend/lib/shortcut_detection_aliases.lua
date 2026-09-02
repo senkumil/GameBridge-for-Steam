@@ -84,5 +84,6 @@ return {
     ["sparking zero"] = { name = "DRAGON BALL: Sparking! ZERO", appids = { "1790600" }, auto_appid = "1790600" },
     ["sparking"] = { name = "DRAGON BALL: Sparking! ZERO", appids = { "1790600" } },
     ["dragon ball sparking zero"] = { name = "DRAGON BALL: Sparking! ZERO", appids = { "1790600" }, auto_appid = "1790600" },
+    ["pragmata"] = { name = "PRAGMATA", appids = { "1367590", "3357650" }, auto_appid = "1367590" },
 }
 end

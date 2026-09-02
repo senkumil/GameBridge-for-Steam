@@ -93,7 +93,7 @@ end
 -- ── Friend persona fetching (batch, cached) ───────────────────────────
 local friend_persona_cache = {}
 local FRIEND_PERSONA_CACHE_LIMIT = 128
-local FRIEND_PERSONA_MAX_REQUESTS = 8
+local FRIEND_PERSONA_MAX_REQUESTS = 32
 local FRIEND_PERSONA_CACHE_SECONDS = 15 * 60
 local FRIEND_PERSONA_FAILURE_CACHE_SECONDS = 60
 
@@ -137,6 +137,101 @@ function M.fetch_friend_personas(steam_ids_csv)
     end
 
     return cjson.encode(results)
+end
+
+-- ── Community Activity scraping (from public community feeds) ────────────
+local activity_cache = {}
+local ACTIVITY_CACHE_LIMIT = 32
+local ACTIVITY_CACHE_SECONDS = 30
+
+function M.fetch_community_activity(steam_app_id, steam_id64)
+    local appid = tostring(steam_app_id or ""):match("(%d+)") or ""
+    local sid = tostring(steam_id64 or ""):match("(%d+)") or ""
+    if appid == "" and sid == "" then return "[]" end
+
+    local cache_key = appid .. "_" .. sid
+    local now = os.time()
+    local cached = activity_cache[cache_key]
+    if cached and cached.expires_at > now then
+        lru.touch(cached)
+        return cached.value
+    end
+
+    local events = {}
+    local seen_keys = {}
+
+    local urls = {}
+    if sid ~= "" and #sid >= 15 then
+        table.insert(urls, "https://steamcommunity.com/profiles/" .. sid .. "/home/")
+    end
+    if appid ~= "" then
+        table.insert(urls, "https://steamcommunity.com/app/" .. appid .. "/home/")
+    end
+
+    local function process_post(chunk)
+        if not chunk or chunk == "" then return end
+        local has_app = (appid == "" or chunk:find("/app/" .. appid, 1, true) ~= nil or chunk:find("app/" .. appid, 1, true) ~= nil)
+        if not has_app then return end
+
+        local actor_sid = chunk:match('profiles/(%d+)') or ""
+        local actor_name = chunk:match('<a%s+class="whiteLink"%s+href="[^"]*">(.-)</a>')
+            or chunk:match('<span%s+class="persona[^"]*">(.-)</span>')
+            or chunk:match('class="blotter_author_block.-<a[^>]*>(.-)</a>') or ""
+        local actor_avatar = chunk:match('<img%s+src="([^"]*avatars[^"]*)"')
+            or chunk:match('<img%s+src="([^"]*avatar[^"]*)"') or ""
+        local status_text = chunk:match('<div%s+class="blotter_userstatus_content[^"]*">%s*(.-)%s*</div>')
+            or chunk:match('<div%s+class="blotter_status_text[^"]*">%s*(.-)%s*</div>')
+            or chunk:match('<blockquote[^>]*>%s*(.-)%s*</blockquote>') or ""
+        local is_wishlist = chunk:find("lista de deseados", 1, true) ~= nil
+            or chunk:find("wishlist", 1, true) ~= nil
+
+        actor_name = strip_html(actor_name)
+        status_text = strip_html(status_text)
+
+        if actor_sid == "" and actor_name == "" and status_text == "" then return end
+
+        local item_key = actor_sid .. "_" .. status_text .. "_" .. (is_wishlist and "1" or "0")
+        if not seen_keys[item_key] then
+            seen_keys[item_key] = true
+            if status_text ~= "" then
+                table.insert(events, {
+                    type = 16,
+                    steamid = actor_sid,
+                    name = actor_name,
+                    avatar = actor_avatar,
+                    text = status_text,
+                    time = now
+                })
+            elseif is_wishlist then
+                table.insert(events, {
+                    type = 9,
+                    steamid = actor_sid,
+                    name = actor_name,
+                    avatar = actor_avatar,
+                    time = now
+                })
+            end
+        end
+    end
+
+    for _, target_url in ipairs(urls) do
+        local ok, res = pcall(http.get, target_url, {
+            headers = { ["Accept"] = "text/html,*/*" },
+            timeout = 8
+        })
+        if ok and res and res.status == 200 and res.body then
+            local body = res.body
+            for chunk in body:gmatch('<div class="blotter_post(.-)<div class="blotter_post') do
+                process_post(chunk)
+            end
+            local last_chunk = body:match('.*<div class="blotter_post(.*)')
+            if last_chunk then process_post(last_chunk) end
+        end
+    end
+
+    local encoded = cjson.encode(events)
+    lru.put(activity_cache, cache_key, { value = encoded, expires_at = now + ACTIVITY_CACHE_SECONDS }, ACTIVITY_CACHE_LIMIT)
+    return encoded
 end
 
 return M

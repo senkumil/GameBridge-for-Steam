@@ -49,6 +49,25 @@ function handleDelegatedClick(doc: Document, event: MouseEvent): void {
 	const target = event.target as Element | null;
 	if (!target) return;
 
+	const videoCard = target.closest<HTMLElement>('[data-gdl-youtube-id]');
+	if (videoCard && !videoCard.classList.contains('gdl-video-playing')) {
+		const ytId = videoCard.dataset.gdlYoutubeId;
+		if (ytId) {
+			event.preventDefault();
+			event.stopPropagation();
+			const thumb = videoCard.querySelector<HTMLElement>('.gdl-community-video-thumb');
+			if (thumb) {
+				videoCard.classList.add('gdl-video-playing');
+				thumb.innerHTML = `<iframe
+					src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytId)}?autoplay=1&enablejsapi=1&rel=0"
+					style="width:100%;height:100%;border:none;display:block;aspect-ratio:16/9;"
+					allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+					allowfullscreen></iframe>`;
+			}
+			return;
+		}
+	}
+
 	const open = target.closest<HTMLElement>('[data-gdl-open-url]');
 	if (open) {
 		const url = open.dataset.gdlOpenUrl || '';

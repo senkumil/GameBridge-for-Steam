@@ -39,6 +39,7 @@ deps.util = load_factory("util")(deps)
 deps.config = load_factory("config")(deps)
 deps.lru_cache = load_factory("lru_cache")(deps)
 deps.ttl_cache = load_factory("ttl_cache")(deps)
+deps.process = load_factory("process")(deps)
 deps.artwork_icon = load_factory("artwork_icon")(deps)
 deps.shortcut_detection_text = load_factory("shortcut_detection_text")(deps)
 deps.shortcut_detection_aliases = load_factory("shortcut_detection_aliases")(deps)
@@ -77,6 +78,7 @@ function fetch_partner_events(steam_app_id, language) return news.fetch_partner_
 function fetch_published_file_previews(file_ids_csv) return social.fetch_published_file_previews(file_ids_csv) end
 function fetch_friend_review(steam_id64, steam_app_id) return social.fetch_friend_review(steam_id64, steam_app_id) end
 function fetch_friend_personas(steam_ids_csv) return social.fetch_friend_personas(steam_ids_csv) end
+function fetch_community_activity(steam_app_id, steam_id64) return social.fetch_community_activity(steam_app_id, steam_id64) end
 function fetch_community_content(steam_app_id, language) return community.fetch_community_content(steam_app_id, language) end
 function fetch_community_items_catalog(steam_app_id, language) return community.fetch_community_items_catalog(steam_app_id, language) end
 function fetch_library_assets(request_json) return artwork.fetch_library_assets(request_json) end
@@ -129,10 +131,6 @@ local function on_load()
         logger:info("  Mappings loaded: " .. tostring(data ~= nil) .. " (" .. tostring(#cjson.encode(data)) .. " bytes)")
     end)
     if not ok_diag then logger:warn("  Diagnostic check failed: " .. tostring(diag_err)) end
-    -- Give Millennium 3.4.1's dynamic-enable transaction time to settle before
-    -- it rebuilds the shared frontend context. Without this short yield, its
-    -- reload can complete before this plugin's frontend is available.
-    runtime_utils.sleep(750)
     millennium.ready()
 end
 

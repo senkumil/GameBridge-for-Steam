@@ -26,10 +26,8 @@ export async function getAchievementProgress(appId: number, fallbackTotal: numbe
 		let result = read();
 		if (!result && cache?.QueueCacheUpdate) {
 			try { cache.QueueCacheUpdate(appId); } catch {}
-			for (let attempt = 0; attempt < 6 && !result; attempt += 1) {
-				await new Promise(resolve => window.setTimeout(resolve, 500));
-				result = read();
-			}
+			await new Promise(resolve => window.setTimeout(resolve, 50));
+			result = read();
 		}
 		if (result) {
 			backendLog(`Achievement progress for ${appId}: ${result.unlocked}/${result.total}`);
