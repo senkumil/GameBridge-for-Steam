@@ -354,7 +354,7 @@ export function linkedShortcutPortrait(shortcutAppId: number | string, steamAppI
 	return '';
 }
 
-function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): boolean {
+export function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): boolean {
 	const marker = readArtworkMarker(shortcutAppId, steamAppId);
 	return Boolean(marker
 		&& (marker.slots.length > 0

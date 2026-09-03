@@ -38,6 +38,7 @@ import { disposeLinkedGamePrefetch, restartLinkedGamePrefetch, startLinkedGamePr
 import { installGhostSidebarCleanup } from '../features/library/sidebar-cleanup';
 import { adoptExistingSteamWindows, resolveSteamWindowContext } from './existing-windows';
 import { installMappingRefresh } from './mapping-refresh';
+import { syncMissingArtworkForMappedShortcuts } from '../features/library/artwork-sync';
 let mainWindowDoc: Document | null = null;
 setLocalizationDocumentProvider(() => mainWindowDoc);
 function normalizedDomText(value: unknown): string { return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase(); }
@@ -426,6 +427,7 @@ export default definePlugin(() => {
 		}
 		const bigPictureDoc = getBigPictureDocument();
 		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
+		void syncMissingArtworkForMappedShortcuts();
 	}).catch((e) => {
 		console.error('[GDL] Failed to load mappings from backend:', e);
 		startPlaytimeTracker();

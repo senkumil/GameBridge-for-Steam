@@ -10,6 +10,8 @@ import { rememberedShortcutSteamAppId } from './link-history';
 import { findMappingForDuplicateShortcut, getAllShortcutRecords, shortcutAlreadyLinked } from './registry';
 import { shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { pauseLinkedGamePrefetch, resumeLinkedGamePrefetch } from '../library/prefetch';
+import { applyOfficialShortcutIcon, spoofArtwork } from '../library/artwork';
+import { syncMissingArtworkForMappedShortcuts } from '../library/artwork-sync';
 
 const BULK_ANALYSIS_CONCURRENCY = 6;
 export type BulkLinkOutcomeStatus = 'linked' | 'queued' | 'skipped' | 'failed';
@@ -148,8 +150,13 @@ export async function linkAllShortcutsExperimental(
 	// artwork providers cannot delay detection or the remaining identity writes.
 	for (const item of matchedItems) {
 		const steamAppId = item.candidate.appid;
+		const shortcutId = item.record.id;
+		const title = item.candidate.name || item.record.title;
 		void warmShortcutLinkResources(steamAppId).catch(error => backendLog(`Bulk warm-up failed for ${steamAppId}: ${error}`));
+		void spoofArtwork(shortcutId, steamAppId, title, false).catch(error => backendLog(`Bulk artwork failed for ${shortcutId}: ${error}`));
+		void applyOfficialShortcutIcon(shortcutId, steamAppId, false).catch(error => backendLog(`Bulk icon failed for ${shortcutId}: ${error}`));
 	}
+	void syncMissingArtworkForMappedShortcuts();
 	const recordOrder = new Map(records.map((record, index) => [record.id, index]));
 	result.outcomes.sort((left, right) => (recordOrder.get(left.shortcutAppId) ?? Number.MAX_SAFE_INTEGER)
 		- (recordOrder.get(right.shortcutAppId) ?? Number.MAX_SAFE_INTEGER));

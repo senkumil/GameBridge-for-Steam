@@ -6,6 +6,7 @@ import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes, toS
 import { fetchPlaytimeStatsBatch } from '../playtime/service';
 import { disposeBigPictureAchievementCards, refreshBigPictureAchievementCards } from './achievement-cards';
 import { disposeBigPictureShortcutDetails, refreshBigPictureShortcutDetails } from './details';
+import { syncMissingArtworkForMappedShortcuts } from '../library/artwork-sync';
 
 function normalizedDomText(value: unknown): string {
 	return String(value ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
@@ -376,6 +377,7 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 	if (changed && !isBigPictureGameDetailSurface(_doc)) {
 		try { (window as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
 	}
+	void syncMissingArtworkForMappedShortcuts();
 }
 
 export function restoreBigPictureShortcutState(): void {
