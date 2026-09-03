@@ -1,5 +1,5 @@
 import type { Mappings } from '../domain/types';
-import { getAllMappings, saveMappingBackend, removeMappingBackend, updateMappingsBackend, backendLog, backendResultStatus, parseMappingsResponse } from '../api/backend';
+import { getAllMappings, saveMappingBackend, removeMappingBackend, updateMappingsBackend, listShortcutsBackend, backendLog, backendResultStatus, parseMappingsResponse } from '../api/backend';
 import { normalizeTitle } from './text';
 import { nglEvents } from './events';
 
@@ -118,14 +118,74 @@ function cleanMappings(value: Record<string, string>): Mappings {
 	return clean;
 }
 
+interface LocalShortcutSnapshot {
+	ids: Set<number>;
+	accountId: string;
+}
+
+function parseLocalShortcutSnapshot(raw: unknown): LocalShortcutSnapshot | null {
+	try {
+		let value: any = raw;
+		for (let attempt = 0; attempt < 3 && typeof value === 'string'; attempt += 1) {
+			const text = value.trim();
+			if (!text) return null;
+			value = JSON.parse(text);
+		}
+		if (!value || typeof value !== 'object' || value.ok !== true || !Array.isArray(value.shortcuts)) return null;
+		const ids = new Set<number>();
+		for (const shortcut of value.shortcuts) {
+			const rawId = Number(shortcut?.shortcut_app_id);
+			if (!Number.isFinite(rawId)) continue;
+			ids.add(rawId < 0 ? (rawId >>> 0) : rawId);
+		}
+		return { ids, accountId: String(value.account_id || '') };
+	} catch { return null; }
+}
+
+async function readLocalShortcutSnapshot(): Promise<LocalShortcutSnapshot | null> {
+	try { return parseLocalShortcutSnapshot(await listShortcutsBackend()); }
+	catch { return null; }
+}
+
+function filterMappingsForLocalShortcuts(source: Mappings, snapshot: LocalShortcutSnapshot | null): { mappings: Mappings; removed: string[] } {
+	if (!snapshot) return { mappings: source, removed: [] };
+	const result: Mappings = {};
+	const removed: string[] = [];
+	for (const [key, value] of Object.entries(source)) {
+		if (!key.startsWith('shortcut:')) {
+			result[key] = value;
+			continue;
+		}
+		const rawId = Number(key.slice('shortcut:'.length));
+		const unsignedId = Number.isFinite(rawId) ? (rawId < 0 ? (rawId >>> 0) : rawId) : NaN;
+		if (Number.isFinite(unsignedId) && snapshot.ids.has(unsignedId)) result[key] = value;
+		else removed.push(key);
+	}
+	return { mappings: result, removed };
+}
+
 async function hydrateMappings(): Promise<void> {
 	let lastError: unknown = null;
 	for (let attempt = 0; attempt < 7; attempt += 1) {
 		try {
 			const parsed = parseMappingsResponse(await getAllMappings());
 			if (!parsed) throw new Error('invalid_mappings_response');
-			const backendMappings = cleanMappings(parsed);
-			const cachedMappings = { ...mappings };
+			const localShortcuts = await readLocalShortcutSnapshot();
+			const backendFiltered = filterMappingsForLocalShortcuts(cleanMappings(parsed), localShortcuts);
+			const cachedFiltered = filterMappingsForLocalShortcuts(cleanMappings({ ...mappings }), localShortcuts);
+			let backendMappings = backendFiltered.mappings;
+			const cachedMappings = cachedFiltered.mappings;
+
+			if (backendFiltered.removed.length > 0) {
+				const purgeRaw = await updateMappingsBackend({ request_json: JSON.stringify({ set: {}, remove: backendFiltered.removed }) });
+				const purge = parseMappingMutationResponse(purgeRaw);
+				if (purge?.ok && purge.data) backendMappings = cleanMappings(purge.data);
+				backendLog(`Discarded ${backendFiltered.removed.length} mapping(s) that do not belong to the active Steam shortcut registry${localShortcuts?.accountId ? ` (account ${localShortcuts.accountId})` : ''}.`);
+			}
+			if (cachedFiltered.removed.length > 0) {
+				backendLog(`Ignored ${cachedFiltered.removed.length} stale cached mapping(s) from a previous or foreign installation.`);
+			}
+
 			const backendCount = Object.keys(backendMappings).length;
 			const cachedCount = Object.keys(cachedMappings).length;
 			if (backendCount === 0 && cachedCount > 0) {

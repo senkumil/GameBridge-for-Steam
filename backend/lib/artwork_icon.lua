@@ -5,6 +5,26 @@ local M, epochs = {}, {}
 local chars, lookup = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", {}
 for index = 1, #chars do lookup[chars:sub(index, index)] = index - 1 end
 
+function M.encode_base64(data)
+    if type(data) ~= "string" or data == "" then return "" end
+    local output = {}
+    for index = 1, #data, 3 do
+        local a = data:byte(index) or 0
+        local b = data:byte(index + 1)
+        local c = data:byte(index + 2)
+        local value = a * 65536 + (b or 0) * 256 + (c or 0)
+        local i1 = math.floor(value / 262144) % 64
+        local i2 = math.floor(value / 4096) % 64
+        local i3 = math.floor(value / 64) % 64
+        local i4 = value % 64
+        output[#output + 1] = chars:sub(i1 + 1, i1 + 1)
+        output[#output + 1] = chars:sub(i2 + 1, i2 + 1)
+        output[#output + 1] = b and chars:sub(i3 + 1, i3 + 1) or "="
+        output[#output + 1] = c and chars:sub(i4 + 1, i4 + 1) or "="
+    end
+    return table.concat(output)
+end
+
 function M.decode_base64(data)
     data = tostring(data or ""):gsub("%s", "")
     if data == "" or #data % 4 ~= 0 or data:find("[^A-Za-z0-9%+/%=]") then return nil end

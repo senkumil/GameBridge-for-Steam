@@ -5,7 +5,7 @@ local config = deps.config
 local M = {}
 
 local function backup_path()
-    return config.path("mappings.backup.json")
+    return config.state_path("mappings.backup.json")
 end
 
 local function read_mappings()

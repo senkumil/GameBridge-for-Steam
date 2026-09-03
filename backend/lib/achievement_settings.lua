@@ -44,7 +44,10 @@ local function default_root()
     end
     local userprofile = os.getenv("USERPROFILE")
     if userprofile and userprofile ~= "" then return fs.join(userprofile, "AppData", "Roaming", "SteamAchievements") end
-    return "C:\\Users\\" .. tostring(os.getenv("USERNAME") or "User") .. "\\AppData\\Roaming\\SteamAchievements"
+    -- Last-resort portable fallback for environments that expose none of the
+    -- standard Windows profile variables. Keep it in the plugin per-user state
+    -- root rather than assuming a drive letter or Windows profile layout.
+    return config.state_path("SteamAchievements")
 end
 
 local function normalize_path(value, use_default)
@@ -84,7 +87,7 @@ function M.game_keys(request)
 end
 
 local function read_string_map(filename)
-    local data = config.read_json(config.path(filename), {})
+    local data = config.read_json(config.state_path(filename), {})
     local result = {}
     for key, value in pairs(type(data) == "table" and data or {}) do
         if type(key) == "string" and type(value) == "string" and value ~= "" then result[key] = value end
@@ -93,13 +96,13 @@ local function read_string_map(filename)
 end
 
 local function write_json(filename, data, description)
-    local ok, err = config.write_json_atomic(config.path(filename), data)
+    local ok, err = config.write_json_atomic(config.state_path(filename), data)
     if not ok then logger:warn("Could not save " .. description .. ": " .. tostring(err or "write_failed")) end
     return ok
 end
 
 local function read_options()
-    local data = config.read_json(config.path("achievement_options.json"), {})
+    local data = config.read_json(config.state_path("achievement_options.json"), {})
     local result = {}
     for key, value in pairs(type(data) == "table" and data or {}) do
         if type(key) == "string" and type(value) == "table" then
@@ -139,7 +142,7 @@ local function source_status(path)
 end
 
 function M.local_root()
-    local cfg = config.path("achievement_base_path.txt")
+    local cfg = config.state_path("achievement_base_path.txt")
     local saved = file_exists(cfg) and read_text_file(cfg) or nil
     saved = saved and tostring(saved):gsub("^%s+", ""):gsub("%s+$", "") or ""
     if saved ~= "" and saved:lower() ~= "c:\\steam auto" and saved:lower() ~= "c:/steam auto" then
@@ -150,13 +153,13 @@ end
 
 function M.get_base_path()
     local path = M.local_root()
-    return cjson.encode({ ok = true, path = path, exists = fs.exists(path), configured = file_exists(config.path("achievement_base_path.txt")) })
+    return cjson.encode({ ok = true, path = path, exists = fs.exists(path), configured = file_exists(config.state_path("achievement_base_path.txt")) })
 end
 
 function M.set_base_path(value)
     local path = normalize_path(value, true)
     if not path then return cjson.encode({ ok = false, error = "invalid_path" }) end
-    local ok, err = config.write_text_atomic(config.path("achievement_base_path.txt"), path)
+    local ok, err = config.write_text_atomic(config.state_path("achievement_base_path.txt"), path)
     if not ok then
         logger:warn("Could not save achievement base path: " .. tostring(err or "write_failed"))
         return cjson.encode({ ok = false, error = "write_failed" })

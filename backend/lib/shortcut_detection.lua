@@ -160,11 +160,23 @@ local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
                 if fs.exists(shortcut_file) then
                     table.insert(files, {
                         path = shortcut_file,
+                        account_id = account_id,
                         modified = tonumber(fs.last_write_time(shortcut_file) or 0) or 0,
                     })
                 end
             end
         end
+    end
+    local preferred = deps.shortcut_registry and deps.shortcut_registry.preferred_account_id
+        and deps.shortcut_registry.preferred_account_id() or nil
+    if preferred then
+        local active_files = {}
+        for _, file in ipairs(files) do
+            if file.account_id == preferred then active_files[#active_files + 1] = file end
+        end
+        -- Once Steam tells us which account is active, never resolve a shortcut
+        -- from another user's userdata tree.
+        if #active_files > 0 then files = active_files end
     end
     table.sort(files, function(a, b) return a.modified > b.modified end)
 
@@ -229,9 +241,9 @@ local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
     return nil
 end
 
-function M.get_shortcut_details(shortcut_app_id)
+function M.get_shortcut_details(shortcut_app_id, shortcut_title)
     local target_id = shortcut_app_id
-    local target_title = nil
+    local target_title = shortcut_title
     if type(shortcut_app_id) == "string" and shortcut_app_id:match("^%s*{") then
         local ok, parsed = pcall(cjson.decode, shortcut_app_id)
         if ok and type(parsed) == "table" then

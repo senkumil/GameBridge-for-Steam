@@ -8,8 +8,6 @@ local M = {}
 -- Keep the canonical history outside the plugin directory so plugin updates,
 -- clean reinstalls and Steam's plugin-folder cleanup cannot remove it.
 local SESSIONS_FILE = config.persistent_path("playtime_sessions.json")
-local LEGACY_SESSIONS_FILE = config.path("playtime_sessions.json")
-local LEGACY_SESSIONS_FILE_OLD = config.path("sessions.json")
 local SESSION_BACKUP_COUNT = 3
 local STORE = { version = 2, sessions = {}, aliases = {} }
 local STORE_LOADED = false
@@ -181,6 +179,41 @@ local function save_sessions()
     return ok
 end
 
+local function prune_foreign_sessions()
+    local registry = deps.shortcut_registry
+    if not registry or type(registry.list) ~= "function" then return 0 end
+    local ok_list, raw = pcall(registry.list)
+    if not ok_list then return 0 end
+    local ok_decode, snapshot = pcall(cjson.decode, tostring(raw or ""))
+    if not ok_decode or type(snapshot) ~= "table" or snapshot.ok ~= true
+        or tostring(snapshot.account_id or "") == "" or type(snapshot.shortcuts) ~= "table" then
+        return 0
+    end
+
+    local valid = {}
+    for _, shortcut in ipairs(snapshot.shortcuts) do
+        if type(shortcut) == "table" then
+            local id = valid_shortcut_id(shortcut.shortcut_app_id)
+            if id then valid[id] = true end
+        end
+    end
+
+    local removed = 0
+    for canonical in pairs(STORE.sessions) do
+        if not valid[tostring(canonical)] then
+            STORE.sessions[canonical] = nil
+            removed = removed + 1
+        end
+    end
+    if removed > 0 then
+        for alias, canonical in pairs(STORE.aliases) do
+            if not STORE.sessions[tostring(canonical or "")] then STORE.aliases[alias] = nil end
+        end
+        STORE_DIRTY = true
+    end
+    return removed
+end
+
 local function load_sessions()
     local now = os.time()
     if STORE_LOADED then
@@ -196,8 +229,6 @@ local function load_sessions()
         { path = SESSIONS_FILE .. ".bak", label = "persistent backup" },
         { path = SESSIONS_FILE .. ".bak.1", label = "persistent backup 1" },
         { path = SESSIONS_FILE .. ".bak.2", label = "persistent backup 2" },
-        { path = LEGACY_SESSIONS_FILE, label = "plugin legacy" },
-        { path = LEGACY_SESSIONS_FILE_OLD, label = "plugin predecessor" },
     }
     local seen_paths = {}
     for _, candidate in ipairs(candidates) do
@@ -209,11 +240,13 @@ local function load_sessions()
             elseif loaded then
                 STORE = loaded
                 LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
-                if candidate.path ~= SESSIONS_FILE then
-                    STORE_DIRTY = true
-                    if save_sessions() then
-                        logger:info("Recovered playtime sessions from " .. candidate.label)
-                    end
+                local removed_foreign = prune_foreign_sessions()
+                if removed_foreign > 0 then
+                    logger:warn("Discarded " .. tostring(removed_foreign) .. " playtime history record(s) that do not belong to the active Steam shortcut registry")
+                end
+                if candidate.path ~= SESSIONS_FILE then STORE_DIRTY = true end
+                if STORE_DIRTY and save_sessions() and candidate.path ~= SESSIONS_FILE then
+                    logger:info("Recovered playtime sessions from " .. candidate.label)
                 end
                 return
             end

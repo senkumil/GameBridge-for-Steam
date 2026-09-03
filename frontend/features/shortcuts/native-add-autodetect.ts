@@ -2,7 +2,7 @@ import { backendLog } from '../../api/backend';
 import { getPreferences } from '../../core/preferences';
 import { readShortcutOverviewField, shortcutExecutableIdentity, shortcutStableIdentity } from '../../steam/shortcuts';
 import { candidateSteamDocuments, nativeAddNonSteamDialogOpen, nativeAddSelectedExecutableIdentities } from './native-add-guard';
-import { findMappingForShortcut, getAllShortcutRecords, shortcutAlreadyLinked, type ShortcutRecord } from './registry';
+import { findMappingForShortcut, getAllShortcutRecords, refreshShortcutRecordsFromBackend, shortcutAlreadyLinked, type ShortcutRecord } from './registry';
 import { requestNativeAddShortcutReview } from './manual-link';
 import { hasNoLauncherOption, mergeNoLauncherOption, removeIncompatibleLauncherBypass, shouldAutoApplyNoLauncher } from './linking';
 
@@ -31,6 +31,19 @@ let selectedExecutables = new Set<string>();
 const interactionListeners = new Map<Document, EventListener>();
 const documentObservers = new Map<Document, MutationObserver>();
 let scheduledTick: ReturnType<typeof setTimeout> | null = null;
+let registryRefreshAt = 0;
+let registryRefreshInFlight: Promise<void> | null = null;
+
+function refreshBackendRegistry(force = false): void {
+	const now = Date.now();
+	const interval = dialogOpen ? 900 : 4000;
+	if (!force && (registryRefreshInFlight || now - registryRefreshAt < interval)) return;
+	registryRefreshAt = now;
+	registryRefreshInFlight = refreshShortcutRecordsFromBackend()
+		.then(() => { scanForNewlyAddedShortcuts(); })
+		.catch(() => {})
+		.finally(() => { registryRefreshInFlight = null; });
+}
 
 function nodeMayContainNativeAddUi(node: Node): boolean {
 	if (node.nodeType !== Node.ELEMENT_NODE) return false;
@@ -252,6 +265,7 @@ function clearInteractionListeners(): void {
 }
 
 function onDialogOpened(): void {
+	refreshBackendRegistry(true);
 	sessionGeneration += 1;
 	clearCloseEvaluationTimers();
 	snapshotBaseline();
@@ -263,6 +277,7 @@ function onDialogOpened(): void {
 }
 
 function armNativeAddSession(): void {
+	refreshBackendRegistry(true);
 	if (dialogOpen) return;
 	sessionGeneration += 1;
 	clearCloseEvaluationTimers();
@@ -274,6 +289,7 @@ function armNativeAddSession(): void {
 }
 
 function onDialogClosed(): void {
+	refreshBackendRegistry(true);
 	captureCurrentSelections();
 	dialogOpen = false;
 	dialogObserved = false;
@@ -288,6 +304,7 @@ function onDialogClosed(): void {
 
 function tick(): void {
 	ensureInteractionListeners();
+	refreshBackendRegistry();
 	let open = false;
 	try { open = nativeAddNonSteamDialogOpen(); } catch {}
 	if (open) {
@@ -305,6 +322,7 @@ function tick(): void {
 export function startNativeAddAutoDetector(): void {
 	if (watcherTimer) return;
 	pluginStartedAt = Date.now();
+	refreshBackendRegistry(true);
 	dialogOpen = false;
 	startupSettled = false;
 	scanForNewlyAddedShortcuts();
@@ -335,6 +353,8 @@ export function stopNativeAddAutoDetector(): void {
 	sessionArmedAt = 0;
 	pluginStartedAt = 0;
 	startupSettled = false;
+	registryRefreshAt = 0;
+	registryRefreshInFlight = null;
 	baselineIds.clear();
 	baselineIdentities.clear();
 	selectedExecutables.clear();

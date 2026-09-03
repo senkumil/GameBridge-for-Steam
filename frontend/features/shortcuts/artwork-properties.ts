@@ -1,4 +1,4 @@
-import { backendLog, fetchCommunityArtworkCandidatesBackend } from '../../api/backend';
+import { backendLog, fetchCommunityArtworkCandidatesBackend, readLocalArtworkImageBackend } from '../../api/backend';
 import { getPreferences, steamGridDbApiKeyCandidates } from '../../core/preferences';
 import { escapeHtml } from '../../core/text';
 import {
@@ -154,33 +154,60 @@ function openArtworkModal(context: ShortcutArtworkSettingsContext, data: Artwork
 	const fileInput = overlay.querySelector<HTMLInputElement>('.gdl-art-file-input')!;
 	const close = (): void => overlay.remove();
 
-	uploadBtn.addEventListener('click', () => fileInput.click());
+	const acceptUploadedImage = (dataUrl: string): void => {
+		if (!/^data:image\//i.test(dataUrl)) return;
+		const img = new Image();
+		img.onload = () => {
+			const choice: CommunityArtworkChoice = {
+				id: `custom_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+				url: dataUrl, thumb: dataUrl,
+				width: img.naturalWidth || img.width || 0, height: img.naturalHeight || img.height || 0,
+				isCustom: true,
+			};
+			saveCustomUploadedArtwork(steamAppId, activeSlot, choice);
+			if (!customUploads[activeSlot]) customUploads[activeSlot] = [];
+			customUploads[activeSlot]!.unshift(choice);
+			selected[activeSlot] = choice;
+			fileInput.value = '';
+			render();
+		};
+		img.src = dataUrl;
+	};
+
+	uploadBtn.addEventListener('click', async (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		const steamSystem = (window as any).SteamClient?.System;
+		if (typeof steamSystem?.OpenFileDialog === 'function') {
+			try {
+				// Keep the native method bound to SteamClient.System; some clean-client
+				// builds require its receiver and otherwise open/fail unpredictably.
+				const selectedPath = await steamSystem.OpenFileDialog({
+					bChooseDirectory: false,
+					strTitle: gdlText('game_artwork_upload_btn', 'Upload image'),
+					rgFilters: [
+						{ strFileTypeName: 'Images', rFilePatterns: ['*.png', '*.jpg', '*.jpeg', '*.webp'], bUseAsDefault: true },
+						{ strFileTypeName: 'All files', rFilePatterns: ['*'] },
+					],
+				});
+				if (typeof selectedPath === 'string' && selectedPath.trim()) {
+					const raw = await readLocalArtworkImageBackend({ request_json: JSON.stringify({ path: selectedPath }) });
+					let response: any = raw;
+					for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
+					if (response?.ok === true && response?.mime && response?.data_base64) {
+						acceptUploadedImage(`data:${response.mime};base64,${response.data_base64}`);
+					}
+				}
+				return;
+			} catch { return; }
+		}
+		fileInput.click();
+	});
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) return;
 		const reader = new FileReader();
-		reader.onload = () => {
-			const dataUrl = String(reader.result || '');
-			if (!dataUrl) return;
-			const img = new Image();
-			img.onload = () => {
-				const choice: CommunityArtworkChoice = {
-					id: `custom_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-					url: dataUrl,
-					thumb: dataUrl,
-					width: img.naturalWidth || img.width || 0,
-					height: img.naturalHeight || img.height || 0,
-					isCustom: true,
-				};
-				saveCustomUploadedArtwork(steamAppId, activeSlot, choice);
-				if (!customUploads[activeSlot]) customUploads[activeSlot] = [];
-				customUploads[activeSlot]!.unshift(choice);
-				selected[activeSlot] = choice;
-				fileInput.value = '';
-				render();
-			};
-			img.src = dataUrl;
-		};
+		reader.onload = () => acceptUploadedImage(String(reader.result || ''));
 		reader.readAsDataURL(file);
 	});
 
@@ -287,6 +314,12 @@ export function bindShortcutArtworkSettings(context: ShortcutArtworkSettingsCont
 	const statusEl = context.section.querySelector<HTMLElement>('.gdl-game-artwork-status');
 	let eligibilityAppId = '';
 	if (!container || !openBtn || !resetBtn || !statusEl) return { refresh: async () => {} };
+	// This section can be mounted inside Steam's native clickable artwork rows.
+	// Never let plugin control events bubble into Steam's own Browse handler;
+	// that was responsible for stray system file dialogs (often titled “Home”).
+	for (const eventName of ['click', 'pointerdown', 'pointerup', 'mousedown', 'mouseup'] as const) {
+		container.addEventListener(eventName, event => event.stopPropagation());
+	}
 
 	const refresh = async (): Promise<void> => {
 		const steamAppId = context.steamAppId();

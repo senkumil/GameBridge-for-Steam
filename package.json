@@ -8,9 +8,12 @@
 		"check:detection-fixtures": "node scripts/check-detection-fixtures.mjs",
 		"check:artwork": "node scripts/check-artwork-rules.mjs",
 		"check:lua": "node scripts/check-lua.mjs",
-		"check": "npm run typecheck && npm run check:source && npm run check:localization && npm run check:detection-fixtures && npm run check:artwork && npm run check:lua",
+		"check": "npm run typecheck && npm run check:source && npm run check:localization && npm run check:detection-fixtures && npm run check:artwork && npm run check:lua && npm run check:clean-install",
 		"check:dist": "node scripts/check-dist.mjs",
-		"verify": "npm run check && npm run build && npm run check:dist"
+		"verify": "npm run check && npm run build && npm run check:dist",
+		"check:clean-install": "node scripts/check-clean-install.mjs",
+		"package:prepare": "node scripts/prepare-release.mjs",
+		"version:set": "node scripts/set-version.mjs"
 	},
 	"devDependencies": {
 		"@babel/preset-env": "^7.28.3",
@@ -24,7 +27,7 @@
 	},
 	"type": "module",
 	"name": "nativegamelink-for-steam",
-	"version": "3.0.0",
+	"version": "4.0.0",
 	"description": "Vincula juegos no-Steam con metadatos oficiales de Steam para mostrar datos reales en la biblioteca.",
 	"main": "./frontend/index.tsx",
 	"author": "David Miranda (Davidjarod11)",

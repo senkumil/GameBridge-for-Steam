@@ -29,6 +29,7 @@ export const fetchCommunityArtworkCandidatesBackend = callable<[{ request_json: 
 export const validateSteamGridDbApiKeyBackend = callable<[{ request_json: string }], string>('validate_steamgriddb_api_key');
 
 export const saveShortcutIconBackend = callable<[{ request_json: string }], string>('save_shortcut_icon');
+export const saveShortcutArtworkBackend = callable<[{ request_json: string }], string>('save_shortcut_artwork');
 
 export const clearArtworkBackend  = callable<[{ shortcut_app_id: string }], string>('clear_artwork');
 export const clearArtworkExceptIconBackend = callable<[{ shortcut_app_id: string }], string>('clear_artwork_except_icon');
@@ -37,6 +38,9 @@ export const clearAllLinkedArtworksBackend = callable<[], string>('clear_all_lin
 export const detectGameCandidatesBackend = callable<[{ request_json: string }], string>('detect_game_candidates');
 
 export const getShortcutDetailsBackend = callable<[{ shortcut_app_id: string; title?: string }], string>('get_shortcut_details');
+export const listShortcutsBackend = callable<[], string>('list_shortcuts');
+export const fetchArtworkImageBackend = callable<[{ request_json: string }], string>('fetch_artwork_image');
+export const readLocalArtworkImageBackend = callable<[{ request_json: string }], string>('read_local_artwork_image');
 
 export const getAchievementBasePathBackend = callable<[], string>('get_achievement_base_path');
 

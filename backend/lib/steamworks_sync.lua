@@ -3,6 +3,7 @@ local logger = deps.logger
 local fs = deps.fs
 local cjson = deps.cjson
 local process = deps.process
+local config = deps.config
 local M = {}
 local result_sequence = 0
 
@@ -21,12 +22,11 @@ local function find_csc()
 end
 
 local function get_or_compile_helper()
-    local backend_dir = tostring(MILLENNIUM_PLUGIN_SECRET_BACKEND_ABSOLUTE or "")
-    if backend_dir ~= "" and backend_dir:lower():match("%.lua$") then
-        backend_dir = fs.parent_path(backend_dir)
-    end
-    if backend_dir == "" then
-        backend_dir = "C:\\Program Files (x86)\\Steam\\millennium\\plugins\\NativeGameLinkForSteam\\backend"
+    -- Resolve the helper source from Millennium's actual plugin location.
+    -- Never assume Steam is installed on C: or under Program Files.
+    local backend_dir = tostring(config and config.backend_dir and config.backend_dir() or "")
+    if backend_dir == "" and config and config.plugin_dir then
+        backend_dir = fs.join(config.plugin_dir(), "backend")
     end
     local cs_path = fs.join(backend_dir, "src", "steam_achievement_sync.cs")
     if not fs.exists(cs_path) then

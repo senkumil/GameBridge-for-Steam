@@ -16,11 +16,13 @@ web_modules/
 /mappings.backup.json
 /achievement_base_path.txt
 /achievement_paths.json
+/achievement_options.json
 /playtime_sessions.json
 /sessions.json
 /steam_appid.txt
 
 # Generated manifests and local deployment metadata
+# CI force-adds plugin.json on main so published commits stay installable.
 /plugin.json
 *.manifest.tmp
 
@@ -106,3 +108,6 @@ $RECYCLE.BIN/
 # The production bundle is intentionally kept versioned because this plugin
 # can be installed directly from a clone and the README documents that flow.
 # .millennium/Dist/
+
+# CI/release staging output
+/release/
