@@ -1,15 +1,11 @@
 import type { LocalAchievementData, LocalAchievementItem } from '../../domain/types';
-import { escapeHtml } from '../../core/text';
+import { escapeHtml, escapeAttr } from '../../core/text';
 import { gdlText, loc, steamIntlLocale } from '../../steam/localization';
 import { formatLastPlayedDate, formatPlaytimeMinutes } from '../playtime/format';
 import { getInstantPlaytimeStats } from '../playtime/service';
 import { getShortcutAppById } from '../../steam/shortcuts';
-
-function medalSvg(): string {
-	return `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true">
-		<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
-	</svg>`;
-}
+import { ensureBigPictureModalStyles } from './modal-styles';
+import { completionMedal } from './achievement-cards';
 
 function formatUnlockDate(timestamp?: number): string {
 	if (!timestamp || timestamp <= 0) return '';
@@ -33,9 +29,14 @@ export function openBigPictureAchievementsScreen(
 	gameName: string,
 	portraitUrl: string,
 	shortcutAppId?: number,
+	backgroundUrl?: string,
 ): void {
 	doc.getElementById('gdl-bp-achievements-screen')?.remove();
 	if (!doc.body) return;
+
+	ensureBigPictureModalStyles(doc);
+
+	const prevActiveElement = (doc.activeElement as HTMLElement | null) || null;
 
 	const total = achievements.total || 0;
 	const unlocked = achievements.unlocked || 0;
@@ -53,6 +54,7 @@ export function openBigPictureAchievementsScreen(
 	const screen = doc.createElement('div');
 	screen.id = 'gdl-bp-achievements-screen';
 	screen.className = 'gdl-bp-ach-screen';
+	screen.style.cssText = 'position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:9999999!important;background:#0e141b!important;overflow-y:auto!important;box-sizing:border-box!important;';
 
 	let activeTab: 'mine' | 'global' = 'mine';
 	let searchQuery = '';
@@ -109,6 +111,7 @@ export function openBigPictureAchievementsScreen(
 	};
 
 	screen.innerHTML = `
+		${backgroundUrl ? `<div class="gdl-bp-ach-screen-backdrop" style="background-image: url('${escapeAttr(backgroundUrl)}');"></div>` : ''}
 		<div class="gdl-bp-ach-screen-inner">
 			<!-- Header -->
 			<div class="gdl-bp-ach-screen-header">
@@ -116,31 +119,29 @@ export function openBigPictureAchievementsScreen(
 				<div class="gdl-bp-ach-screen-header-info">
 					<h1 class="gdl-bp-ach-screen-game-title">${escapeHtml(gameName)}</h1>
 					<div class="gdl-bp-ach-screen-progress-wrap">
-						<div class="gdl-bp-ach-screen-medal ${isAllUnlocked ? 'is-complete' : ''}">${medalSvg()}</div>
-						<div class="gdl-bp-ach-screen-progress-text">
-							<span class="gdl-bp-ach-screen-progress-headline">
-								${isAllUnlocked ? escapeHtml(loc('AppDetails_AchievementsUnlockedAll', '¡HAS DESBLOQUEADO TODOS LOS LOGROS!')) : escapeHtml(loc('AppDetails_SectionTitle_Achievements', 'LOGROS DESBLOQUEADOS'))}
-								<strong>${unlocked}/${total}</strong>
-								<span class="gdl-bp-ach-screen-pct">(${pct}%)</span>
-							</span>
-							<div class="gdl-bp-ach-screen-progress-track">
-								<div class="gdl-bp-ach-screen-progress-fill" style="width: ${pct}%;"></div>
+						<div class="gdl-bp-ach-screen-progress-top-row">
+							<div class="gdl-bp-ach-screen-progress-headline">
+								${isAllUnlocked ? `<div class="gdl-bp-ach-screen-medal is-complete">${completionMedal()}</div>` : ''}
+								<span>${isAllUnlocked ? escapeHtml(loc('AppDetails_AchievementsUnlockedAll', '¡HAS DESBLOQUEADO TODOS LOS LOGROS!')) : escapeHtml(loc('AppDetails_SectionTitle_Achievements', 'LOGROS DESBLOQUEADOS'))} <strong>${unlocked}/${total}</strong> <span class="gdl-bp-ach-screen-pct">(${pct}%)</span></span>
 							</div>
-						</div>
-						${playtimeText ? `
-							<div class="gdl-bp-ach-screen-stat-meta">
-								<div class="gdl-bp-ach-screen-stat-item">
-									<span class="gdl-bp-ach-screen-stat-label">${escapeHtml(loc('AppDetails_SectionTitle_Playtime', 'TIEMPO DE JUEGO').toUpperCase())}</span>
-									<span class="gdl-bp-ach-screen-stat-val">${escapeHtml(playtimeText)}</span>
-								</div>
-								${lastPlayedText ? `
+							${playtimeText ? `
+								<div class="gdl-bp-ach-screen-stat-meta">
 									<div class="gdl-bp-ach-screen-stat-item">
-										<span class="gdl-bp-ach-screen-stat-label">${escapeHtml(loc('AppDetails_SectionTitle_LastSession', 'ÚLTIMA SESIÓN').toUpperCase())}</span>
-										<span class="gdl-bp-ach-screen-stat-val">${escapeHtml(lastPlayedText)}</span>
+										<span class="gdl-bp-ach-screen-stat-label">${escapeHtml(loc('AppDetails_SectionTitle_Playtime', 'TIEMPO DE JUEGO').toUpperCase())}</span>
+										<span class="gdl-bp-ach-screen-stat-val">${escapeHtml(playtimeText)}</span>
 									</div>
-								` : ''}
-							</div>
-						` : ''}
+									${lastPlayedText ? `
+										<div class="gdl-bp-ach-screen-stat-item">
+											<span class="gdl-bp-ach-screen-stat-label">${escapeHtml(loc('AppDetails_SectionTitle_LastSession', 'ÚLTIMA SESIÓN').toUpperCase())}</span>
+											<span class="gdl-bp-ach-screen-stat-val">${escapeHtml(lastPlayedText)}</span>
+										</div>
+									` : ''}
+								</div>
+							` : ''}
+						</div>
+						<div class="gdl-bp-ach-screen-progress-track">
+							<div class="gdl-bp-ach-screen-progress-fill" style="width: ${pct}%;"></div>
+						</div>
 					</div>
 				</div>
 			</div>
@@ -158,7 +159,13 @@ export function openBigPictureAchievementsScreen(
 			<!-- Toolbar -->
 			<div class="gdl-bp-ach-screen-toolbar">
 				<div class="gdl-bp-ach-search-wrap">
-					<input class="gdl-bp-ach-search-input Focusable" type="text" placeholder="${escapeHtml(loc('Search', 'Buscar...'))}" tabindex="0" data-focusable="true" />
+					<input class="gdl-bp-ach-search-input Focusable" type="text" placeholder="${escapeHtml(loc('Search', 'Buscar'))}" tabindex="0" data-focusable="true" />
+				</div>
+				<div class="gdl-bp-ach-compare-wrap">
+					<button class="gdl-bp-ach-compare-btn Focusable" type="button" tabindex="0" data-focusable="true">
+						<span>${escapeHtml(loc('AppDetails_CompareWith', 'Comparar con...'))}</span>
+						<span class="gdl-bp-ach-caret">▼</span>
+					</button>
 				</div>
 			</div>
 
@@ -169,13 +176,25 @@ export function openBigPictureAchievementsScreen(
 
 			<!-- Bottom prompt bar -->
 			<div class="gdl-bp-ach-screen-footer">
-				<div class="gdl-bp-footer-prompt">
-					<span class="gdl-bp-key-badge">A</span>
-					<span>${escapeHtml(loc('Button_Select', 'SELECCIONAR'))}</span>
+				<div class="gdl-bp-ach-screen-footer-left">
+					<div class="gdl-bp-footer-prompt">
+						<span class="gdl-bp-xbox-icon" aria-hidden="true">
+							<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+								<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm3.88 15.65c-.32.22-.72.35-1.15.35-.61 0-1.18-.27-1.57-.71l-1.16-1.32-1.16 1.32c-.39.44-.96.71-1.57.71-.43 0-.83-.13-1.15-.35 1.13-1.15 2.5-2.07 4.04-2.65 1.54.58 2.91 1.5 4.04 2.65zm1.75-2.82c-.89-.92-1.99-1.67-3.23-2.18 1.4-.73 2.59-1.78 3.44-3.08.31.86.48 1.79.48 2.76 0 .89-.25 1.74-.69 2.5zm-11.26 0c-.44-.76-.69-1.61-.69-2.5 0-.97.17-1.9.48-2.76.85 1.3 2.04 2.35 3.44 3.08-1.24.51-2.34 1.26-3.23 2.18zM12 11.23c-1.5 0-2.85-.68-3.76-1.76.99-1.23 2.31-2.14 3.76-2.67 1.45.53 2.77 1.44 3.76 2.67-.91 1.08-2.26 1.76-3.76 1.76z"/>
+							</svg>
+						</span>
+						<span>${escapeHtml(loc('Button_Menu', 'MENÚ'))}</span>
+					</div>
 				</div>
-				<div class="gdl-bp-footer-prompt gdl-bp-ach-close-trigger">
-					<span class="gdl-bp-key-badge">B</span>
-					<span>${escapeHtml(loc('Button_Back', 'VOLVER'))}</span>
+				<div class="gdl-bp-ach-screen-footer-right">
+					<div class="gdl-bp-footer-prompt">
+						<span class="gdl-bp-key-badge badge-a">A</span>
+						<span>${escapeHtml(loc('Button_Select', 'SELECCIONAR'))}</span>
+					</div>
+					<div class="gdl-bp-footer-prompt gdl-bp-ach-close-trigger">
+						<span class="gdl-bp-key-badge badge-b">B</span>
+						<span>${escapeHtml(loc('Button_Back', 'VOLVER'))}</span>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -208,6 +227,10 @@ export function openBigPictureAchievementsScreen(
 	const closeScreen = () => {
 		doc.removeEventListener('keydown', onKeyDown, true);
 		screen.remove();
+		if (prevActiveElement && prevActiveElement.isConnected) {
+			prevActiveElement.focus();
+			prevActiveElement.classList.add('gpfocus');
+		}
 	};
 
 	const onKeyDown = (e: KeyboardEvent) => {

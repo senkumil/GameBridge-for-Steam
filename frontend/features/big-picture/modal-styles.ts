@@ -324,261 +324,386 @@ export function ensureBigPictureModalStyles(doc: Document): void {
 			margin-top: 14px;
 		}
 
-		/* Fullscreen Achievements Screen */
+		/* Fullscreen Achievements Screen (Native Big Picture match) */
 		.gdl-bp-ach-screen {
 			position: fixed !important;
 			inset: 0 !important;
 			width: 100vw !important;
 			height: 100vh !important;
-			z-index: 999998 !important;
+			z-index: 9999999 !important;
 			background: #0e141b !important;
 			overflow-y: auto !important;
 			overflow-x: hidden !important;
-			padding: 40px 60px !important;
+			padding: 40px 60px 48px !important;
 			box-sizing: border-box !important;
-			font-family: "Motiva Sans", -apple-system, BlinkMacSystemFont, sans-serif !important;
-			animation: gdl-bp-fadein 0.18s ease-out;
+			font-family: "Motiva Sans", -apple-system, BlinkMacSystemFont, Arial, sans-serif !important;
+			color: #e7e8ea !important;
+			animation: gdl-bp-fadein 0.15s ease-out;
+		}
+		.gdl-bp-ach-screen-backdrop {
+			position: fixed;
+			top: 0;
+			left: 0;
+			right: 0;
+			height: 480px;
+			background-size: cover;
+			background-position: center top;
+			filter: blur(48px) brightness(0.32);
+			opacity: 0.70;
+			pointer-events: none;
+			z-index: 0;
 		}
 		.gdl-bp-ach-screen-inner {
-			max-width: 1400px;
+			position: relative;
+			z-index: 1;
+			max-width: 1360px;
 			margin: 0 auto;
 			display: flex;
 			flex-direction: column;
-			gap: 30px;
+			gap: 14px;
 		}
 		.gdl-bp-ach-screen-header {
 			display: flex;
-			align-items: center;
+			align-items: flex-start;
 			gap: 28px;
+			margin-bottom: 4px;
 		}
 		.gdl-bp-ach-screen-portrait {
-			width: 130px;
-			height: 195px;
+			width: 136px;
+			height: 204px;
+			min-width: 136px;
 			object-fit: cover;
 			border-radius: 4px;
-			box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
+			box-shadow: 0 10px 32px rgba(0, 0, 0, 0.85);
 			flex-shrink: 0;
 		}
 		.gdl-bp-ach-screen-header-info {
+			flex: 1;
 			display: flex;
 			flex-direction: column;
-			gap: 10px;
-			flex: 1;
+			gap: 12px;
+			padding-top: 4px;
 		}
 		.gdl-bp-ach-screen-game-title {
-			font-size: 34px;
-			font-weight: 800;
+			font-size: 28px;
+			font-weight: 700;
 			color: #ffffff;
-			margin: 0;
+			margin: 0 0 4px;
+			line-height: 1.2;
 		}
 		.gdl-bp-ach-screen-progress-wrap {
 			display: flex;
-			align-items: center;
-			gap: 16px;
-		}
-		.gdl-bp-ach-screen-medal {
-			width: 44px;
-			height: 44px;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-		}
-		.gdl-bp-ach-screen-progress-bar-container {
-			flex: 1;
-			max-width: 500px;
-			display: flex;
 			flex-direction: column;
-			gap: 6px;
-		}
-		.gdl-bp-ach-screen-progress-label {
-			font-size: 15px;
-			color: #ffffff;
-		}
-		.gdl-bp-ach-screen-progress-track {
+			gap: 8px;
 			width: 100%;
-			height: 8px;
-			background: rgba(255, 255, 255, 0.14);
-			border-radius: 4px;
-			overflow: hidden;
+			box-sizing: border-box;
 		}
-		.gdl-bp-ach-screen-progress-fill {
-			height: 100%;
-			background: #2d73ff;
-			border-radius: 4px;
-		}
-		.gdl-bp-ach-screen-playtime {
-			font-size: 14px;
-			color: #8f98a0;
-		}
-		.gdl-bp-ach-screen-nav-bar {
+		.gdl-bp-ach-screen-progress-top-row {
 			display: flex;
 			align-items: center;
 			justify-content: space-between;
-			gap: 20px;
-			border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-			padding-bottom: 14px;
+			gap: 24px;
+			width: 100%;
+		}
+		.gdl-bp-ach-screen-progress-headline {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			font-size: 13.5px;
+			font-weight: 700;
+			color: #ffffff;
+			letter-spacing: 0.5px;
+			text-transform: uppercase;
+		}
+		.gdl-bp-ach-screen-medal {
+			width: 26px;
+			height: 32px;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			flex-shrink: 0;
+		}
+		.gdl-bp-ach-screen-medal svg {
+			width: 26px;
+			height: 32px;
+			display: block;
+		}
+		.gdl-bp-ach-screen-pct {
+			color: #8f98a0;
+			font-weight: 600;
+			margin-left: 4px;
+		}
+		.gdl-bp-ach-screen-progress-track {
+			width: 100%;
+			height: 7px;
+			background: rgba(255, 255, 255, 0.14);
+			border-radius: 4px;
+			overflow: hidden;
+			margin-top: 2px;
+		}
+		.gdl-bp-ach-screen-progress-fill {
+			height: 100%;
+			background: #1a9fff;
+			border-radius: 4px;
+		}
+		.gdl-bp-ach-screen-stat-meta {
+			display: flex;
+			align-items: center;
+			gap: 24px;
+			flex-shrink: 0;
+		}
+		.gdl-bp-ach-screen-stat-item {
+			display: flex;
+			align-items: baseline;
+			gap: 6px;
+		}
+		.gdl-bp-ach-screen-stat-label {
+			font-size: 11px;
+			font-weight: 700;
+			color: #8f98a0;
+			letter-spacing: 0.6px;
+			text-transform: uppercase;
+		}
+		.gdl-bp-ach-screen-stat-val {
+			font-size: 13.5px;
+			font-weight: 700;
+			color: #ffffff;
 		}
 		.gdl-bp-ach-screen-tabs {
 			display: flex;
-			gap: 12px;
+			align-items: center;
+			justify-content: center;
+			gap: 14px;
+			margin: 16px 0 14px;
 		}
 		.gdl-bp-ach-tab-btn {
 			background: transparent;
 			border: none;
 			color: #8f98a0;
-			font-size: 16px;
-			font-weight: 700;
-			padding: 8px 18px;
-			border-radius: 4px;
+			font-size: 13.5px;
+			font-weight: 800;
+			letter-spacing: 0.6px;
+			text-transform: uppercase;
+			padding: 7px 22px;
+			border-radius: 20px;
 			cursor: pointer;
 			outline: none;
-			transition: color 0.15s ease, background 0.15s ease;
+			transition: all 0.15s ease;
 		}
-		.gdl-bp-ach-tab-btn.is-active {
-			color: #ffffff;
-			background: rgba(255, 255, 255, 0.12);
+		.gdl-bp-ach-tab-btn.active {
+			background: rgba(255, 255, 255, 0.20) !important;
+			color: #ffffff !important;
 		}
 		.gdl-bp-ach-tab-btn:hover,
 		.gdl-bp-ach-tab-btn:focus,
 		.gdl-bp-ach-tab-btn.gpfocus {
-			color: #ffffff;
-			box-shadow: 0 0 0 2px #ffffff;
+			color: #ffffff !important;
+			outline: 2px solid #ffffff !important;
+		}
+		.gdl-bp-ach-screen-toolbar {
+			display: flex;
+			align-items: center;
+			justify-content: flex-end;
+			gap: 12px;
+			margin-bottom: 8px;
+		}
+		.gdl-bp-ach-search-wrap {
+			display: flex;
+			align-items: center;
+			position: relative;
 		}
 		.gdl-bp-ach-search-input {
-			width: 260px;
-			height: 40px;
-			background: rgba(255, 255, 255, 0.08);
-			border: 1px solid rgba(255, 255, 255, 0.14);
+			background: rgba(0, 0, 0, 0.35);
+			border: 1px solid rgba(255, 255, 255, 0.12);
 			border-radius: 4px;
 			color: #ffffff;
-			font-size: 14px;
-			padding: 0 14px;
+			font-size: 13px;
+			padding: 7px 14px;
+			width: 220px;
 			outline: none;
+			transition: border-color 0.15s ease, box-shadow 0.15s ease;
 		}
 		.gdl-bp-ach-search-input:focus,
 		.gdl-bp-ach-search-input.gpfocus {
 			border-color: #ffffff;
-			box-shadow: 0 0 0 2px #ffffff;
+			outline: 2px solid #ffffff;
 		}
-		.gdl-bp-ach-list {
-			display: flex;
-			flex-direction: column;
-			gap: 12px;
-		}
-		.gdl-bp-ach-list-row {
+		.gdl-bp-ach-compare-btn {
 			display: flex;
 			align-items: center;
-			gap: 20px;
-			background: rgba(25, 30, 38, 0.75);
-			border: 1px solid rgba(255, 255, 255, 0.06);
-			border-radius: 6px;
-			padding: 16px 20px;
-			outline: none;
-			transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-		}
-		.gdl-bp-ach-list-row:hover,
-		.gdl-bp-ach-list-row:focus,
-		.gdl-bp-ach-list-row.gpfocus,
-		.gdl-bp-ach-list-row[data-focus="true"] {
-			border-color: #ffffff !important;
-			box-shadow: 0 0 0 2px #ffffff, 0 8px 24px rgba(0, 0, 0, 0.7) !important;
-			transform: scale(1.015) !important;
-		}
-		.gdl-bp-ach-list-icon {
-			width: 68px;
-			height: 68px;
-			object-fit: cover;
+			gap: 8px;
+			background: rgba(255, 255, 255, 0.08);
+			border: 1px solid rgba(255, 255, 255, 0.1);
 			border-radius: 4px;
+			color: #8f98a0;
+			font-size: 13px;
+			padding: 7px 14px;
+			cursor: pointer;
+			outline: none;
+			transition: all 0.15s ease;
+		}
+		.gdl-bp-ach-compare-btn:hover,
+		.gdl-bp-ach-compare-btn:focus,
+		.gdl-bp-ach-compare-btn.gpfocus {
+			color: #ffffff;
+			border-color: #ffffff;
+			outline: 2px solid #ffffff;
+		}
+		.gdl-bp-ach-caret {
+			font-size: 10px;
+			color: #8f98a0;
+		}
+		.gdl-bp-ach-screen-list {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+		.gdl-bp-ach-row {
+			background: #1b2129;
+			border: 1px solid rgba(255, 255, 255, 0.04);
+			border-radius: 4px;
+			padding: 12px 18px;
+			display: flex;
+			align-items: center;
+			gap: 16px;
+			margin-bottom: 6px;
+			cursor: pointer;
+			outline: none;
+			transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+		}
+		.gdl-bp-ach-row:hover,
+		.gdl-bp-ach-row:focus,
+		.gdl-bp-ach-row.gpfocus,
+		.gdl-bp-ach-row[data-focus="true"] {
+			background: #232c37 !important;
+			border-color: #ffffff !important;
+			outline: 2px solid #ffffff !important;
+			box-shadow: 0 0 16px rgba(255, 255, 255, 0.2) !important;
+			transform: scale(1.006);
+		}
+		.gdl-bp-ach-row-icon-frame {
+			width: 58px;
+			height: 58px;
+			min-width: 58px;
 			flex-shrink: 0;
+			border-radius: 3px;
+			overflow: hidden;
+			background: #000000;
 		}
-		.gdl-bp-ach-list-icon.is-locked {
-			filter: grayscale(1) brightness(0.5);
+		.gdl-bp-ach-row-icon {
+			width: 100%;
+			height: 100%;
+			object-fit: cover;
+			display: block;
 		}
-		.gdl-bp-ach-list-content {
+		.gdl-bp-ach-row-icon.is-locked {
+			opacity: 0.40;
+			filter: grayscale(1);
+		}
+		.gdl-bp-ach-row-body {
 			flex: 1;
 			display: flex;
 			flex-direction: column;
-			gap: 4px;
+			gap: 2px;
+			min-width: 0;
 		}
-		.gdl-bp-ach-list-title {
-			font-size: 18px;
+		.gdl-bp-ach-row-title {
+			font-size: 15.5px;
 			font-weight: 700;
 			color: #ffffff;
+			margin-bottom: 2px;
 		}
-		.gdl-bp-ach-list-desc {
-			font-size: 14px;
+		.gdl-bp-ach-row-desc {
+			font-size: 13px;
 			color: #8f98a0;
+			line-height: 1.35;
+			margin-bottom: 2px;
 		}
-		.gdl-bp-ach-list-unlocked-date {
-			font-size: 12.5px;
-			color: #2d73ff;
-			margin-top: 2px;
+		.gdl-bp-ach-row-global {
+			font-size: 11.5px;
+			color: #707b88;
 		}
-		.gdl-bp-ach-list-pct-container {
+		.gdl-bp-ach-row-status {
 			display: flex;
 			flex-direction: column;
 			align-items: flex-end;
-			gap: 6px;
-			min-width: 120px;
+			gap: 4px;
+			min-width: 180px;
+			flex-shrink: 0;
 		}
-		.gdl-bp-ach-list-pct-label {
-			font-size: 14px;
-			font-weight: 700;
-			color: #ffffff;
+		.gdl-bp-ach-row-unlocked-at {
+			font-size: 12px;
+			color: #8f98a0;
+			text-align: right;
 		}
-		.gdl-bp-ach-list-pct-track {
-			width: 100px;
-			height: 6px;
-			background: rgba(255, 255, 255, 0.12);
-			border-radius: 3px;
-			overflow: hidden;
+		.gdl-bp-ach-row-bar-done {
+			width: 150px;
+			height: 4px;
+			background: #1a9fff;
+			border-radius: 2px;
+			margin-top: 6px;
 		}
-		.gdl-bp-ach-list-pct-fill {
-			height: 100%;
-			background: #2d73ff;
-			border-radius: 3px;
+		.gdl-bp-ach-row-locked-badge {
+			font-size: 12px;
+			color: #707b88;
+			font-weight: 600;
+		}
+		.gdl-bp-ach-empty {
+			text-align: center;
+			padding: 40px;
+			color: #8f98a0;
+			font-size: 15px;
 		}
 		.gdl-bp-ach-screen-footer {
 			display: flex;
 			align-items: center;
-			gap: 20px;
-			padding-top: 20px;
+			justify-content: space-between;
+			padding: 18px 0 8px;
 			border-top: 1px solid rgba(255, 255, 255, 0.08);
+			margin-top: 14px;
+		}
+		.gdl-bp-ach-screen-footer-right {
+			display: flex;
+			align-items: center;
+			gap: 24px;
 		}
 		.gdl-bp-footer-prompt {
 			display: flex;
 			align-items: center;
 			gap: 8px;
 			color: #ffffff;
-			font-size: 14px;
+			font-size: 13px;
 			font-weight: 700;
 			cursor: pointer;
-			outline: none;
-			padding: 6px 12px;
-			border-radius: 4px;
 		}
-		.gdl-bp-footer-prompt:hover,
-		.gdl-bp-footer-prompt:focus,
-		.gdl-bp-footer-prompt.gpfocus {
-			background: rgba(255, 255, 255, 0.14);
-			box-shadow: 0 0 0 2px #ffffff;
+		.gdl-bp-xbox-icon {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 22px;
+			height: 22px;
+			color: #ffffff;
+			opacity: 0.9;
 		}
 		.gdl-bp-key-badge {
 			display: inline-flex;
 			align-items: center;
 			justify-content: center;
-			width: 26px;
-			height: 26px;
+			width: 22px;
+			height: 22px;
 			border-radius: 50%;
-			background: rgba(255, 255, 255, 0.2);
+			background: rgba(255, 255, 255, 0.22);
 			color: #ffffff;
-			font-size: 13px;
+			font-size: 12px;
 			font-weight: 800;
 		}
-		.gdl-bp-ach-footer-prompt-bar {
-			display: flex;
-			justify-content: flex-end;
-			margin-top: 16px;
+		.gdl-bp-key-badge.badge-a {
+			background: #5cba47;
+			color: #ffffff;
+		}
+		.gdl-bp-key-badge.badge-b {
+			background: #d94b4b;
+			color: #ffffff;
 		}
 	`;
 	(doc.head || doc.documentElement).appendChild(style);

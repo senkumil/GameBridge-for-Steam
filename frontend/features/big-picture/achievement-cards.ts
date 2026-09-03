@@ -376,7 +376,7 @@ function achievementLabels(percent: number): { progress: string; empty: string; 
 	};
 }
 
-function completionMedal(): string {
+export function completionMedal(): string {
 	return `<svg class="gdl-bp-card-medal" viewBox="0 0 36 44" aria-hidden="true">
 		<path fill="#0256a4" d="M12 28 L7 42 L13 39 L17 43 L15 28 Z"/>
 		<path fill="#036ac7" d="M24 28 L29 42 L23 39 L19 43 L21 28 Z"/>

@@ -361,12 +361,14 @@ function renderRoot(state: BigPictureDetailState): void {
 			|| state.data.game?.capsule_image || state.data.game?.header_image || '';
 
 		const openAchievements = () => {
+			const bg = state.data?.game?.background || state.data?.game?.background_raw || state.data?.game?.header_image || '';
 			openBigPictureAchievementsScreen(
 				root.ownerDocument,
 				ach,
 				state.data?.game?.name || state.shortcut.title,
 				portrait,
-				state.shortcut.id
+				state.shortcut.id,
+				bg
 			);
 		};
 

@@ -124,11 +124,13 @@ export function installBigPictureGamepadNavigation(
 	};
 
 	const isTabStripFocused = (): boolean => {
+		const marked = root.querySelector<HTMLElement>('.gpfocus, [data-focus="true"]');
+		if (marked && marked.isConnected) return false;
 		const active = doc.activeElement as HTMLElement | null;
 		if (active && (root === active || root.contains(active))) return false;
 		if (active && (strip === active || strip.contains(active))) return true;
 		for (const el of controls.values()) {
-			if (el === active || el.contains(active)) return true;
+			if (el === active || el.contains(active) || el.classList.contains('gpfocus')) return true;
 		}
 		return false;
 	};
@@ -177,12 +179,14 @@ export function installBigPictureGamepadNavigation(
 			}
 		}
 
-		const active = doc.activeElement as HTMLElement | null;
-		let current: HTMLElement | null = (active && currentScope.contains(active)) ? active : null;
-		if (!current) {
-			const marked = currentScope.querySelector<HTMLElement>('.gpfocus, [data-focus="true"]');
-			if (marked && marked.isConnected) {
-				current = marked;
+		let current: HTMLElement | null = null;
+		const marked = currentScope.querySelector<HTMLElement>('.gpfocus, [data-focus="true"]');
+		if (marked && marked.isConnected) {
+			current = marked;
+		} else {
+			const active = doc.activeElement as HTMLElement | null;
+			if (active && currentScope.contains(active)) {
+				current = active;
 			} else if (lastFocusedElement && lastFocusedElement.isConnected && currentScope.contains(lastFocusedElement)) {
 				current = lastFocusedElement;
 			}
@@ -238,7 +242,7 @@ export function installBigPictureGamepadNavigation(
 			}
 
 			// If focus is currently on the tab strip, enter the panel
-			if (!modal && isTabStripFocused()) {
+			if (!modal && !current && isTabStripFocused()) {
 				const primary = currentScope.querySelector<HTMLElement>(
 					'.gdl-bp-feed-card, .gdl-bp-ach-featured, .gdl-bp-ach-progress, .gdl-bp-community-card, .gdl-bp-card-item, .gdl-bp-info-link'
 				);
