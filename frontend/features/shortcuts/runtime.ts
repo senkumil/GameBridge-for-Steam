@@ -14,3 +14,4 @@ export { hasPendingLinkJob } from './link-job-queue';
 export { shouldAutoApplyNoLauncher, hasNoLauncherOption, mergeNoLauncherOption, getOptimalLauncherSkipArg, removeIncompatibleLauncherBypass } from './linking';
 
 export { clearNativeAddAutoPromptSuppressions, getNativeAddAutoPromptSuppressionCount, getNativeAddAutoPromptSuppressions } from './auto-prompt-policy';
+export { performFactoryReset, type FactoryResetOptions, type FactoryResetResult } from './factory-reset';

@@ -22,10 +22,80 @@ function M.strip_html(value)
     return M.trim(M.html_unescape(s))
 end
 
+local LOCALE_TO_STEAM_LANG = {
+    en = "english", english = "english",
+    es = "spanish", spanish = "spanish",
+    ["es_419"] = "latam", ["es-419"] = "latam", latam = "latam",
+    fr = "french", french = "french",
+    de = "german", german = "german",
+    it = "italian", italian = "italian",
+    pt = "portuguese", portuguese = "portuguese",
+    ["pt_br"] = "brazilian", ["pt-br"] = "brazilian", brazilian = "brazilian",
+    ru = "russian", russian = "russian",
+    pl = "polish", polish = "polish",
+    tr = "turkish", turkish = "turkish",
+    nl = "dutch", dutch = "dutch",
+    sv = "swedish", swedish = "swedish",
+    da = "danish", danish = "danish",
+    fi = "finnish", finnish = "finnish",
+    no = "norwegian", nb = "norwegian", nn = "norwegian", norwegian = "norwegian",
+    hu = "hungarian", hungarian = "hungarian",
+    cs = "czech", czech = "czech",
+    ro = "romanian", romanian = "romanian",
+    bg = "bulgarian", bulgarian = "bulgarian",
+    el = "greek", greek = "greek",
+    uk = "ukrainian", ukrainian = "ukrainian",
+    vi = "vietnamese", vietnamese = "vietnamese",
+    th = "thai", thai = "thai",
+    ar = "arabic", arabic = "arabic",
+    id = "indonesian", indonesian = "indonesian",
+    ja = "japanese", japanese = "japanese",
+    ko = "koreana", korean = "koreana", koreana = "koreana",
+    ["zh_cn"] = "schinese", ["zh-cn"] = "schinese", ["zh_hans"] = "schinese", ["zh-hans"] = "schinese", schinese = "schinese",
+    ["zh_tw"] = "tchinese", ["zh-tw"] = "tchinese", ["zh_hk"] = "tchinese", ["zh-hk"] = "tchinese", ["zh_hant"] = "tchinese", ["zh-hant"] = "tchinese", tchinese = "tchinese",
+}
+
 function M.safe_language(value)
-    local lang = tostring(value or "english"):gsub("[^%w_-]", "")
-    return lang ~= "" and lang or "english"
+    local raw = tostring(value or "english"):lower():gsub("%s+", "")
+    if LOCALE_TO_STEAM_LANG[raw] then return LOCALE_TO_STEAM_LANG[raw] end
+    local clean = raw:gsub("[^%w_-]", "")
+    if LOCALE_TO_STEAM_LANG[clean] then return LOCALE_TO_STEAM_LANG[clean] end
+    local base = clean:match("^([%w]+)")
+    if base and LOCALE_TO_STEAM_LANG[base] then return LOCALE_TO_STEAM_LANG[base] end
+    return clean ~= "" and clean or "english"
 end
+
+M.LANGUAGE_KEY_ALIASES = {
+    spanish = { "spanish", "latam", "spanish_latam", "es", "es-es", "es-419", "es_es", "es_419" },
+    latam = { "latam", "spanish", "spanish_latam", "es-419", "es_419", "es", "es-es", "es_es" },
+    brazilian = { "brazilian", "portuguese", "pt-br", "pt_br", "pt" },
+    portuguese = { "portuguese", "brazilian", "pt", "pt-pt", "pt_pt", "pt-br", "pt_br" },
+    schinese = { "schinese", "zh-cn", "zh_cn", "zh-hans", "zh_hans", "chinese", "zh" },
+    tchinese = { "tchinese", "zh-tw", "zh_tw", "zh-hk", "zh_hk", "zh-hant", "zh_hant" },
+    koreana = { "koreana", "korean", "ko", "ko-kr", "ko_kr" },
+    japanese = { "japanese", "ja", "ja-jp", "ja_jp" },
+    russian = { "russian", "ru", "ru-ru", "ru_ru" },
+    german = { "german", "de", "de-de", "de_de" },
+    french = { "french", "fr", "fr-fr", "fr_fr" },
+    italian = { "italian", "it", "it-it", "it_it" },
+    polish = { "polish", "pl", "pl-pl", "pl_pl" },
+    turkish = { "turkish", "tr", "tr-tr", "tr_tr" },
+    dutch = { "dutch", "nl", "nl-nl", "nl_nl" },
+    swedish = { "swedish", "sv", "sv-se", "sv_se" },
+    danish = { "danish", "da", "da-dk", "da_dk" },
+    finnish = { "finnish", "fi", "fi-fi", "fi_fi" },
+    norwegian = { "norwegian", "no", "nb", "nn", "no-no", "nb-no" },
+    hungarian = { "hungarian", "hu", "hu-hu", "hu_hu" },
+    czech = { "czech", "cs", "cs-cz", "cs_cz" },
+    romanian = { "romanian", "ro", "ro-ro", "ro_ro" },
+    bulgarian = { "bulgarian", "bg", "bg-bg", "bg_bg" },
+    greek = { "greek", "el", "el-gr", "el_gr" },
+    ukrainian = { "ukrainian", "uk", "uk-ua", "uk_ua" },
+    vietnamese = { "vietnamese", "vi", "vi-vn", "vi_vn" },
+    thai = { "thai", "th", "th-th", "th_th" },
+    arabic = { "arabic", "ar", "ar-sa", "ar_sa" },
+    indonesian = { "indonesian", "id", "id-id", "id_id" },
+}
 
 function M.normalize_appid_and_language(first, second)
     local appid = tostring(first or "")
@@ -216,6 +286,72 @@ function M.restore_steam_appid_file(request_json)
         end
     end
     return deps.cjson.encode({ ok = true, restored = restored })
+end
+
+function M.binary_cstring(data, position)
+    local finish = data:find("\0", position, true)
+    if not finish then return nil, position end
+    return data:sub(position, finish - 1), finish + 1
+end
+
+function M.binary_i32(data, position)
+    local b1, b2, b3, b4 = data:byte(position, position + 3)
+    if not b4 then return nil, position end
+    local value = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+    if value >= 2147483648 then value = value - 4294967296 end
+    return value, position + 4
+end
+
+function M.parse_binary_vdf_object(data, position, depth)
+    if depth > 16 then return nil, position, "maximum_depth" end
+    local result = {}
+    while position <= #data do
+        local value_type = data:byte(position)
+        position = position + 1
+        if value_type == 8 then return result, position, nil end
+
+        local key
+        key, position = M.binary_cstring(data, position)
+        if not key then return nil, position, "invalid_key" end
+
+        if value_type == 0 then
+            local child, next_position, parse_error = M.parse_binary_vdf_object(data, position, depth + 1)
+            if not child then return nil, next_position, parse_error end
+            result[key] = child
+            position = next_position
+        elseif value_type == 1 then
+            local value
+            value, position = M.binary_cstring(data, position)
+            if value == nil then return nil, position, "invalid_string" end
+            result[key] = value
+        elseif value_type == 2 then
+            local value
+            value, position = M.binary_i32(data, position)
+            if value == nil then return nil, position, "invalid_integer" end
+            result[key] = value
+        elseif value_type == 3 or value_type == 4 or value_type == 6 then
+            if position + 3 > #data then return nil, position, "truncated_value" end
+            position = position + 4
+        elseif value_type == 7 then
+            if position + 7 > #data then return nil, position, "truncated_uint64" end
+            position = position + 8
+        elseif value_type == 5 then
+            local cursor = position
+            local found = false
+            while cursor + 1 <= #data do
+                if data:byte(cursor) == 0 and data:byte(cursor + 1) == 0 then
+                    position = cursor + 2
+                    found = true
+                    break
+                end
+                cursor = cursor + 2
+            end
+            if not found then return nil, position, "invalid_wstring" end
+        else
+            return nil, position, "unsupported_type_" .. tostring(value_type)
+        end
+    end
+    return nil, position, "unexpected_eof"
 end
 
 return M

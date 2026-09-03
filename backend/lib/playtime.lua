@@ -476,6 +476,21 @@ function M.flush()
     return flush_if_due(true)
 end
 
+function M.clear_all()
+    logger:info("Clearing all playtime sessions and backups")
+    STORE = { version = 2, sessions = {}, aliases = {} }
+    STORE_DIRTY = false
+    for i = 1, SESSION_BACKUP_COUNT do
+        local bak = SESSIONS_FILE .. (i == 1 and ".bak" or ".bak." .. tostring(i - 1))
+        if fs.exists(bak) then os.remove(bak) end
+    end
+    local ok, err = config.write_json_atomic(SESSIONS_FILE, STORE)
+    if not ok then logger:warn("Could not clear playtime sessions file: " .. tostring(err)) end
+    LAST_SAVE_AT = os.time()
+    LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
+    return ok
+end
+
 load_sessions()
 return M
 end

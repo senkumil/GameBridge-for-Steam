@@ -230,7 +230,12 @@ export function showShortcutManualLinkModal(
 		}).catch(() => {});
 	};
 	const renderManualAppId = () => {
-		const manualAppId = manualAppIdInput.value.trim();
+		let manualAppId = manualAppIdInput.value.trim();
+		const urlMatch = manualAppId.match(/\/app\/(\d+)/i);
+		if (urlMatch) {
+			manualAppId = urlMatch[1];
+			manualAppIdInput.value = manualAppId;
+		}
 		if (!manualAppId) {
 			renderCandidate();
 			return;
@@ -291,6 +296,11 @@ export function showShortcutManualLinkModal(
 	manualAppIdInput.addEventListener('input', () => {
 		renderManualAppId();
 		updateLauncherBypass(manualAppIdInput.value.trim());
+		const val = manualAppIdInput.value.trim();
+		if (/^\d+$/.test(val)) {
+			confirm.disabled = false;
+			confirm.style.opacity = '1';
+		}
 	});
 	renderCandidate();
 	if (loading) {
@@ -537,7 +547,7 @@ async function inspectShortcutReview(
 ): Promise<void> {
 	// A dismissed shortcut intentionally renders the manual-link button even if
 	// an older mapping remains on disk. It must be allowed to re-open review.
-	if (shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id)) return;
+	if (source !== 'manual' && shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id)) return;
 	// Paint the real picker immediately. Detection continues in the background
 	// and replaces this same modal once candidates are ready; there is no separate
 	// loading dialog that makes the click feel delayed or disconnected.
@@ -565,17 +575,18 @@ async function inspectShortcutReview(
 	// immediately while another identity operation is active.
 	if (shortcutMutationInProgress() && source === 'manual') {
 		let waitMs = 0;
-		while (shortcutMutationInProgress() && waitMs < 8000) {
-			await new Promise(resolve => setTimeout(resolve, 250));
-			waitMs += 250;
+		while (shortcutMutationInProgress() && waitMs < 1200) {
+			await new Promise(resolve => setTimeout(resolve, 200));
+			waitMs += 200;
 		}
 	}
 	if (shortcutMutationInProgress() && source !== 'manual') {
 		backendLog(`Ignoring automatic link review for ${record.title} while another identity operation is active.`);
 		return;
 	}
-	if (shortcutDetectionInFlight.has(record.id)) return;
+	if (source !== 'manual' && shortcutDetectionInFlight.has(record.id)) return;
 	shortcutDetectionInFlight.add(record.id);
+	let modalRendered = false;
 	try {
 		let context: ShortcutDetectionContext | null = null;
 		for (let attempt = 0; attempt < 3; attempt++) {
@@ -597,12 +608,23 @@ async function inspectShortcutReview(
 		}
 		if (!context.title && !context.exePath) {
 			backendLog(`Manual link review has no title or executable for shortcut ${record.title} (${record.id})`);
+			if (source === 'manual') {
+				const fallbackDoc = (immediateDoc && immediateDoc.body)
+					? immediateDoc
+					: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
+				if (fallbackDoc) {
+					showShortcutManualLinkModal(fallbackDoc, context, { candidates: [] }, { source: 'manual', loading: false });
+					modalRendered = true;
+				}
+			}
 			return;
 		}
 
 		let rawDetection: ShortcutDetectionResult | null = null;
 		try {
-			rawDetection = await detectShortcutCandidates(context);
+			const detectionPromise = detectShortcutCandidates(context);
+			const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 5000));
+			rawDetection = await Promise.race([detectionPromise, timeoutPromise]);
 		} catch (detectionErr) {
 			backendLog(`Candidate detection error for ${record.title}: ${detectionErr}`);
 		}
@@ -647,7 +669,7 @@ async function inspectShortcutReview(
 
 		// A route change or an explicit close can remove the immediate modal while
 		// detection is running. Never resurrect it after that cancellation.
-		if (loadingShown && !manualLinkModalPresent(immediateDoc)) return;
+		if (loadingShown && !manualLinkModalPresent(immediateDoc) && source !== 'manual') return;
 		const doc = (immediateDoc && immediateDoc.body)
 			? immediateDoc
 			: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
@@ -655,16 +677,26 @@ async function inspectShortcutReview(
 		// The immediate picker is replaced in-place with the detected candidate
 		// data. Closing it is an explicit cancellation, so stop here.
 		if (loadingShown) {
-			if (!doc.getElementById('gdl-manual-link-modal')) return;
-			doc.getElementById('gdl-manual-link-modal')?.remove();
+			const existingModal = (doc || immediateDoc)?.getElementById('gdl-manual-link-modal');
+			if (existingModal) existingModal.remove();
 		}
 		if (shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id) && source !== 'manual') return;
 		backendLog(`Showing ${source} link modal for ${record.title} with ${detection.candidates.length} candidate(s)`);
 		showShortcutManualLinkModal(doc, context, detection, { source });
+		modalRendered = true;
 	} catch (error) {
 		backendLog(`Manual shortcut review failed for ${record.title}: ${error}`);
+		if (source === 'manual' && !modalRendered) {
+			try {
+				const fallbackDoc = immediateDoc || shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null);
+				if (fallbackDoc) {
+					showShortcutManualLinkModal(fallbackDoc, immediateContext, { candidates: [] }, { source: 'manual', loading: false });
+					modalRendered = true;
+				}
+			} catch {}
+		}
 	} finally {
-		if (loadingShown) {
+		if (loadingShown && !modalRendered && source !== 'manual') {
 			const liveDoc = (immediateDoc && immediateDoc.body)
 				? immediateDoc
 				: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
@@ -682,11 +714,13 @@ function scheduleShortcutReview(
 	targetDoc?: Document | null,
 ): void {
 	if (!Number.isFinite(record.id) || record.id < 2147483648 || !record.title.trim()) return;
-	if (shortcutDetectionScheduled.has(record.id) || shortcutDetectionInFlight.has(record.id)) return;
+	if (source !== 'manual' && (shortcutDetectionScheduled.has(record.id) || shortcutDetectionInFlight.has(record.id))) return;
 	shortcutDetectionScheduled.add(record.id);
-	setTimeout(() => {
+	const exec = () => {
 		void inspectShortcutReview(record, source, targetDoc).finally(() => shortcutDetectionScheduled.delete(record.id));
-	}, delay);
+	};
+	if (delay > 0) setTimeout(exec, delay);
+	else exec();
 }
 
 function resolveOrSynthesizeShortcutRecord(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): { id: number; title: string; app: any } | null {

@@ -1,6 +1,6 @@
 import type { LocalAchievementData } from '../../domain/types';
 import { escapeHtml } from '../../core/text';
-import { loc } from '../../steam/localization';
+import { gdlText, loc } from '../../steam/localization';
 import { detectConnectedController } from '../library/controller';
 import { CONTROLLERS_IMAGE_DATA_URI } from './controllers-asset';
 import { getInstantPlaytimeStats } from '../playtime/service';
@@ -111,33 +111,53 @@ export function syncBigPicturePlaybarEnhancements(
 	const minutesForever = Math.max(0, Number(instantStats?.minutesForever || 0), Number((app as any)?.minutes_playtime_forever || 0));
 	const lastPlayedTimestamp = Number(instantStats?.lastPlayedAt || (app as any)?.rt_last_time_played || (app as any)?.rt_recent_activity_time || 0);
 
-	// Check if Steam native already rendered "ÚLTIMA SESIÓN" and "TIEMPO DE JUEGO"
+	// Check if Steam native already rendered "LAST SESSION" and "PLAY TIME"
+	const nativeLastSessionTokens = [
+		loc('AppDetails_SectionTitle_LastSession', ''),
+		loc('AppDetails_SectionTitle_LastPlayed', ''),
+		loc('AppDetails_LastPlayed', ''),
+	].map(s => s.trim().toLowerCase()).filter(Boolean);
+
 	const hasNativeLastSession = Array.from(playbarStats.children).some(child => {
 		if (child.id?.startsWith('gdl-bp-stat-')) return false;
 		const t = (child.textContent || '').toLowerCase();
-		return t.includes('última sesión') || t.includes('last session') || t.includes('last played') || t.includes('dernière session') || t.includes('letzte sitzung');
+		if (nativeLastSessionTokens.some(tok => t.includes(tok))) return true;
+		return t.includes('última sesión') || t.includes('ultima sesion') || t.includes('last session') || t.includes('last played')
+			|| t.includes('dernière session') || t.includes('letzte sitzung') || t.includes('ultima sessione') || t.includes('последний запуск')
+			|| t.includes('最后运行') || t.includes('最後運行') || t.includes('最後にプレイ') || t.includes('최근 플레이');
 	});
+
+	const nativePlaytimeTokens = [
+		loc('AppDetails_SectionTitle_Playtime', ''),
+		loc('AppDetails_Playtime_Forever', ''),
+		loc('AppDetails_Playtime', ''),
+	].map(s => s.trim().toLowerCase()).filter(Boolean);
 
 	const hasNativePlaytime = Array.from(playbarStats.children).some(child => {
 		if (child.id?.startsWith('gdl-bp-stat-')) return false;
 		const t = (child.textContent || '').toLowerCase();
-		return t.includes('tiempo de juego') || t.includes('play time') || t.includes('playtime') || t.includes('temps de jeu') || t.includes('spielzeit');
+		if (nativePlaytimeTokens.some(tok => t.includes(tok))) return true;
+		return t.includes('tiempo de juego') || t.includes('play time') || t.includes('playtime')
+			|| t.includes('temps de jeu') || t.includes('spielzeit') || t.includes('tempo di gioco')
+			|| t.includes('время в игре') || t.includes('czas gry') || t.includes('oyun süresi')
+			|| t.includes('游戏时间') || t.includes('遊戲時間') || t.includes('プレイ時間') || t.includes('플레이 시간');
 	});
 
-	// Inject or update "ÚLTIMA SESIÓN" if not provided by Steam native
+	// Inject or update "LAST SESSION" if not provided by Steam native
 	let lastSessionStat = playbarStats.querySelector<HTMLElement>('#gdl-bp-stat-last-session');
 	if (!hasNativeLastSession) {
 		const lastPlayedText = lastPlayedTimestamp > 0
 			? formatLastPlayedDate(lastPlayedTimestamp)
-			: loc('AppDetails_LastPlayed_Today', 'Hoy');
+			: (loc('DateTime_Today', '') || gdlText('last_played_today', 'Today'));
 
 		if (!lastSessionStat) {
 			lastSessionStat = doc.createElement('div');
 			lastSessionStat.id = 'gdl-bp-stat-last-session';
 			lastSessionStat.className = 'gdl-bp-playbar-stat';
 		}
+		const lastSessionLabel = loc('AppDetails_SectionTitle_LastSession', '') || loc('AppDetails_SectionTitle_LastPlayed', '') || gdlText('last_played_section_title', 'LAST SESSION');
 		lastSessionStat.innerHTML = `
-			<div class="gdl-bp-stat-label">${escapeHtml(loc('AppDetails_SectionTitle_LastSession', 'ÚLTIMA SESIÓN').toUpperCase())}</div>
+			<div class="gdl-bp-stat-label">${escapeHtml(lastSessionLabel.toUpperCase())}</div>
 			<div class="gdl-bp-stat-value">${escapeHtml(lastPlayedText)}</div>
 		`;
 	} else if (lastSessionStat) {
@@ -145,7 +165,7 @@ export function syncBigPicturePlaybarEnhancements(
 		lastSessionStat = null;
 	}
 
-	// Inject or update "TIEMPO DE JUEGO" if not provided by Steam native
+	// Inject or update "PLAY TIME" if not provided by Steam native
 	let playtimeStat = playbarStats.querySelector<HTMLElement>('#gdl-bp-stat-playtime');
 	if (!hasNativePlaytime && minutesForever > 0) {
 		const playtimeText = formatPlaytimeMinutes(minutesForever);
@@ -154,8 +174,9 @@ export function syncBigPicturePlaybarEnhancements(
 			playtimeStat.id = 'gdl-bp-stat-playtime';
 			playtimeStat.className = 'gdl-bp-playbar-stat';
 		}
+		const playtimeLabel = loc('AppDetails_SectionTitle_Playtime', '') || gdlText('playtime_section_title', 'PLAY TIME');
 		playtimeStat.innerHTML = `
-			<div class="gdl-bp-stat-label">${escapeHtml(loc('AppDetails_SectionTitle_Playtime', 'TIEMPO DE JUEGO').toUpperCase())}</div>
+			<div class="gdl-bp-stat-label">${escapeHtml(playtimeLabel.toUpperCase())}</div>
 			<div class="gdl-bp-stat-value">${escapeHtml(playtimeText)}</div>
 		`;
 	} else if (playtimeStat) {
@@ -164,11 +185,19 @@ export function syncBigPicturePlaybarEnhancements(
 	}
 
 	// Hide duplicate native achievements block if we have achievements to show
+	const nativeAchievementTokens = [
+		loc('AppDetails_SectionTitle_Achievements', ''),
+		loc('AppDetails_Achievements', ''),
+	].map(s => s.trim().toLowerCase()).filter(Boolean);
+
 	if (achievements && achievements.total > 0) {
 		Array.from(playbarStats.children).forEach(child => {
 			if (child.id?.startsWith('gdl-bp-stat-')) return;
 			const text = (child.textContent || '').toLowerCase();
-			if (text.includes('logros') || text.includes('achievements') || text.includes('erfolge') || text.includes('succès') || text.includes('conquistas') || text.includes('trofei')) {
+			if (nativeAchievementTokens.some(tok => text.includes(tok))
+				|| text.includes('logros') || text.includes('achievements') || text.includes('erfolge') || text.includes('succès')
+				|| text.includes('conquistas') || text.includes('trofei') || text.includes('достижения') || text.includes('osiągnięcia')
+				|| text.includes('başarımlar') || text.includes('成就') || text.includes('実績') || text.includes('도전 과제')) {
 				(child as HTMLElement).style.display = 'none';
 			}
 		});
@@ -180,10 +209,19 @@ export function syncBigPicturePlaybarEnhancements(
 	const hasConnectedController = ctrlInfo.connected || gamepads.length > 0;
 
 	// Check if Steam native already rendered a "CONTROL" stat in the playbar
+	const nativeControlTokens = [
+		loc('AppDetails_SectionTitle_Controller', ''),
+		loc('Controller_Header', ''),
+	].map(s => s.trim().toLowerCase()).filter(Boolean);
+
 	const hasNativeControl = Array.from(playbarStats.children).some(child => {
 		if (child.id?.startsWith('gdl-bp-stat-')) return false;
 		const text = (child.textContent || '').toLowerCase();
-		return text.includes('control') || text.includes('controller') || text.includes('mando');
+		if (nativeControlTokens.some(tok => text.includes(tok))) return true;
+		return text.includes('control') || text.includes('controller') || text.includes('mando')
+			|| text.includes('contrôleur') || text.includes('manette') || text.includes('контроллер')
+			|| text.includes('kontroler') || text.includes('denetleyici') || text.includes('控制器')
+			|| text.includes('コントローラ') || text.includes('컨트롤러');
 	});
 
 	let ctrlStat = playbarStats.querySelector<HTMLElement>('#gdl-bp-stat-control');

@@ -2,7 +2,7 @@ import type { ShortcutDetectionCandidate, ShortcutDetectionContext } from '../..
 import { backendLog } from '../../api/backend';
 import { escapeHtml, templateToRegex } from '../../core/text';
 import { gdlText, loc, setLocalizationDocumentProvider, steamLanguageSync } from '../../steam/localization';
-import { getCachedGameData } from '../../core/game-data';
+import { getCachedGameData, getGameData } from '../../core/game-data';
 import { findActiveShortcutAppId, findShortcutAppIdByName, shortcutPathBasename } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForShortcut } from './registry';
@@ -273,6 +273,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	const trackingExecutableCopy = section.querySelector('.gdl-tracking-executable-copy') as HTMLElement;
 	let detectionContext: ShortcutDetectionContext | null = null;
 	let achievementBinding: { sync: (appId?: string) => void } | null = null;
+	let currentCandidates: ShortcutDetectionCandidate[] = [];
 	// A properties window stays open while several asynchronous operations finish.
 	// Keep a revision for the requested target so a late status from a previous
 	// AppID can never describe the AppID the user has just entered.
@@ -384,16 +385,100 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 
 	updateButtonStates();
 	if (initialAppId) {
-		renderCandidatePreview([{ name: initialGameName, appid: initialAppId, image: initialHeaderUrl, score: 100, confidence: 'exact' }], initialAppId);
+		currentCandidates = [{ name: initialGameName, appid: initialAppId, image: initialHeaderUrl, score: 100, confidence: 'exact' }];
+		renderCandidatePreview(currentCandidates, initialAppId);
 		if (shouldAutoApplyNoLauncher(initialAppId)) {
 			skipLauncherLabel.style.display = 'flex';
 			skipLauncherInput.checked = true;
 		}
 	}
+	let manualLookupTimer: ReturnType<typeof setTimeout> | null = null;
 	input.addEventListener('input', () => {
 		clearTargetStatus();
 		updateButtonStates();
-		achievementBinding?.sync(input.value.trim());
+		const rawVal = input.value.trim();
+		const urlMatch = rawVal.match(/\/app\/(\d+)/i);
+		const parsedAppId = urlMatch ? urlMatch[1] : rawVal;
+		if (urlMatch && input.value !== parsedAppId) {
+			input.value = parsedAppId;
+			updateButtonStates();
+		}
+		achievementBinding?.sync(parsedAppId);
+
+		if (!/^\d+$/.test(parsedAppId)) {
+			if (manualLookupTimer) {
+				clearTimeout(manualLookupTimer);
+				manualLookupTimer = null;
+			}
+			return;
+		}
+
+		const lookupAppId = parsedAppId;
+		const targetRev = ++targetRevision;
+		if (manualLookupTimer) clearTimeout(manualLookupTimer);
+		statusEl.textContent = gdlText('verifying_steam', 'Verifying on Steam...');
+		statusEl.style.color = '#8f98a0';
+
+		manualLookupTimer = setTimeout(() => {
+			void getGameData(lookupAppId).then(official => {
+				if (targetRev !== targetRevision || input.value.trim() !== lookupAppId) return;
+				if (!official) {
+					statusEl.textContent = gdlText('appid_not_found', 'AppID {id} was not found on Steam.', { id: lookupAppId });
+					statusEl.style.color = '#ff6b6b';
+					return;
+				}
+				const name = String(official.name || `Steam AppID ${lookupAppId}`);
+				const image = String(official.header_image || official.capsule_image || official.capsule_imagev5 || `https://cdn.cloudflare.steamstatic.com/steam/apps/${lookupAppId}/header.jpg`).trim();
+				const candidate: ShortcutDetectionCandidate = {
+					name,
+					appid: lookupAppId,
+					image,
+					score: 100,
+					confidence: 'exact',
+				};
+				const existingIndex = currentCandidates.findIndex(c => c.appid === lookupAppId);
+				if (existingIndex >= 0) {
+					currentCandidates[existingIndex] = candidate;
+				} else {
+					currentCandidates.unshift(candidate);
+				}
+				renderCandidatePreview(currentCandidates, lookupAppId);
+
+				let optionExists = false;
+				for (let i = 0; i < autoSelect.options.length; i++) {
+					if (autoSelect.options[i].value === lookupAppId) {
+						optionExists = true;
+						break;
+					}
+				}
+				if (!optionExists) {
+					const opt = doc.createElement('option');
+					opt.value = lookupAppId;
+					opt.textContent = `${name} — AppID ${lookupAppId}`;
+					autoSelect.insertBefore(opt, autoSelect.firstChild);
+				}
+				autoSelect.value = lookupAppId;
+				autoTitle.style.display = 'block';
+				autoTitle.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name });
+
+				if (shouldAutoApplyNoLauncher(lookupAppId)) {
+					skipLauncherLabel.style.display = 'flex';
+					skipLauncherInput.checked = true;
+				} else {
+					skipLauncherLabel.style.display = 'none';
+					skipLauncherInput.checked = false;
+				}
+
+				statusEl.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name });
+				statusEl.style.color = '#5ba32b';
+				updateButtonStates();
+				achievementBinding?.sync(lookupAppId);
+			}).catch(() => {
+				if (targetRev !== targetRevision || input.value.trim() !== lookupAppId) return;
+				statusEl.textContent = gdlText('appid_not_found', 'AppID {id} was not found on Steam.', { id: lookupAppId });
+				statusEl.style.color = '#ff6b6b';
+			});
+		}, 250);
 	});
 	const syncLinkStatusFromState = (): void => {
 		if (!section.isConnected) return;
@@ -459,6 +544,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			}
 			const detection = await detectShortcutCandidates(detectionContext);
 			const viable = detection?.candidates || [];
+			currentCandidates = viable;
 			if (!viable.length) {
 				if (!initialAppId) {
 					if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }

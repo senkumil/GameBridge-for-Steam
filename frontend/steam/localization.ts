@@ -1,6 +1,10 @@
 import { backendLog } from '../api/backend';
 import { escapeRegex } from '../core/text';
 import { OTHER_LANGUAGE_TRANSLATIONS } from './custom-translations';
+import { SPANISH_TOKEN_FALLBACKS } from './token-fallbacks';
+import { GDL_STEAM_TOKEN_SPECS, STEAM_LANGUAGE_TO_LOCALE, type SteamUiTokenSpec } from './token-specs';
+
+export { SPANISH_TOKEN_FALLBACKS, GDL_STEAM_TOKEN_SPECS, STEAM_LANGUAGE_TO_LOCALE, type SteamUiTokenSpec };
 
 let localizationDocumentProvider: (() => Document | null) | null = null;
 
@@ -27,80 +31,6 @@ export function steamLocalizationManager(): any | null {
 		return null;
 	} catch { return null; }
 }
-
-export const SPANISH_TOKEN_FALLBACKS: Record<string, string> = {
-	AppDetails_Shortcut_Explanation: 'Alguna información sobre %1$s no está disponible porque no es un juego de Steam o es un mod. No obstante, Steam controla el inicio del juego por ti y, en la mayoría de los casos, la interfaz dentro del juego estará disponible.',
-	AppDetails_SectionTitle_Activity: 'Actividad',
-	AppActivity_StatusUpdate_Post: 'Diles algo sobre este juego a tus amigos...',
-	AppActivity_PostStatusUpdate: 'Publicar',
-	AppActivity_FetchMore: 'Cargar más actividad',
-	AppDetails_SectionTitle_Community: 'Contenido de la comunidad',
-	AppDetails_SectionTitle_Achievements: 'Logros',
-	AppActivity_NoActivity: 'No hay actividad reciente de los desarrolladores de este título o de tus amigos.',
-	AppActivity_ViewLatestNews: 'Ver las últimas novedades',
-	AppDetails_Developer: 'Desarrollador',
-	AppDetails_Publisher: 'Editor',
-	AppDetails_Franchise: 'Franquicia',
-	AppDetails_ReleaseDate: 'Fecha de publicación',
-	AppDetails_GameInfo: 'Información del juego',
-	GameAction_ViewDetails: 'Mostrar detalles del juego',
-	GameAction_ViewDetails_Collapse: 'Ocultar detalles del juego',
-	AppDetails_Feature_SinglePlayer: 'Un jugador',
-	AppDetails_Feature_MultiPlayer: 'Multijugador',
-	AppDetails_Feature_CoOp: 'Cooperativo',
-	AppDetails_Feature_SteamCloud: 'Progreso guardado en la nube',
-	AppDetails_Feature_FullController: 'Compatibilidad total con control',
-	AppDetails_Feature_PartialController: 'Compatibilidad parcial con control',
-	AppDetails_Feature_FamilySharing: 'Préstamo familiar',
-	AppDetails_Feature_RemotePlayTogether: 'Remote Play Together',
-	AppDetails_SectionTitle_TradingCards: 'Tarjetas',
-	AppDetails_Links_Store: 'Página de la tienda',
-	AppDetails_Links_DLC: 'DLC',
-	AppDetails_Links_Community: 'Punto de encuentro',
-	AppDetails_Links_PointsShop: 'Tienda de puntos',
-	AppDetails_Link_Discussions: 'Discusiones',
-	AppDetails_Link_Guides: 'Guías',
-	AppDetails_Link_Workshop: 'Steam Workshop',
-	AppDetails_Link_Support: 'Soporte',
-	Button_Close: 'Cerrar',
-	Button_Cancel: 'Cancelar',
-	Button_Continue: 'Continuar',
-	Search: 'Buscar',
-	Button_Save: 'Guardar',
-	AppActivity_Achieved: ' ha conseguido',
-	AppActivity_PostedVideo: ' ha compartido un vídeo',
-	AppActivity_PostedVideo_Plural: ' ha compartido %1$s vídeos',
-	AppActivity_PostedScreenshot: ' ha compartido una captura de pantalla',
-	AppActivity_PostedScreenshot_Plural: ' ha compartido %1$s capturas de pantalla',
-	AppActivity_RecommendedGame: ' ha hecho una reseña de este juego',
-	AppActivity_RecommendedGame_ReadMore: 'Leer más',
-	AppActivity_ReceivedNewGameList: ' ha añadido %1$s a su biblioteca',
-	AppActivity_AddedGameToWishlist: ' ha añadido %1$s a su %2$s',
-	AppActivity_Wishlist: 'lista de deseados',
-	AppActivity_PlayedGameFirstTime: ' ha jugado a %1$s por primera vez',
-	AppActivity_UserStatus: ' ha publicado una actualización de estado',
-	AppDetails_SectionTitle_Controller: 'Control',
-	AppDetailsControllerSection_Title_Supported_Xbox: 'Compatible con tu control de Xbox',
-	AppDetailsControllerSection_Title_Supported_DualShock: 'Compatible con tu control DualShock',
-	AppDetailsControllerSection_Title_Supported_Dualsense: 'Compatible con tu control DualSense',
-	AppDetailsControllerSection_Title_Supported_Generic: 'Compatible con tu control',
-	AppDetailsControllerSection_DevSupported: 'Este juego debería funcionar muy bien con tu control',
-	AppControllerConfiguration_Link: 'Ver los ajustes del control',
-	AppDetails_SectionTitle_Friends: 'Amigos que juegan',
-	AppDetails_Friends_Who_Play: 'Amigos que juegan',
-	AppDetails_Friends_PlayedPreviously: '%1$s amigos lo jugaron antes',
-	AppDetails_Friends_PlayedPreviously_Single: '1 amigo lo jugó antes',
-	AppDetails_Friends_PlayedRecently: '%1$s amigos jugaron recientemente',
-	AppDetails_Friends_PlayedRecently_Single: '1 amigo jugó recientemente',
-	AppDetails_Friends_Wishlist_Single: '1 amigo tiene %1$s en su lista de deseados',
-	AppDetails_Friends_Wishlist_Plural: '%1$s amigos tienen %2$s en su lista de deseados',
-	AppDetails_Friends_Wishlist: '%1$s amigos tienen %2$s en su lista de deseados',
-	AppDetails_Friends_ViewAll: 'Ver todos los amigos que lo juegan',
-	AppDetails_ViewAllFriendsWhoPlay: 'Ver todos los amigos que lo juegan',
-	AppDetails_Achievement_ViewAllAchievements: 'Ver todos mis logros',
-	AppDetails_ViewAllAchievements: 'Ver todos mis logros',
-	AppDetails_Achievements_ViewAll: 'Ver todos mis logros',
-};
 
 export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	controller_section_title: 'Control',
@@ -532,6 +462,17 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	recent: 'Reciente',
 	user_status: 'Publicación de estado',
 	no_achievements_match: 'No hay logros que coincidan con la búsqueda.',
+	factory_reset_title: 'Restablecer a valores de fábrica',
+	factory_reset_description: 'Restaura todos los ajustes, vinculaciones, carátulas y caché del plugin a su estado original de fábrica.',
+	factory_reset_button: 'Restablecer todo a fábrica',
+	factory_reset_confirm_title: '¿Restablecer todo a fábrica?',
+	factory_reset_confirm_warning: 'Esta acción desvinculará todos los juegos no Steam, eliminará las carátulas personalizadas y devolverá las opciones a sus valores predeterminados.',
+	factory_reset_delete_playtime_label: 'Borrar también historial de sesiones y tiempo de juego registrado',
+	factory_reset_delete_playtime_help: 'Si no lo marcas, tu historial de tiempo de juego se mantendrá a salvo.',
+	factory_reset_confirm_btn: 'Confirmar y restablecer',
+	factory_reset_busy: 'Restableciendo plugin...',
+	factory_reset_success: 'Plugin restablecido a valores de fábrica.',
+	factory_reset_failed: 'No se pudo restablecer el plugin.',
 };
 
 export function detectSynchronousSteamLanguage(): string | null {
@@ -631,7 +572,11 @@ export function loc(token: string, fallbackEnglish: string): string {
 }
 
 export const LOCALE_TO_STEAM_LANG: Record<string, string> = {
-	en: 'english', de: 'german', fr: 'french', it: 'italian', ko: 'koreana',
+	en: 'english', english: 'english',
+	de: 'german', german: 'german',
+	fr: 'french', french: 'french',
+	it: 'italian', italian: 'italian',
+	ko: 'koreana', korean: 'koreana', koreana: 'koreana',
 	es: 'spanish', 'es-419': 'latam', 'es-mx': 'latam', 'es-ar': 'latam', 'es-cl': 'latam', 'es-co': 'latam', 'es-pe': 'latam',
 	'zh-cn': 'schinese', 'zh-sg': 'schinese', 'zh-hans': 'schinese', 'zh-tw': 'tchinese', 'zh-hk': 'tchinese', 'zh-hant': 'tchinese',
 	ru: 'russian', th: 'thai', ja: 'japanese', pt: 'portuguese', 'pt-br': 'brazilian',
@@ -650,7 +595,7 @@ export const LANG_FINGERPRINT: Record<string, string> = {
 	'Prestasjoner': 'norwegian', 'Osiągnięcia': 'polish', 'Proezas': 'portuguese',
 	'Realizări': 'romanian', 'Достижения': 'russian', 'Prestationer': 'swedish',
 	'รางวัลความสำเร็จ': 'thai', 'Başarımlar': 'turkish', 'Досягнення': 'ukrainian',
-	'Thành tựu': 'vietnamese',
+	'Thành tựu': 'vietnamese', '成就': 'schinese', 'Pencapaian': 'indonesian',
 };
 
 export const LANG_TIEBREAK: Record<string, Record<string, string>> = {
@@ -753,83 +698,6 @@ export async function getSteamLanguage(forceRefresh = false): Promise<string> {
 	return _steamLanguage || 'english';
 }
 
-export type SteamUiTokenSpec = { tokens?: string[]; params?: string[] };
-
-export const GDL_STEAM_TOKEN_SPECS: Record<string, SteamUiTokenSpec> = {
-	activity: { tokens: ['AppDetails_SectionTitle_Activity'] },
-	post_placeholder: { tokens: ['AppActivity_StatusUpdate_Post'] },
-	publish: { tokens: ['AppActivity_PostStatusUpdate'] },
-	fetch_more: { tokens: ['AppActivity_FetchMore'] },
-	community_content: { tokens: ['AppDetails_SectionTitle_Community'] },
-	achievements_label: { tokens: ['AppDetails_SectionTitle_Achievements'] },
-	achievements_unlocked: { tokens: ['AppDetails_PlayerUnlockedPercent'], params: ['unlocked', 'total'] },
-	all_achievements_unlocked: { tokens: ['AppDetails_PlayerUnlockedPercentAll', 'AppDetails_PlayerUnlockedPercent'], params: ['unlocked', 'total'] },
-	no_recent_activity: { tokens: ['AppActivity_NoActivity'] },
-	latest_news: { tokens: ['AppActivity_ViewLatestNews'] },
-	developer: { tokens: ['AppDetails_Developer'] },
-	publisher: { tokens: ['AppDetails_Publisher'] },
-	franchise: { tokens: ['AppDetails_Franchise'] },
-	release_date: { tokens: ['AppDetails_ReleaseDate'] },
-	game_information: { tokens: ['AppDetails_GameInfo'] },
-	show_game_details: { tokens: ['GameAction_ViewDetails'] },
-	hide_game_details: { tokens: ['GameAction_ViewDetails_Collapse'] },
-	single_player: { tokens: ['AppDetails_Feature_SinglePlayer'] },
-	multi_player: { tokens: ['AppDetails_Feature_MultiPlayer'] },
-	cooperative: { tokens: ['AppDetails_Feature_CoOp'] },
-	cloud_saves: { tokens: ['AppDetails_Feature_SteamCloud'] },
-	full_controller: { tokens: ['AppDetails_Feature_FullController'] },
-	partial_controller: { tokens: ['AppDetails_Feature_PartialController'] },
-	family_sharing: { tokens: ['AppDetails_Feature_FamilySharing'] },
-	trading_cards: { tokens: ['AppDetails_SectionTitle_TradingCards'] },
-	feed_game_launch: { tokens: ['EventDisplay_EventType_10'] },
-	feed_game_update: { tokens: ['AppActivity_EventType_GameUpdate'] },
-	feed_major_update: { tokens: ['MajorUpdate_Type14'] },
-	feed_dlc: { tokens: ['EventDisplay_EventType_15'] },
-	feed_offer: { tokens: ['EventDisplay_EventType_20'] },
-	feed_event: { tokens: ['EventDisplay_EventType_22'] },
-	feed_news: { tokens: ['EventDisplay_EventType_28'] },
-	feed_beta: { tokens: ['EventDisplay_EventType_29'] },
-	feed_content: { tokens: ['EventDisplay_EventType_30'] },
-	feed_free_trial: { tokens: ['EventDisplay_EventType_31'] },
-	feed_season: { tokens: ['EventDisplay_EventType_32'] },
-	feed_community: { tokens: ['EventDisplay_EventType_Other'] },
-	locked_achievements: { tokens: ['AppDetails_LockedAchievements', 'Achievement_Filter_Locked'] },
-	view_all_achievements: { tokens: ['AppDetails_Achievement_ViewAllAchievements', 'AppDetails_ViewAllAchievements', 'AppDetails_Achievements_ViewAll'] },
-	view_dlc_store: { tokens: ['AppDetails_ViewDLCInStore', 'AppDetails_DLC_ViewInStore'] },
-	view_my_cards: { tokens: ['AppDetails_TradingCards_ViewMyCards'] },
-	store_page: { tokens: ['AppDetails_Links_Store', 'AppDetails_Link_Store', 'AppDetails_StorePage'] },
-	dlc_links: { tokens: ['AppDetails_Links_DLC', 'AppDetails_SectionTitle_DLC', 'AppProperties_DLCPage'] },
-	community_hub: { tokens: ['AppDetails_Links_Community', 'AppDetails_Link_GameHub', 'AppDetails_Links_CommunityHub'] },
-	points_shop: { tokens: ['AppDetails_Links_PointsShop', 'Menu_PointsShop', 'PointsShop_Title'] },
-	discussions: { tokens: ['AppDetails_Link_Discussions', 'Menu_Discussions', 'AppDetails_SectionTitle_Discussions'] },
-	guides: { tokens: ['AppDetails_Link_Guides', 'AppOverlay_Guides', 'AppDetails_SectionTitle_Guides'] },
-	workshop: { tokens: ['AppDetails_Link_Workshop', 'Menu_Workshop', 'AppDetails_SectionTitle_Workshop', 'AppDetails_Feature_SteamWorkshop'] },
-	support: { tokens: ['AppDetails_Link_Support', 'SupportLink_Label', 'AppDetails_Soundtrack_Support'] },
-	friends_recently_played_single: { tokens: ['AppDetails_Friends_PlayedRecently_Single', 'AppDetails_Friends_PlayedRecently'] },
-	friends_recently_played: { tokens: ['AppDetails_Friends_PlayedRecently'], params: ['count'] },
-	friends_previously_played_single: { tokens: ['AppDetails_Friends_PlayedPreviously_Single', 'AppDetails_Friends_PlayedPreviously'] },
-	friends_previously_played: { tokens: ['AppDetails_Friends_PlayedPreviously'], params: ['count'] },
-	friends_who_play_single: { tokens: ['AppDetails_Friends_Who_Play_Single', 'AppDetails_Friends_Who_Play', 'AppDetails_SectionTitle_Friends'] },
-	friends_who_play: { tokens: ['AppDetails_Friends_Who_Play', 'AppDetails_SectionTitle_Friends'], params: ['count'] },
-	friends_wishlisted_single: { tokens: ['AppDetails_Friends_Wishlist_Single', 'AppDetails_Friends_WishlistSingle', 'AppDetails_Friends_OnWishlist', 'AppDetails_Friends_Wishlist'], params: ['game'] },
-	friends_wishlisted_plural: { tokens: ['AppDetails_Friends_Wishlist_Plural', 'AppDetails_Friends_WishlistPlural', 'AppDetails_Friends_OnWishlist_Plural', 'AppDetails_Friends_Wishlist'], params: ['count', 'game'] },
-	show_all_wishlisted: { tokens: ['AppDetails_Friends_ShowAllWishlisted', 'AppDetails_Friends_ShowAllWishlist'], params: ['count'] },
-	view_all_friends: { tokens: ['AppDetails_Friends_ViewAll', 'AppDetails_ViewAllFriendsWhoPlay'] },
-	close: { tokens: ['Button_Close', 'Modal_Close'] },
-	cancel: { tokens: ['Button_Cancel'] },
-	continue: { tokens: ['Button_Continue'] },
-	search: { tokens: ['Search'] },
-	save: { tokens: ['Button_Save', 'Save'] },
-};
-
-export const STEAM_LANGUAGE_TO_LOCALE: Record<string, string> = {
-	english: 'en-US', german: 'de-DE', french: 'fr-FR', italian: 'it-IT', koreana: 'ko-KR',
-	spanish: 'es-ES', latam: 'es-419', schinese: 'zh-CN', tchinese: 'zh-TW', russian: 'ru-RU',
-	thai: 'th-TH', japanese: 'ja-JP', portuguese: 'pt-PT', brazilian: 'pt-BR', polish: 'pl-PL',
-	danish: 'da-DK', dutch: 'nl-NL', finnish: 'fi-FI', norwegian: 'nb-NO', swedish: 'sv-SE',
-	hungarian: 'hu-HU', czech: 'cs-CZ', romanian: 'ro-RO', turkish: 'tr-TR', arabic: 'ar-SA',
-	bulgarian: 'bg-BG', greek: 'el-GR', ukrainian: 'uk-UA', vietnamese: 'vi-VN', indonesian: 'id-ID', malay: 'ms-MY',
-};
 
 export function officialSteamText(fallbackEnglish: string, preferredTokens: string[] = []): string {
 	const lm = steamLocalizationManager();
@@ -883,3 +751,4 @@ export function gdlText(key: string, fallbackEnglish: string, values: Record<str
 export function steamIntlLocale(): string {
 	return STEAM_LANGUAGE_TO_LOCALE[String(steamLanguageSync() || 'english').toLowerCase()] || 'en-US';
 }
+

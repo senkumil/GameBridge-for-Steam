@@ -42,6 +42,7 @@ local detection_clean_game_title = detection_text.clean_game_title
 local DETECTION_GENERIC_WORDS = detection_text.generic_words
 local DETECTION_GENERIC_EXES = detection_text.generic_exes
 local KNOWN_TITLE_ALIASES = deps.shortcut_detection_aliases
+local detection_pe = deps.shortcut_detection_pe
 local detection_tokens = detection_text.tokens
 local detection_similarity = detection_text.similarity
 local detection_compact_similarity = detection_text.compact_similarity
@@ -65,71 +66,9 @@ local function detection_read_binary_file(path, max_bytes)
     return content
 end
 
-local function detection_binary_cstring(data, position)
-    local finish = data:find("\0", position, true)
-    if not finish then return nil, position end
-    return data:sub(position, finish - 1), finish + 1
-end
-
-local function detection_binary_i32(data, position)
-    local b1, b2, b3, b4 = data:byte(position, position + 3)
-    if not b4 then return nil, position end
-    local value = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
-    if value >= 2147483648 then value = value - 4294967296 end
-    return value, position + 4
-end
-
-local function detection_parse_binary_vdf_object(data, position, depth)
-    if depth > 16 then return nil, position, "maximum_depth" end
-    local result = {}
-    while position <= #data do
-        local value_type = data:byte(position)
-        position = position + 1
-        if value_type == 8 then return result, position, nil end
-
-        local key
-        key, position = detection_binary_cstring(data, position)
-        if not key then return nil, position, "invalid_key" end
-
-        if value_type == 0 then
-            local child, next_position, parse_error = detection_parse_binary_vdf_object(data, position, depth + 1)
-            if not child then return nil, next_position, parse_error end
-            result[key] = child
-            position = next_position
-        elseif value_type == 1 then
-            local value
-            value, position = detection_binary_cstring(data, position)
-            if value == nil then return nil, position, "invalid_string" end
-            result[key] = value
-        elseif value_type == 2 then
-            local value
-            value, position = detection_binary_i32(data, position)
-            if value == nil then return nil, position, "invalid_integer" end
-            result[key] = value
-        elseif value_type == 3 or value_type == 4 or value_type == 6 then
-            if position + 3 > #data then return nil, position, "truncated_value" end
-            position = position + 4
-        elseif value_type == 7 then
-            if position + 7 > #data then return nil, position, "truncated_uint64" end
-            position = position + 8
-        elseif value_type == 5 then
-            local cursor = position
-            local found = false
-            while cursor + 1 <= #data do
-                if data:byte(cursor) == 0 and data:byte(cursor + 1) == 0 then
-                    position = cursor + 2
-                    found = true
-                    break
-                end
-                cursor = cursor + 2
-            end
-            if not found then return nil, position, "invalid_wstring" end
-        else
-            return nil, position, "unsupported_type_" .. tostring(value_type)
-        end
-    end
-    return nil, position, "unexpected_eof"
-end
+local detection_binary_cstring = util.binary_cstring
+local detection_binary_i32 = util.binary_i32
+local detection_parse_binary_vdf_object = util.parse_binary_vdf_object
 
 local function detection_shortcut_appid(value)
     local appid = tonumber(value)
@@ -515,6 +454,19 @@ function M.detect_game_candidates(request_json)
     local title_cleaned = detection_clean_game_title(title_hint)
     if title_cleaned == "" then title_cleaned = title_hint end
 
+    local pe_product_name, pe_file_desc = nil, nil
+    if detection_pe and detection_pe.read_pe_metadata then
+        pe_product_name, pe_file_desc = detection_pe.read_pe_metadata(identity_exe_path)
+        if not pe_product_name and identity_exe_path ~= request.exe_path then
+            pe_product_name, pe_file_desc = detection_pe.read_pe_metadata(request.exe_path)
+        end
+    end
+    local is_generic_pe = detection_pe and detection_pe.is_generic_product_name or function() return false end
+    local clean_pe_product = (pe_product_name and not is_generic_pe(pe_product_name))
+        and detection_clean_game_title(pe_product_name) or nil
+    local clean_pe_desc = (pe_file_desc and not is_generic_pe(pe_file_desc))
+        and detection_clean_game_title(pe_file_desc) or nil
+
     local exe_normalized = detection_normalize(exe_stem)
     local launcher_exe_stem = detection_game_exe_hint(detection_basename(request.exe_path))
     local launcher_exe_normalized = detection_normalize(launcher_exe_stem)
@@ -561,14 +513,16 @@ function M.detect_game_candidates(request_json)
         local appid = alias and tostring(alias.auto_appid or "") or ""
         return (appid:match("^%d+$") and appid or nil), (alias and alias.name or nil)
     end
-    for _, identity_hint in ipairs({ title_hint, title_cleaned, exe_stem, raw_exe_stem }) do
-        local alias_appid, alias_name = automatic_alias_appid(identity_hint)
-        if alias_appid then
-            local direct = detection_direct_result(alias_appid, "maintained_alias", request, language, launcher, generic_launcher, alias_name)
-            if direct then
-                local encoded = detection_encode(direct)
-                detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 })
-                return encoded
+    for _, identity_hint in ipairs({ clean_pe_product, clean_pe_desc, title_hint, title_cleaned, exe_stem, raw_exe_stem }) do
+        if identity_hint then
+            local alias_appid, alias_name = automatic_alias_appid(identity_hint)
+            if alias_appid then
+                local direct = detection_direct_result(alias_appid, "maintained_alias", request, language, launcher, generic_launcher, alias_name)
+                if direct then
+                    local encoded = detection_encode(direct)
+                    detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 })
+                    return encoded
+                end
             end
         end
     end
@@ -609,6 +563,8 @@ function M.detect_game_candidates(request_json)
     check_alias(title_cleaned)
     check_alias(exe_stem)
     check_alias(raw_exe_stem)
+    if clean_pe_product then check_alias(clean_pe_product) end
+    if clean_pe_desc then check_alias(clean_pe_desc) end
     for _, folder in ipairs(folders) do check_alias(folder) end
 
     -- Sub-segment query decomposition for long titles
@@ -617,6 +573,19 @@ function M.detect_game_candidates(request_json)
         if #seg_trimmed >= 3 and seg_trimmed ~= title_cleaned then
             add_query(seg_trimmed)
             check_alias(seg_trimmed)
+        end
+    end
+
+    if clean_pe_product then add_query(clean_pe_product) end
+    if clean_pe_desc and clean_pe_desc ~= clean_pe_product then add_query(clean_pe_desc) end
+
+    local is_short_title = #detection_normalize(title_cleaned) <= 3
+    if is_short_title or DETECTION_GENERIC_WORDS[detection_normalize(title_cleaned)] then
+        for _, folder in ipairs(folders) do
+            local norm_f = detection_normalize(folder)
+            if not DETECTION_GENERIC_WORDS[norm_f] and not DETECTION_GENERIC_EXES[norm_f] and #norm_f > 3 then
+                add_query(folder)
+            end
         end
     end
 
@@ -653,10 +622,13 @@ function M.detect_game_candidates(request_json)
         }
     end
 
-    local max_queries = math.min(#queries, 3)
+    local max_queries = math.min(#queries, 5)
 	local store_search_confirmed = true
     for query_index = 1, max_queries do
-        local items, search_confirmed = detection_store_search(queries[query_index], language)
+        local query_text = queries[query_index]
+        local query_norm = detection_normalize(query_text)
+        local is_short_query = #query_norm <= 3
+        local items, search_confirmed = detection_store_search(query_text, language)
 		if not search_confirmed then store_search_confirmed = false end
         local found_exact_match = false
         for rank = 1, math.min(#items, 15) do
@@ -687,13 +659,13 @@ function M.detect_game_candidates(request_json)
                     detection_similarity(title_cleaned, name),
                     detection_compact_similarity(title_cleaned, name)
                 )
-                if sim >= 0.82 or detection_normalize(name) == detection_normalize(title_cleaned) then
+                if not is_short_query and (sim >= 0.82 or detection_normalize(name) == detection_normalize(title_cleaned)) then
                     found_exact_match = true
                 end
             end
         end
-        -- Early stop: If we already found a strong matching candidate from this query, stop querying
-        if found_exact_match and query_index >= 1 then
+        -- Early stop: If we already found a strong matching candidate from a distinct query, stop querying
+        if found_exact_match and not is_short_query and query_index >= 1 then
             break
         end
     end
@@ -739,16 +711,40 @@ function M.detect_game_candidates(request_json)
             detection_add_reason(candidate, "franchise_alias")
         end
         if normalized_title ~= "" and normalized_title == normalized_name then
-            score = math.max(score, 90)
-            detection_add_reason(candidate, "title_exact")
+            if is_short_title then
+                if folder_exact or folder_similarity >= 0.7 or candidate.executable_match then
+                    score = math.max(score, 90)
+                    detection_add_reason(candidate, "title_exact")
+                else
+                    score = math.min(score, 60)
+                    detection_add_reason(candidate, "short_title_unverified")
+                end
+            else
+                score = math.max(score, 90)
+                detection_add_reason(candidate, "title_exact")
+            end
         elseif title_similarity >= 0.65 then
             detection_add_reason(candidate, "title_similar")
         end
         if folder_exact then
-            score = math.max(score, 94)
+            score = math.max(score, 95)
             detection_add_reason(candidate, "folder_exact")
         elseif folder_similarity >= 0.65 then
             detection_add_reason(candidate, "folder_match")
+        end
+        if clean_pe_product and candidate.name then
+            local pe_sim = math.max(
+                detection_similarity(clean_pe_product, candidate.name),
+                detection_compact_similarity(clean_pe_product, candidate.name)
+            )
+            if pe_sim >= 0.82 or detection_normalize(candidate.name) == detection_normalize(clean_pe_product) then
+                score = math.max(score, 96)
+                candidate.executable_match = true
+                detection_add_reason(candidate, "pe_product_exact")
+            elseif pe_sim >= 0.60 then
+                score = score + 18
+                detection_add_reason(candidate, "pe_product_match")
+            end
         end
         if exe_similarity >= 0.75 then detection_add_reason(candidate, "executable_name_match") end
         if exe_stem ~= raw_exe_stem and exe_similarity >= 0.55 then

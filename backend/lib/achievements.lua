@@ -10,6 +10,7 @@ local policy = deps.achievement_policy
 local sources = deps.achievement_sources
 local state_reader = deps.achievement_state
 local lru = deps.lru_cache
+local config = deps.config
 local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
 local M = {}
 local html_unescape = util.html_unescape
@@ -20,6 +21,37 @@ local MAX_RESOLUTION_SIGNATURES = 64
 
 local function set_metadata_cache(key, value)
     lru.put(local_achievement_meta_cache, key, value, MAX_METADATA_CACHE_ENTRIES)
+end
+
+local function disk_cache_path(appid, lang)
+    if not config or not config.persistent_path then return nil end
+    local clean_lang = tostring(lang or "spanish"):gsub("[^%w_]", "")
+    if clean_lang == "" then clean_lang = "spanish" end
+    return config.persistent_path(fs.join("metadata_cache", tostring(appid) .. "_" .. clean_lang .. ".json"))
+end
+
+local function read_disk_metadata_cache(appid, lang)
+    local p = disk_cache_path(appid, lang)
+    if not p then return nil end
+    local data = state_reader.decode(p)
+    if type(data) == "table" and next(data) then
+        return data
+    end
+    return nil
+end
+
+local function write_disk_metadata_cache(appid, lang, data)
+    local p = disk_cache_path(appid, lang)
+    if not p or type(data) ~= "table" or not next(data) then return end
+    pcall(function()
+        local dir = fs.parent_path(p)
+        if not fs.exists(dir) then pcall(fs.create_directories, dir) end
+        local f = io.open(p, "wb")
+        if f then
+            f:write(cjson.encode(data))
+            f:close()
+        end
+    end)
 end
 
 local function reset_local_caches()
@@ -35,6 +67,7 @@ function M.get_game_achievement_path(request_json) return settings.get_game_path
 function M.set_game_achievement_path(request_json) reset_local_caches(); return settings.set_game_path(request_json) end
 function M.get_game_achievement_options(request_json) return settings.get_game_options(request_json) end
 function M.set_game_achievement_options(request_json) reset_local_caches(); return settings.set_game_options(request_json) end
+function M.clear_all_settings() reset_local_caches(); return settings.clear_all_settings() end
 
 local decode_json_file = state_reader.decode
 
@@ -86,21 +119,10 @@ local function fetch_global_achievement_percentages(appid)
 end
 
 local function map_to_steam_lang(lang)
-    lang = tostring(lang or "spanish"):lower():gsub("[^%w_]", "")
-    if lang:find("spanish") or lang:find("latam") or lang:find("es") then
-        return "spanish"
-    end
-    if lang:find("french") or lang:find("fr") then return "french" end
-    if lang:find("german") or lang:find("de") then return "german" end
-    if lang:find("italian") or lang:find("it") then return "italian" end
-    if lang:find("portuguese") or lang:find("brazilian") or lang:find("pt") then return "brazilian" end
-    if lang:find("russian") or lang:find("ru") then return "russian" end
-    if lang:find("japanese") or lang:find("ja") then return "japanese" end
-    if lang:find("korean") or lang:find("ko") then return "koreana" end
-    if lang:find("schinese") or lang:find("zh_cn") or lang:find("zh_hans") then return "schinese" end
-    if lang:find("tchinese") or lang:find("zh_tw") or lang:find("zh_hant") then return "tchinese" end
-    return "english"
+    return util.safe_language(lang)
 end
+
+local LANGUAGE_KEY_ALIASES = util.LANGUAGE_KEY_ALIASES or {}
 
 local function extract_localized_text(val, lang)
     if type(val) == "string" then
@@ -110,13 +132,13 @@ local function extract_localized_text(val, lang)
         if val[target] and tostring(val[target]) ~= "" then
             return tostring(val[target])
         end
-        if target == "spanish" then
-            if val["spanish"] and tostring(val["spanish"]) ~= "" then return tostring(val["spanish"]) end
-            if val["latam"] and tostring(val["latam"]) ~= "" then return tostring(val["latam"]) end
-            if val["spanish_latam"] and tostring(val["spanish_latam"]) ~= "" then return tostring(val["spanish_latam"]) end
-            if val["es"] and tostring(val["es"]) ~= "" then return tostring(val["es"]) end
-            if val["es-ES"] and tostring(val["es-ES"]) ~= "" then return tostring(val["es-ES"]) end
-            if val["es-419"] and tostring(val["es-419"]) ~= "" then return tostring(val["es-419"]) end
+        local aliases = LANGUAGE_KEY_ALIASES[target]
+        if aliases then
+            for _, alias in ipairs(aliases) do
+                if val[alias] and tostring(val[alias]) ~= "" then
+                    return tostring(val[alias])
+                end
+            end
         end
         if val["english"] and tostring(val["english"]) ~= "" then return tostring(val["english"]) end
         if val["en"] and tostring(val["en"]) ~= "" then return tostring(val["en"]) end
@@ -264,7 +286,7 @@ local function match_public_metadata(appid, lang, root_dir)
     local key = tostring(appid) .. "|" .. tostring(lang or "spanish")
     local now = os.time()
     local cached = local_achievement_meta_cache[key]
-    local cache_ttl = (cached and next(cached.by_name or {})) and 1800 or 300
+    local cache_ttl = (cached and next(cached.by_name or {})) and 1800 or 15
     if cached and (now - (cached.time or 0)) < cache_ttl then
         lru.touch(cached)
         return cached.by_name or {}, cached.source or "cache"
@@ -272,13 +294,12 @@ local function match_public_metadata(appid, lang, root_dir)
 	if cached then local_achievement_meta_cache[key] = nil end
 
     local schema, schema_path = normalize_local_schema(appid, root_dir, lang)
-    local global_by_name, global_ordered = fetch_global_achievement_percentages(appid)
-    local community = fetch_community_achievement_rows(appid, lang)
-    if tostring(lang):lower() ~= "english" and #community == 0 then
-        community = fetch_community_achievement_rows(appid, "english")
-    end
-
     if next(schema) then
+        local global_by_name = fetch_global_achievement_percentages(appid)
+        local community = fetch_community_achievement_rows(appid, lang)
+        if tostring(lang):lower() ~= "english" and #community == 0 then
+            community = fetch_community_achievement_rows(appid, "english")
+        end
         local community_by_icon = {}
         for idx, row in ipairs(community) do
             local base = tostring(row.icon or ""):match("([^/]+)$")
@@ -300,6 +321,18 @@ local function match_public_metadata(appid, lang, root_dir)
         end
         set_metadata_cache(key, { time = now, by_name = schema, source = "local_schema:" .. schema_path })
         return schema, "local_schema:" .. schema_path
+    end
+
+    local disk_cached = read_disk_metadata_cache(appid, lang)
+    if disk_cached and next(disk_cached) then
+        set_metadata_cache(key, { time = now, by_name = disk_cached, source = "disk_cache" })
+        return disk_cached, "disk_cache"
+    end
+
+    local global_by_name, global_ordered = fetch_global_achievement_percentages(appid)
+    local community = fetch_community_achievement_rows(appid, lang)
+    if tostring(lang):lower() ~= "english" and #community == 0 then
+        community = fetch_community_achievement_rows(appid, "english")
     end
 
     -- Match global percentage order to community order
@@ -361,8 +394,14 @@ local function match_public_metadata(appid, lang, root_dir)
     end
 
 	if next(result) then
+        write_disk_metadata_cache(appid, lang, result)
 		set_metadata_cache(key, { time = now, by_name = result, source = "steam_public" })
 	else
+        local fallback_disk = read_disk_metadata_cache(appid, "english")
+        if fallback_disk and next(fallback_disk) then
+            set_metadata_cache(key, { time = now, by_name = fallback_disk, source = "disk_cache_fallback" })
+            return fallback_disk, "disk_cache_fallback"
+        end
 		set_metadata_cache(key, { time = now, by_name = {}, source = "steam_public_empty" })
 	end
     return result, "steam_public"
@@ -374,8 +413,7 @@ function M.get_game_achievement_capabilities(request_json)
     if not appid:match("^%d+$") then
         return cjson.encode({ ok = false, error = "missing_steam_app_id" })
     end
-    local lang = tostring(request.language or "spanish"):gsub("[^%w_]", "")
-    if lang == "" then lang = "spanish" end
+    local lang = util.safe_language(request.language)
     local metadata, metadata_source = match_public_metadata(appid, lang, fs.join(settings.local_root(), appid))
     local total, online_count = 0, 0
     for name, item in pairs(metadata) do
@@ -399,6 +437,9 @@ function M.get_game_achievement_capabilities(request_json)
 end
 
 function M.fetch_local_achievement_data(request_json, language, state_app_id)
+    if type(request_json) == "table" and type(request_json.request_json) == "string" then
+        request_json = request_json.request_json
+    end
     local steam_app_id = request_json
     local allow_simulated = false
     local simulate_unlock_all = false
@@ -441,8 +482,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
     end
     local state_appid = tostring(state_app_id or "")
     if not state_appid:match("^%d+$") then state_appid = metadata_appid end
-    local lang = tostring(language or "english"):gsub("[^%w_]", "")
-    if lang == "" then lang = "english" end
+    local lang = util.safe_language(language)
 
     local effective = settings.resolve_options({
         shortcut_app_id = state_appid,

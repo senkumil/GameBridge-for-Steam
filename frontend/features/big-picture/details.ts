@@ -33,6 +33,10 @@ import {
 	type BigPictureTab,
 	type MappedShortcut,
 } from './tab-renderers';
+import {
+	findBigPictureTabStrip,
+	activeTabFromNative,
+} from './tabs';
 
 interface BigPictureDetailState {
 	shortcut: MappedShortcut;
@@ -53,22 +57,6 @@ const detailTabObservers = new WeakMap<Document, { strip: HTMLElement; observer:
 const detailRetryTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
 const detailRetryCounts = new WeakMap<Document, number>();
 const detailTabSyncTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
-
-const TAB_TEXT: Record<BigPictureTab, string[]> = {
-	activity: ['activity', 'actividad', 'activite', 'aktivitat', 'attivita', 'atividade'],
-	stuff: ['your stuff', 'tus cosas', 'vos trucs', 'deine sachen', 'le tue cose', 'suas coisas'],
-	community: ['community', 'comunidad', 'communaute', 'comunita', 'comunidade'],
-	info: ['game information', 'game info', 'informacion del juego', 'informacion', 'informations sur le jeu', 'spielinformationen', 'informazioni sul gioco', 'informacoes do jogo'],
-};
-
-function normalizeUiText(value: unknown): string {
-	return String(value ?? '')
-		.normalize('NFD')
-		.replace(/[\u0300-\u036f]/g, '')
-		.replace(/\s+/g, ' ')
-		.trim()
-		.toLocaleLowerCase();
-}
 
 function mappedShortcutIds(shortcut: MappedShortcut): string[] {
 	const raw = shortcut.id;
@@ -247,93 +235,6 @@ function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
 	if (isNativeSteamGameActive(doc)) return null;
 
 	return null;
-}
-
-function tabAliases(tab: BigPictureTab): string[] {
-	const dynamic = tab === 'activity'
-		? [loc('AppDetails_SectionTitle_Activity', 'Activity')]
-		: tab === 'info'
-			? [loc('AppDetails_GameInfo', 'Game information')]
-			: [];
-	return [...dynamic, ...TAB_TEXT[tab]].map(normalizeUiText).filter(Boolean);
-}
-
-function findTabTextElement(doc: Document, tab: BigPictureTab): HTMLElement | null {
-	const aliases = tabAliases(tab);
-	const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null);
-	let node: Text | null;
-	while ((node = walker.nextNode() as Text | null)) {
-		const text = normalizeUiText(node.textContent || '');
-		if (!aliases.includes(text) || !node.parentElement) continue;
-		const el = node.parentElement;
-		if (el.closest('#gdl-bp-detail-root')) continue;
-		const rect = el.getBoundingClientRect();
-		if (rect.width > 0 && rect.height > 0) return el;
-	}
-	return null;
-}
-
-function clickableTabElement(element: HTMLElement): HTMLElement {
-	let current: HTMLElement | null = element;
-	for (let depth = 0; current && depth < 5; depth++, current = current.parentElement) {
-		if (current.matches('button,[role="button"],[tabindex]')) return current;
-	}
-	return element;
-}
-
-function commonAncestor(elements: HTMLElement[]): HTMLElement | null {
-	if (elements.length === 0) return null;
-	let current: HTMLElement | null = elements[0];
-	while (current) {
-		if (elements.every(element => current === element || current!.contains(element))) return current;
-		current = current.parentElement;
-	}
-	return null;
-}
-
-function findBigPictureTabStrip(doc: Document): { strip: HTMLElement; controls: Map<BigPictureTab, HTMLElement> } | null {
-	const controls = new Map<BigPictureTab, HTMLElement>();
-	for (const tab of ['activity', 'stuff', 'community', 'info'] as BigPictureTab[]) {
-		const text = findTabTextElement(doc, tab);
-		if (text) {
-			controls.set(tab, clickableTabElement(text));
-		}
-	}
-	if (controls.size < 2) return null;
-	const values = Array.from(controls.values());
-	let strip = commonAncestor(values);
-	if (!strip || strip === doc.body) {
-		strip = (controls.get('activity') || values[0])?.parentElement;
-	}
-	if (!strip || strip === doc.body) return null;
-	while (strip.parentElement && strip.parentElement !== doc.body) {
-		const rect = strip.getBoundingClientRect();
-		if (rect.width >= 200 && rect.height > 20 && rect.height <= 150) break;
-		const parent = strip.parentElement;
-		if (!values.every(value => parent.contains(value))) break;
-		strip = parent;
-	}
-	return { strip, controls };
-}
-
-function activeTabFromNative(doc: Document, controls: Map<BigPictureTab, HTMLElement>): BigPictureTab | null {
-	let best: { tab: BigPictureTab; score: number } | null = null;
-	for (const [tab, el] of controls) {
-		let score = 0;
-		if (el.getAttribute('aria-selected') === 'true') score += 100;
-		if (el.getAttribute('aria-current') === 'page' || el.getAttribute('aria-current') === 'true') score += 90;
-		if (el.classList.contains('active') || el.classList.contains('Selected') || el.classList.contains('focus')) score += 50;
-		if (doc.activeElement && (doc.activeElement === el || el.contains(doc.activeElement))) score += 40;
-		const focusedChild = el.querySelector(':focus');
-		if (focusedChild) score += 30;
-		const panelId = el.getAttribute('aria-controls');
-		if (panelId) {
-			const panel = doc.getElementById(panelId);
-			if (panel && !panel.hasAttribute('hidden') && panel.getAttribute('aria-hidden') !== 'true') score += 80;
-		}
-		if (score > (best?.score || 0)) best = { tab, score };
-	}
-	return best && best.score > 0 ? best.tab : null;
 }
 
 function nextDetailGeneration(doc: Document): number {
@@ -528,7 +429,6 @@ function renderRoot(state: BigPictureDetailState): void {
 				} catch {}
 			};
 			postInput.addEventListener('click', triggerKeyboard);
-			postInput.addEventListener('focus', triggerKeyboard);
 			postInput.addEventListener('keydown', (e: KeyboardEvent) => {
 				if (e.key === 'Enter' && postInput.value.trim()) {
 					e.preventDefault();
@@ -652,7 +552,10 @@ function bindTabs(
 			} else if (event.key === 'ArrowDown' || event.key === 'Down') {
 				const root = doc.getElementById('gdl-bp-detail-root');
 				if (root) {
-					const first = getFocusableElements(root)[0];
+					const primary = root.querySelector<HTMLElement>(
+						'.gdl-bp-feed-card, .gdl-bp-ach-featured, .gdl-bp-ach-progress, .gdl-bp-community-card, .gdl-bp-card-item, .gdl-bp-info-link'
+					);
+					const first = primary || getFocusableElements(root)[0];
 					if (first) {
 						event.preventDefault();
 						event.stopPropagation();
@@ -668,6 +571,32 @@ function bindTabs(
 				}
 			}
 		});
+	}
+	if (strip.dataset.gdlBpBound !== '1') {
+		strip.dataset.gdlBpBound = '1';
+		strip.addEventListener('keydown', event => {
+			if (event.key === 'ArrowDown' || event.key === 'Down' || event.keyCode === 40) {
+				const root = doc.getElementById('gdl-bp-detail-root');
+				if (root) {
+					const primary = root.querySelector<HTMLElement>(
+						'.gdl-bp-feed-card, .gdl-bp-ach-featured, .gdl-bp-ach-progress, .gdl-bp-community-card, .gdl-bp-card-item, .gdl-bp-info-link'
+					);
+					const first = primary || getFocusableElements(root)[0];
+					if (first) {
+						event.preventDefault();
+						event.stopPropagation();
+						root.querySelectorAll<HTMLElement>('.gpfocus, [data-focus="true"]').forEach(el => {
+							el.classList.remove('gpfocus');
+							delete el.dataset.focus;
+						});
+						first.classList.add('gpfocus');
+						first.dataset.focus = 'true';
+						first.focus({ preventScroll: true });
+						first.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+					}
+				}
+			}
+		}, true);
 	}
 	const current = detailTabObservers.get(doc);
 	if (current?.strip === strip) return;
@@ -695,6 +624,7 @@ function retireLegacyDetailShell(doc: Document): void {
 }
 
 function removeBigPictureDetailsNodes(doc: Document): void {
+	disposeBigPictureGamepadNavigation(doc);
 	const live = detailStates.get(doc);
 	if (live) {
 		live.renderedRoot = null;

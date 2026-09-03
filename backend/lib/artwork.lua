@@ -105,6 +105,8 @@ local LIBRARY_LANGUAGE_ALIASES = {
     latam = { "spanish" },
     portuguese = { "brazilian" },
     brazilian = { "portuguese" },
+    schinese = { "tchinese" },
+    tchinese = { "schinese" },
 }
 local function localized_library_asset(bucket, language)
     if type(bucket) == "string" then
@@ -112,7 +114,7 @@ local function localized_library_asset(bucket, language)
     end
     if type(bucket) ~= "table" then return "" end
 
-    local lang = tostring(language or ""):lower()
+    local lang = util.safe_language(language)
     local ordered = {}
     local seen = {}
     local function add(key)
@@ -267,7 +269,7 @@ function M.fetch_library_assets(request_json)
         request = { steam_app_id = request_json }
     end
     local appid = tostring(request.steam_app_id or request.appid or "")
-    local language, force_refresh = tostring(request.language or "english"):lower(), request.force_refresh == true
+    local language, force_refresh = util.safe_language(request.language), request.force_refresh == true
     if not appid:match("^%d+$") then return cjson.encode({ error = "invalid_appid" }) end
     local cache_key = appid .. "|" .. language
     local cached_entry = library_assets_cache[cache_key]

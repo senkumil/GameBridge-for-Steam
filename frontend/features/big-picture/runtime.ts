@@ -1,7 +1,7 @@
 import { backendLog } from '../../api/backend';
 import { normalizeTitle } from '../../core/text';
 import { loc, officialSteamText, steamIntlLocale } from '../../steam/localization';
-import { findMappingForTitle } from '../../core/mappings';
+import { findMappingForTitle, loadMappings } from '../../core/mappings';
 import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes, toSignedShortcutAppId } from '../../steam/shortcuts';
 import { fetchPlaytimeStatsBatch } from '../playtime/service';
 import { disposeBigPictureAchievementCards, refreshBigPictureAchievementCards } from './achievement-cards';
@@ -14,9 +14,15 @@ function normalizedDomText(value: unknown): string {
 
 function isBigPictureGameDetailSurface(doc: Document): boolean {
 	if (doc.getElementById('gdl-bp-detail-root') || doc.getElementById('gdl-bp-detail-shell')) return true;
-	for (const element of Array.from(doc.querySelectorAll<HTMLElement>('[class*="AppDetails"], [class*="GameDetails"]'))) {
-		const rect = element.getBoundingClientRect();
-		if (element.isConnected && rect.width >= 320 && rect.height >= 120) return true;
+	const detail = doc.querySelector<HTMLElement>('[class*="AppDetails"], [class*="GameDetails"]');
+	if (detail && detail.isConnected && detail.offsetParent !== null && !detail.hasAttribute('hidden') && detail.getAttribute('aria-hidden') !== 'true') {
+		const rect = detail.getBoundingClientRect();
+		if (rect.width >= 400 && rect.height >= 300) {
+			const homeOrLibrary = doc.querySelector('[class*="RecentGames"], [class*="HomeScreen"], [class*="AllGames"], [class*="LibraryHome"]');
+			if (!homeOrLibrary || homeOrLibrary.getBoundingClientRect().height < 50) {
+				return true;
+			}
+		}
 	}
 	return false;
 }
@@ -448,6 +454,7 @@ export function restoreBigPictureShortcutState(): void {
 export function activateBigPicture(doc: Document): void {
 	gdlBigPictureActive = true;
 	gdlBigPictureDoc = doc;
+	void loadMappings().catch(() => {});
 }
 
 export function deactivateBigPicture(): void {
@@ -481,8 +488,8 @@ export async function refreshBigPicture(doc: Document | null = gdlBigPictureDoc)
 	// game's first render (or leave the previous game's content visible) hostage.
 	const detailRefresh = refreshBigPictureShortcutDetails(doc);
 	mergeShortcutsIntoBigPictureLibrary(doc);
+	refreshBigPictureAchievementCards(doc);
 	if (!isBigPictureGameDetailSurface(doc)) {
-		refreshBigPictureAchievementCards(doc);
 		void patchBigPictureHomePlaytime(doc)
 			.catch(error => backendLog('Big Picture playtime refresh failed: ' + error));
 	}

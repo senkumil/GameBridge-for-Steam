@@ -1,10 +1,11 @@
 import type { LocalAchievementData } from '../../domain/types';
 import { escapeHtml, normalizeTitle } from '../../core/text';
-import { gdlText, steamIntlLocale, steamLanguageSync } from '../../steam/localization';
+import { gdlText, loc, steamIntlLocale, steamLanguageSync } from '../../steam/localization';
 import { getMappedShortcuts, getSteamAppStore, toSignedShortcutAppId, canonicalizeGameTitle, looseMatchTitle } from '../../steam/shortcuts';
 import { cacheLocalAchievements, getCachedLocalAchievementsForGame } from '../achievements/cache';
 import { localAchievementPercent } from '../achievements/format';
 import { fetchLocalAchievementData, subscribeLocalAchievementData } from '../achievements/service';
+import { loadMappings } from '../../core/mappings';
 
 type MappedShortcut = { id: number; title: string; steamAppId: string };
 
@@ -28,7 +29,7 @@ interface AchievementCardTarget {
 
 const achievementCardStates = new WeakMap<Document, AchievementCardState>();
 const MAX_ACHIEVEMENT_REQUESTS = 4;
-const EMPTY_RETRY_MS = 30_000;
+const EMPTY_RETRY_MS = 3_500;
 
 function shortcutIdentity(shortcut: MappedShortcut): string {
 	return `${shortcut.id}:${shortcut.steamAppId}`;
@@ -73,7 +74,7 @@ function findPortraitCard(start: HTMLElement): HTMLElement | null {
 		const rect = current.getBoundingClientRect();
 		if (!current.isConnected || rect.width < 80 || rect.width > 620 || rect.height < 100) continue;
 		if (!hasPortraitVisual(current)) continue;
-		if (findNativeAchievementHost(current)) return current;
+		if (current.querySelector<HTMLElement>('.gdl-bp-achievement-host-fallback, [data-gdl-bp-achievement-host="1"]')) return current;
 		fallback ||= current;
 		if (current.matches('[role="listitem"],[role="gridcell"],li,[class*="GameItem"],[class*="LibraryItem"]')) {
 			return current;
@@ -187,26 +188,31 @@ function nativeTitlesInStore(doc?: Document): Set<string> {
 
 function discoverAchievementCardTargets(doc: Document, shortcuts: MappedShortcut[]): AchievementCardTarget[] {
 	const byId = new Map<number, MappedShortcut>();
-	const byTitle = new Map<string, MappedShortcut>();
 	const bySteamAppId = new Map<string, MappedShortcut>();
-	const titleCounts = new Map<string, number>();
+	const byTitle = new Map<string, MappedShortcut>();
 	for (const shortcut of shortcuts) {
-		byId.set(shortcut.id, shortcut);
-		byId.set(normalizedShortcutId(toSignedShortcutAppId(shortcut.id)), shortcut);
-		byId.set(shortcut.id >>> 0, shortcut);
+		const raw = shortcut.id;
+		const unsigned = raw < 0 ? (raw >>> 0) : raw;
+		const signed = raw > 2147483647 ? toSignedShortcutAppId(raw) : raw;
+		byId.set(raw, shortcut);
+		byId.set(unsigned, shortcut);
+		byId.set(signed, shortcut);
 		if (shortcut.steamAppId && !bySteamAppId.has(shortcut.steamAppId)) {
 			bySteamAppId.set(shortcut.steamAppId, shortcut);
 		}
 		const title = normalizeTitle(shortcut.title);
-		titleCounts.set(title, (titleCounts.get(title) || 0) + 1);
 		if (!byTitle.has(title)) byTitle.set(title, shortcut);
+		const canonical = canonicalizeGameTitle(shortcut.title);
+		if (!byTitle.has(canonical)) byTitle.set(canonical, shortcut);
 	}
+
 	const nativeTitles = nativeTitlesInStore(doc);
 	const candidates = Array.from(doc.querySelectorAll<HTMLElement>(
-		'[role="gridcell"], [role="listitem"], [class*="GameItem"], [class*="AppPortrait"], [class*="LibraryItem"], [class*="Capsule"], [data-panel*="app"], [data-panel*="App"], [data-appid], [data-app-id], [data-app-id-value], [data-ds-appid], a[href], [aria-label], [title]'
+		'[role="gridcell"], [role="listitem"], [class*="GameItem"], [class*="AppPortrait"], [class*="LibraryItem"], [class*="Capsule"], [class*="RecentApp"], [data-panel*="app"], [data-panel*="App"], [data-appid], [data-app-id], [data-app-id-value], [data-ds-appid], a[href], [aria-label], [title]'
 	));
+
 	const seenCards = new Set<HTMLElement>();
-	const targets = new Map<string, AchievementCardTarget>();
+	const targets = new Map<number, AchievementCardTarget>();
 
 	for (const element of candidates) {
 		if (element.closest('#gdl-bp-detail-root')) continue;
@@ -218,14 +224,16 @@ function discoverAchievementCardTargets(doc: Document, shortcuts: MappedShortcut
 		const directId = getElementAppId(card) ?? getElementAppId(element);
 		if (directId != null) {
 			const unsignedId = normalizedShortcutId(directId);
-			if (unsignedId >= 2147483648 && byId.has(unsignedId)) {
+			if (byId.has(unsignedId)) {
 				shortcut = byId.get(unsignedId) || null;
+			} else if (byId.has(directId)) {
+				shortcut = byId.get(directId) || null;
 			}
 		}
 
 		if (!shortcut) {
 			for (const id of numbersInAttributes(card)) {
-				if (id >= 2147483648 && byId.has(id)) {
+				if (byId.has(id)) {
 					shortcut = byId.get(id) || null;
 					break;
 				}
@@ -267,13 +275,12 @@ function discoverAchievementCardTargets(doc: Document, shortcuts: MappedShortcut
 		const cardTitle = extractGameTitleFromCard(card);
 		const label = normalizeTitle(cardTitle || shortcut.title);
 		const explicitIds = [card, ...Array.from(card.querySelectorAll<HTMLElement>('*'))].flatMap(numbersInAttributes);
-		if (!explicitIds.includes(shortcut.id)) explicitIds.push(shortcut.id);
-		const hasShortcutId = explicitIds.includes(shortcut.id);
-		if (!hasShortcutId && explicitIds.some(id => id > 0 && id < 2147483648) && nativeTitles.has(label)) continue;
+		const hasOfficialId = explicitIds.some(id => id > 0 && id < 2147483648);
+		const hasShortcutId = explicitIds.some(id => id >= 2147483648);
+		if (!hasShortcutId && hasOfficialId && nativeTitles.has(label)) continue;
 
-		const key = `${shortcutIdentity(shortcut)}:${targets.size}`;
-		if (!Array.from(targets.values()).some(target => target.card === card && target.shortcut.id === shortcut!.id)) {
-			targets.set(key, { shortcut, card });
+		if (!targets.has(shortcut.id)) {
+			targets.set(shortcut.id, { shortcut, card });
 		}
 	}
 	return Array.from(targets.values());
@@ -282,69 +289,61 @@ function discoverAchievementCardTargets(doc: Document, shortcuts: MappedShortcut
 function isNativeAchievementFooterText(value: string): boolean {
 	const text = value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 	if (!text) return false;
-	return /^(sin logros|no achievements|aucun succès|keine erfolge|nessun obiettivo|sem conquistas|sem proezas|brak osiągnięć|нет достижений|geen prestaties|ingen præstationer|inga framsteg|ingen prestasjoner|ei saavutuksia|無成就|无成就|実績なし|도전 과制 없음)/i.test(text)
-		|| /^(completad|completed|terminé|abgeschlossen|completato|concluíd)/i.test(text)
+
+	const dynamicNoAchievements = [
+		loc('AppDetails_NoAchievements', ''),
+		loc('Achievement_Filter_None', ''),
+		loc('AppOverview_NoAchievements', ''),
+	].map(s => s.trim().toLowerCase()).filter(Boolean);
+
+	for (const token of dynamicNoAchievements) {
+		if (text.includes(token)) return true;
+	}
+
+	return /^(sin logros|no achievements|aucun succès|keine erfolge|keine errungenschaften|nessun obiettivo|sem conquistas|sem proezas|brak osiągnięć|нет достижений|достижений нет|немає досягнень|geen prestaties|ingen præstationer|inga prestationer|inga framsteg|ingen prestasjoner|ei saavutuksia|başarım yok|žádné achievementy|žádné úspěchy|nincsenek teljesítmények|fără realizări|няма постижения|χωρίς επιτεύγματα|không có thành tựu|ไม่มีความสำเร็จ|tidak ada pencapaian|لا توجد إنجازات|無成就|无成就|実績なし|도전 과제 없음)/i.test(text)
+		|| /^(completad|completed|terminé|abgeschlossen|completato|concluíd|ukończono|завершено|達成|完成|완료)/i.test(text)
 		|| text.includes('sin logros')
 		|| text.includes('no achievements');
 }
 
-function findNativeAchievementHost(card: HTMLElement): HTMLElement | null {
-	const existing = card.querySelector<HTMLElement>('[data-gdl-bp-achievement-host="1"]');
-	if (existing) return existing;
-
-	for (const element of Array.from(card.querySelectorAll<HTMLElement>('*'))) {
-		if (element.childElementCount > 2) continue;
-		const txt = (element.textContent || '').trim();
-		if (!isNativeAchievementFooterText(txt)) continue;
-		let host: HTMLElement = element;
-		let parent = element.parentElement;
-		while (parent && parent !== card) {
+function findPosterContainer(card: HTMLElement): HTMLElement {
+	const img = card.querySelector<HTMLElement>('img, [role="img"]');
+	if (img) {
+		const parent = img.parentElement;
+		if (parent && parent !== card) {
 			const rect = parent.getBoundingClientRect();
-			if (rect.height < 18 || rect.height > 80 || rect.width < 60) break;
-			host = parent;
-			parent = parent.parentElement;
-		}
-		return host;
-	}
-
-	if (card.nextElementSibling && isNativeAchievementFooterText(card.nextElementSibling.textContent || '')) {
-		return card.nextElementSibling as HTMLElement;
-	}
-
-	if (card.parentElement) {
-		for (const sibling of Array.from(card.parentElement.children)) {
-			if (sibling === card) continue;
-			if (isNativeAchievementFooterText(sibling.textContent || '')) {
-				return sibling as HTMLElement;
-			}
-			for (const child of Array.from(sibling.querySelectorAll<HTMLElement>('*'))) {
-				if (child.childElementCount <= 2 && isNativeAchievementFooterText(child.textContent || '')) {
-					return (child.parentElement && child.parentElement !== card.parentElement ? child.parentElement : child) as HTMLElement;
-				}
-			}
+			if (rect.height >= 80 && rect.width >= 60) return parent;
 		}
 	}
-	return null;
+	const capsule = card.querySelector<HTMLElement>('[class*="Capsule"], [class*="Portrait"], [class*="AppPortrait"]');
+	if (capsule && capsule !== card) {
+		const rect = capsule.getBoundingClientRect();
+		if (rect.height >= 80 && rect.width >= 60) return capsule;
+	}
+	return card;
 }
 
 function ensureAchievementHost(target: AchievementCardTarget): HTMLElement {
 	const identity = shortcutIdentity(target.shortcut);
-	let host = target.card.querySelector<HTMLElement>('[data-gdl-bp-achievement-host="1"]')
-		|| findNativeAchievementHost(target.card);
-	if (!host && target.card.parentElement) {
-		host = findNativeAchievementHost(target.card.parentElement);
-	}
+	const poster = findPosterContainer(target.card);
+	poster.style.position = poster.style.position || 'relative';
+
+	let host = poster.querySelector<HTMLElement>(':scope > .gdl-bp-achievement-host-fallback')
+		|| target.card.querySelector<HTMLElement>(':scope > .gdl-bp-achievement-host-fallback')
+		|| poster.querySelector<HTMLElement>('[data-gdl-bp-achievement-host="1"]');
+
 	if (!host) {
-		host = target.card.ownerDocument.createElement('div');
+		host = poster.ownerDocument.createElement('div');
 		host.className = 'gdl-bp-achievement-host-fallback';
-		target.card.dataset.gdlBpAchievementCard = '1';
-		target.card.appendChild(host);
+		poster.appendChild(host);
 	}
+
 	host.dataset.gdlBpAchievementHost = '1';
 	host.dataset.gdlBpAchievementIdentity = identity;
+
 	let footer = host.querySelector<HTMLElement>(':scope > .gdl-bp-achievement-footer');
 	if (!footer) {
-		footer = target.card.ownerDocument.createElement('span');
+		footer = host.ownerDocument.createElement('span');
 		footer.className = 'gdl-bp-achievement-footer';
 		host.appendChild(footer);
 	}
@@ -352,33 +351,58 @@ function ensureAchievementHost(target: AchievementCardTarget): HTMLElement {
 }
 
 function achievementLabels(percent: number): { progress: string; empty: string; loading: string } {
-	const language = String(steamLanguageSync() || 'english').toLocaleLowerCase();
 	const number = percent.toLocaleString(steamIntlLocale(), { maximumFractionDigits: 0 });
-	if (/^(spanish|latam|es)/.test(language)) {
-		return { progress: `Completado un ${number} %`, empty: 'Sin logros', loading: 'Cargando logros…' };
+	const rawCompletedTemplate = loc('AppBox_PercentComplete', '') || loc('AppOverview_PercentComplete', '') || '';
+	let progressText = '';
+	if (rawCompletedTemplate) {
+		progressText = rawCompletedTemplate.replace(/%1\$s/g, number).replace(/%s/g, number);
+		if (!progressText.includes(number)) progressText = `${progressText} ${number}%`;
+	} else {
+		const language = String(steamLanguageSync() || 'english').toLocaleLowerCase();
+		if (/^(spanish|latam|es)/.test(language)) {
+			progressText = `Completado un ${number} %`;
+		} else {
+			progressText = `Completed ${number}%`;
+		}
 	}
+
+	const emptyText = loc('AppDetails_NoAchievements', '') || gdlText('no_achievements', 'No achievements');
+	const loadingText = loc('Loading', '') || loc('Generic_Loading', '') || (String(steamLanguageSync() || '').startsWith('es') ? 'Cargando logros…' : 'Loading achievements…');
+
 	return {
-		progress: `Completed ${number}%`,
-		empty: gdlText('no_achievements', 'No achievements'),
-		loading: 'Loading achievements…',
+		progress: progressText,
+		empty: emptyText,
+		loading: loadingText,
 	};
 }
 
 function completionMedal(): string {
-	return '<svg class="gdl-bp-card-medal" viewBox="0 0 32 38" aria-hidden="true"><path fill="#0787ec" d="M7 6 12 1h8l5 5v9l-5 5h-8l-5-5V6Z"/><circle cx="16" cy="10" r="6" fill="#ffc52f"/><path fill="#0787ec" d="m10 20 6 2-5 15-4-6-6 1 6-13 3 1Zm12 0-6 2 5 15 4-6 6 1-6-13-3 1Z"/></svg>';
+	return `<svg class="gdl-bp-card-medal" viewBox="0 0 36 44" aria-hidden="true">
+		<path fill="#0256a4" d="M12 28 L7 42 L13 39 L17 43 L15 28 Z"/>
+		<path fill="#036ac7" d="M24 28 L29 42 L23 39 L19 43 L21 28 Z"/>
+		<polygon fill="#0b76db" points="18,4 21,7 25,6 26,10 30,11 29,15 32,18 29,21 30,25 26,26 25,30 21,29 18,32 15,29 11,30 10,26 6,25 7,21 4,18 7,15 6,11 10,10 11,6 15,7"/>
+		<polygon fill="#0d85f7" points="18,6 20,8 24,8 24,11 28,12 27,15 30,18 27,21 28,24 24,25 24,28 20,28 18,30 16,28 12,28 12,25 8,24 9,21 6,18 9,15 8,12 12,11 12,8 16,8"/>
+		<circle cx="18" cy="18" r="7.5" fill="#f4b728"/>
+		<circle cx="18" cy="18" r="6.2" fill="#ffca36"/>
+		<circle cx="18" cy="18" r="5" fill="#f4b728" opacity="0.3"/>
+	</svg>`;
 }
 
 function renderAchievementFooter(footer: HTMLElement, data: LocalAchievementData | null | undefined): void {
 	const pending = data === undefined;
 	const hasAchievements = Boolean(data && data.found && data.total > 0);
 	const percent = hasAchievements ? localAchievementPercent(data!) : 0;
+	const isComplete = percent >= 100;
 	const labels = achievementLabels(percent);
 	const label = pending ? labels.loading : hasAchievements ? labels.progress : labels.empty;
 	const host = footer.parentElement;
-	if (host) host.style.display = '';
+	if (host) {
+		host.style.display = '';
+		host.style.overflow = 'visible';
+	}
 	footer.style.display = '';
-	footer.className = `gdl-bp-achievement-footer${pending ? ' is-loading' : ''}${hasAchievements ? ' has-progress' : ' is-empty'}${percent >= 100 ? ' is-complete' : ''}`;
-	footer.innerHTML = `${percent >= 100 ? completionMedal() : ''}<span class="gdl-bp-card-ach-label">${escapeHtml(label)}</span>${hasAchievements ? `<span class="gdl-bp-card-ach-track"><span class="gdl-bp-card-ach-fill" style="width:${percent}%"></span></span>` : ''}`;
+	footer.className = `gdl-bp-achievement-footer${pending ? ' is-loading' : ''}${isComplete ? ' is-complete' : (hasAchievements ? ' has-progress' : ' is-empty')}`;
+	footer.innerHTML = `${isComplete ? completionMedal() : ''}<span class="gdl-bp-card-ach-label">${escapeHtml(label)}</span>${hasAchievements && !isComplete ? `<span class="gdl-bp-card-ach-track"><span class="gdl-bp-card-ach-fill" style="width:${percent}%"></span></span>` : ''}`;
 	footer.setAttribute('aria-label', label);
 	if (hasAchievements) {
 		footer.setAttribute('role', 'progressbar');
@@ -396,21 +420,93 @@ function ensureAchievementCardStyles(doc: Document): void {
 	const style = doc.createElement('style');
 	style.id = 'gdl-bp-achievement-cards-style';
 	style.textContent = `
-		[data-gdl-bp-achievement-host="1"]{position:relative!important;min-height:32px!important;isolation:isolate;overflow:hidden!important;}
-		[data-gdl-bp-achievement-host="1"] > *:not(.gdl-bp-achievement-footer){display:none!important;opacity:0!important;visibility:hidden!important;}
-		.gdl-bp-achievement-host-fallback{position:absolute!important;left:0;right:0;bottom:0;height:34px;z-index:20;pointer-events:none;}
-		[data-gdl-bp-achievement-card="1"]{position:relative!important;}
-		.gdl-bp-achievement-footer{box-sizing:border-box;position:absolute;inset:0;width:100%;height:100%;z-index:30;display:flex;align-items:center;justify-content:center;gap:7px;min-height:32px;padding:4px 9px 6px;background:rgba(55,61,68,.98);color:#e7e8ea;font:600 14px/20px "Motiva Sans",Arial,sans-serif;text-align:center;white-space:nowrap;overflow:visible;}
-		.gdl-bp-achievement-footer.is-loading{color:#aeb4ba;background:linear-gradient(90deg,rgba(52,58,66,.96),rgba(68,76,86,.96),rgba(52,58,66,.96));background-size:220% 100%;animation:gdl-bp-ach-loading 1.8s linear infinite;}
-		.gdl-bp-achievement-footer.is-complete{background:#0787ec!important;color:#fff!important;}
-		.gdl-bp-achievement-footer.has-progress{background:rgba(55,61,68,.98)!important;color:#e7e8ea!important;}
-		.gdl-bp-card-ach-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-		.gdl-bp-card-ach-track{position:absolute;left:0;right:0;bottom:0;height:4px;background:#252b31;overflow:hidden;}
-		.gdl-bp-card-ach-fill{display:block;height:100%;background:#1a9fff;}
-		.gdl-bp-achievement-footer.is-complete .gdl-bp-card-ach-track{background:rgba(0,0,0,.20);}
-		.gdl-bp-achievement-footer.is-complete .gdl-bp-card-ach-fill{background:#fff;}
-		.gdl-bp-card-medal{position:absolute;left:-13px;bottom:-11px;width:38px;height:46px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.5));overflow:visible;}
-		@keyframes gdl-bp-ach-loading{from{background-position:100% 0}to{background-position:-120% 0}}
+		[data-gdl-bp-achievement-card="1"] { position: relative !important; overflow: visible !important; }
+		.gdl-bp-achievement-host-fallback {
+			box-sizing: border-box !important;
+			position: absolute !important;
+			left: 0 !important;
+			right: 0 !important;
+			bottom: 0 !important;
+			height: 32px !important;
+			max-height: 32px !important;
+			z-index: 20 !important;
+			pointer-events: none !important;
+			border-radius: 0 0 4px 4px !important;
+			overflow: visible !important;
+		}
+		.gdl-bp-achievement-footer {
+			box-sizing: border-box !important;
+			position: absolute !important;
+			left: 0 !important;
+			right: 0 !important;
+			bottom: 0 !important;
+			width: 100% !important;
+			height: 32px !important;
+			max-height: 32px !important;
+			display: flex !important;
+			align-items: center !important;
+			justify-content: center !important;
+			gap: 6px !important;
+			padding: 2px 8px 4px !important;
+			background: rgba(30, 36, 44, 0.92) !important;
+			color: #e7e8ea !important;
+			font: 600 13px/18px "Motiva Sans", Arial, sans-serif !important;
+			text-align: center !important;
+			white-space: nowrap !important;
+			overflow: visible !important;
+			text-overflow: ellipsis !important;
+			border-radius: 0 0 4px 4px !important;
+		}
+		.gdl-bp-achievement-footer.is-loading {
+			color: #aeb4ba !important;
+			background: linear-gradient(90deg, rgba(32,38,46,.92), rgba(52,60,72,.92), rgba(32,38,46,.92)) !important;
+			background-size: 220% 100% !important;
+			animation: gdl-bp-ach-loading 1.8s linear infinite !important;
+		}
+		.gdl-bp-achievement-footer.has-progress {
+			background: rgba(30, 36, 44, 0.92) !important;
+			color: #e7e8ea !important;
+		}
+		.gdl-bp-achievement-footer.is-complete {
+			background: #199fff !important;
+			background: linear-gradient(180deg, #1ea3ff 0%, #0885f0 100%) !important;
+			color: #ffffff !important;
+			font-weight: 700 !important;
+			text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25) !important;
+			padding-left: 36px !important;
+			border-radius: 0 0 4px 4px !important;
+		}
+		.gdl-bp-card-ach-label {
+			overflow: hidden !important;
+			text-overflow: ellipsis !important;
+			white-space: nowrap !important;
+			pointer-events: none !important;
+		}
+		.gdl-bp-card-ach-track {
+			position: absolute !important;
+			left: 0 !important;
+			right: 0 !important;
+			bottom: 0 !important;
+			height: 3px !important;
+			background: rgba(0, 0, 0, 0.5) !important;
+			overflow: hidden !important;
+		}
+		.gdl-bp-card-ach-fill {
+			display: block !important;
+			height: 100% !important;
+			background: #1a9fff !important;
+		}
+		.gdl-bp-card-medal {
+			position: absolute !important;
+			left: 6px !important;
+			bottom: -5px !important;
+			width: 32px !important;
+			height: 40px !important;
+			z-index: 35 !important;
+			pointer-events: none !important;
+			filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5)) !important;
+		}
+		@keyframes gdl-bp-ach-loading { from { background-position: 100% 0 } to { background-position: -120% 0 } }
 	`;
 	(doc.head || doc.documentElement).appendChild(style);
 }
@@ -455,6 +551,16 @@ function ensureAchievementCardState(doc: Document): AchievementCardState {
 		}),
 	};
 	achievementCardStates.set(doc, state);
+
+	// Periodic retries during startup hydration so recent cards get achievements even if React mounts slowly
+	for (const delay of [250, 600, 1200, 2500, 4500]) {
+		setTimeout(() => {
+			if (achievementCardStates.get(doc) === state && doc.body?.isConnected) {
+				refreshBigPictureAchievementCards(doc);
+			}
+		}, delay);
+	}
+
 	return state;
 }
 
@@ -476,9 +582,14 @@ function pumpAchievementRequests(doc: Document, state: AchievementCardState): vo
 			.then(data => {
 				const live = achievementCardStates.get(doc);
 				if (live !== state || live.generation !== generation) return;
-				live.results.set(identity, data);
 				if (data?.found && data.total > 0) {
+					live.results.set(identity, data);
 					cacheLocalAchievements(data, shortcut.steamAppId, String(shortcut.id));
+				} else {
+					const existingCached = getCachedLocalAchievementsForGame(shortcut.steamAppId, String(shortcut.id));
+					if (!existingCached && !live.results.get(identity)?.found) {
+						live.results.set(identity, data);
+					}
 				}
 				scheduleCardRefresh(doc, live);
 			})
@@ -505,14 +616,7 @@ function queueAchievementRequest(doc: Document, state: AchievementCardState, sho
 function removeOwnedAchievementFooters(doc: Document, validIdentities?: Set<string>): void {
 	for (const host of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-achievement-host="1"]'))) {
 		if (validIdentities?.has(host.dataset.gdlBpAchievementIdentity || '')) continue;
-		host.querySelector(':scope > .gdl-bp-achievement-footer')?.remove();
-		delete host.dataset.gdlBpAchievementHost;
-		delete host.dataset.gdlBpAchievementIdentity;
-		if (host.classList.contains('gdl-bp-achievement-host-fallback')) {
-			const card = host.parentElement;
-			host.remove();
-			if (card) delete card.dataset.gdlBpAchievementCard;
-		}
+		host.remove();
 	}
 }
 
@@ -521,7 +625,9 @@ export function refreshBigPictureAchievementCards(doc: Document): void {
 	ensureAchievementCardStyles(doc);
 	const shortcuts = getMappedShortcuts(doc);
 	if (shortcuts.length === 0) {
-		removeOwnedAchievementFooters(doc);
+		void loadMappings().then(() => {
+			if (doc.body?.isConnected) refreshBigPictureAchievementCards(doc);
+		});
 		return;
 	}
 	const state = ensureAchievementCardState(doc);
@@ -532,7 +638,10 @@ export function refreshBigPictureAchievementCards(doc: Document): void {
 		const identity = shortcutIdentity(target.shortcut);
 		const cached = getCachedLocalAchievementsForGame(target.shortcut.steamAppId, String(target.shortcut.id));
 		if (cached) state.results.set(identity, cached);
-		const data = cached || (state.results.has(identity) ? state.results.get(identity)! : undefined);
+		const hasResult = state.results.has(identity);
+		const isPendingOrQueued = state.pending.has(identity) || state.queued.has(identity);
+		const resultData = hasResult ? state.results.get(identity)! : undefined;
+		const data = cached || (resultData?.found && resultData.total > 0 ? resultData : (isPendingOrQueued ? undefined : resultData));
 		renderAchievementFooter(ensureAchievementHost(target), data);
 		queueAchievementRequest(doc, state, target.shortcut);
 	}

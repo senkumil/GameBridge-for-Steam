@@ -93,12 +93,14 @@ M.generic_words = {
     x86 = true, dx11 = true, dx12 = true, binary = true, binaries = true,
     games = true, juegos = true, steamapps = true, common = true,
     repack = true, fitgirl = true, dodi = true, gog = true, rune = true,
+    unins000 = true, uninstaller = true, uninstall = true, setup = true, installer = true, install = true,
 }
 M.generic_exes = {
     ["game"] = true, ["launcher"] = true, ["start"] = true,
     ["start protected game"] = true, ["playnite fullscreenapp"] = true,
     ["playnite desktopapp"] = true, ["heroic"] = true, ["epicgameslauncher"] = true,
     ["galaxyclient"] = true, ["retroarch"] = true, ["steam"] = true,
+    ["unins000"] = true, ["uninstall"] = true, ["uninstaller"] = true, ["setup"] = true,
 }
 
 function M.tokens(value, discard_generic)

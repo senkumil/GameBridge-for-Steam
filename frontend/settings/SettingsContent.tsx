@@ -27,6 +27,7 @@ import {
 	subscribeBulkLinkState,
 } from '../features/shortcuts/bulk-link-state';
 import { SteamGridDbSettings } from './SteamGridDbSettings';
+import { FactoryResetSection } from './FactoryResetSection';
 
 const DEFAULT_ACHIEVEMENT_BASE_PATH = '%APPDATA%\\SteamAchievements';
 
@@ -794,6 +795,8 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 					</div>
 				</div>
 			</div>
+
+			<FactoryResetSection onResetComplete={() => setShortcutRevision(v => v + 1)} />
 		</div>
 	);
 };

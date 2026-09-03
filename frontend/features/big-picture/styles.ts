@@ -47,36 +47,12 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		#gdl-bp-detail-root a { color: inherit; text-decoration: none; }
 		#gdl-bp-detail-root .gdl-bp-section { margin: 0 0 34px; }
 		@keyframes gdl-bp-rare-pulse {
-			0% { opacity: .20; transform: scale(.80); filter: blur(2px); }
+			0%, 100% { opacity: .20; transform: scale(.80); filter: blur(2px); }
 			15% { opacity: .94; transform: scale(1.15); filter: blur(6.8px); }
 			31% { opacity: .40; transform: scale(.90); filter: blur(3.2px); }
 			49% { opacity: 1; transform: scale(1.27); filter: blur(9.4px); }
 			66% { opacity: .48; transform: scale(.94); filter: blur(3.8px); }
 			83% { opacity: 1; transform: scale(1.17); filter: blur(7.2px); }
-			100% { opacity: .20; transform: scale(.80); filter: blur(2px); }
-		}		@keyframes gdl-bp-rare-rays-a {
-			0%, 100% { opacity: .18; filter: blur(3px); }
-			23% { opacity: .62; filter: blur(2.2px); }
-			48% { opacity: .28; filter: blur(3.3px); }
-			74% { opacity: .52; filter: blur(2.4px); }
-		}
-		@keyframes gdl-bp-rare-rays-b {
-			0%, 100% { opacity: .48; filter: blur(2.4px); }
-			29% { opacity: .16; filter: blur(3.5px); }
-			58% { opacity: .57; filter: blur(2px); }
-			83% { opacity: .24; filter: blur(3.1px); }
-		}
-		@keyframes gdl-bp-rays-a {
-			0%, 100% { opacity: .12; transform: scale(.96); filter: blur(3.6px); }
-			28% { opacity: .44; transform: scale(1.015); filter: blur(2.8px); }
-			57% { opacity: .22; transform: scale(.985); filter: blur(3.5px); }
-			78% { opacity: .38; transform: scale(1.025); filter: blur(3px); }
-		}
-		@keyframes gdl-bp-rays-b {
-			0%, 100% { opacity: .30; transform: scale(1.015); filter: blur(3px); }
-			24% { opacity: .13; transform: scale(.975); filter: blur(3.9px); }
-			52% { opacity: .40; transform: scale(1.025); filter: blur(2.7px); }
-			82% { opacity: .16; transform: scale(.985); filter: blur(3.7px); }
 		}
 		#gdl-bp-detail-root .gdl-bp-section-title {
 			margin: 0 0 14px;
@@ -88,47 +64,10 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		#gdl-bp-detail-root .gdl-bp-feed-group {
 			margin-bottom: 24px;
 		}
-		#gdl-bp-detail-root .gdl-bp-date-heading {
-			font-size: 13.5px;
-			font-weight: 700;
-			color: #8f98a0;
-			text-transform: uppercase;
-			letter-spacing: 0.8px;
-			margin: 20px 0 10px;
-			padding-left: 2px;
-		}
 		#gdl-bp-detail-root .gdl-bp-feed-list {
 			display: flex;
 			flex-direction: column;
 			gap: 10px;
-		}
-		#gdl-bp-detail-root .gdl-bp-feed-card {
-			display: flex;
-			align-items: stretch;
-			gap: 22px;
-			background: rgba(0, 0, 0, 0.35);
-			border: 1px solid rgba(255, 255, 255, 0.08);
-			border-radius: 4px;
-			padding: 16px 20px;
-			text-decoration: none;
-			color: inherit;
-			cursor: pointer;
-			box-sizing: border-box;
-			position: relative;
-			transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
-		}
-		#gdl-bp-detail-root .gdl-bp-feed-card:hover,
-		#gdl-bp-detail-root .gdl-bp-feed-card:focus,
-		#gdl-bp-detail-root .gdl-bp-feed-card:focus-visible,
-		#gdl-bp-detail-root .gdl-bp-feed-card.gpfocus,
-		#gdl-bp-detail-root .gdl-bp-feed-card.focus,
-		#gdl-bp-detail-root .gdl-bp-feed-card[data-focus="true"] {
-			background: rgba(255, 255, 255, 0.12) !important;
-			border-color: #ffffff !important;
-			box-shadow: 0 0 0 2px #ffffff, 0 6px 22px rgba(0, 0, 0, 0.6) !important;
-			transform: scale(1.015) !important;
-			outline: none !important;
-			z-index: 2;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-icon-wrap {
 			flex: 0 0 54px;
@@ -148,48 +87,6 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			flex-shrink: 0;
 			background: #191e25;
 			align-self: flex-start;
-		}
-		#gdl-bp-detail-root .gdl-bp-feed-thumb {
-			width: 220px;
-			height: 124px;
-			min-width: 220px;
-			border-radius: 3px;
-			object-fit: cover;
-			flex-shrink: 0;
-			background: #191e25;
-			align-self: center;
-		}
-		#gdl-bp-detail-root .gdl-bp-feed-body {
-			flex: 1 1 auto;
-			min-width: 0;
-			display: flex;
-			flex-direction: column;
-			justify-content: center;
-			gap: 4px;
-		}
-		#gdl-bp-detail-root .gdl-bp-feed-eyebrow {
-			font-size: 11.5px;
-			font-weight: 700;
-			line-height: 1.2;
-			color: #8f98a0;
-			text-transform: uppercase;
-			letter-spacing: 0.6px;
-		}
-		#gdl-bp-detail-root .gdl-bp-feed-title {
-			font-size: 17.5px;
-			font-weight: 500;
-			line-height: 1.3;
-			color: #ffffff;
-		}
-		#gdl-bp-detail-root .gdl-bp-feed-desc {
-			font-size: 14px;
-			line-height: 1.45;
-			color: #8f98a0;
-			margin-top: 4px;
-			display: -webkit-box;
-			-webkit-line-clamp: 3;
-			-webkit-box-orient: vertical;
-			overflow: hidden;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-meta {
 			align-self: flex-end;
@@ -265,6 +162,19 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			min-height: 62px;
 			padding: 8px 18px 8px 6px;
 			background: rgba(24,30,38,.88);
+			cursor: pointer;
+			outline: none;
+			transition: background 0.15s, box-shadow 0.15s;
+		}
+		#gdl-bp-detail-root .gdl-bp-ach-progress:hover,
+		#gdl-bp-detail-root .gdl-bp-ach-progress:focus,
+		#gdl-bp-detail-root .gdl-bp-ach-progress:focus-visible,
+		#gdl-bp-detail-root .gdl-bp-ach-progress.gpfocus,
+		#gdl-bp-detail-root .gdl-bp-ach-progress[data-focus="true"] {
+			background: rgba(38, 48, 62, 0.95) !important;
+			box-shadow: 0 0 0 2px #ffffff !important;
+			outline: none !important;
+			z-index: 2;
 		}
 		#gdl-bp-detail-root .gdl-bp-medal { width: 48px;height: 54px;display:flex;align-items:center;justify-content:center;color:#1a9fff; }
 		#gdl-bp-detail-root .gdl-bp-ach-progress-copy { min-width:0; }
@@ -273,7 +183,24 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		#gdl-bp-detail-root .gdl-bp-progress-track { height:10px;border-radius:2px;background:#3d444c;margin-top:8px;overflow:hidden; }
 		#gdl-bp-detail-root .gdl-bp-progress-fill { height:100%;background:#1a9fff; }
 		#gdl-bp-detail-root .gdl-bp-ach-strip { display:grid;grid-template-columns:minmax(390px,1.15fr) minmax(0,1fr);gap:12px;padding:24px 14px 14px;align-items:center; }
-		#gdl-bp-detail-root .gdl-bp-ach-featured { display:grid;grid-template-columns:88px minmax(0,1fr);gap:14px;padding:10px;background:rgba(75,83,95,.76);min-height:110px;align-items:center; }
+		#gdl-bp-detail-root .gdl-bp-ach-featured {
+			display:grid;grid-template-columns:88px minmax(0,1fr);gap:14px;padding:10px;background:rgba(75,83,95,.76);min-height:110px;align-items:center;
+			cursor: pointer;
+			outline: none;
+			border: 1px solid transparent;
+			transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+		}
+		#gdl-bp-detail-root .gdl-bp-ach-featured:hover,
+		#gdl-bp-detail-root .gdl-bp-ach-featured:focus,
+		#gdl-bp-detail-root .gdl-bp-ach-featured:focus-visible,
+		#gdl-bp-detail-root .gdl-bp-ach-featured.gpfocus,
+		#gdl-bp-detail-root .gdl-bp-ach-featured[data-focus="true"] {
+			border-color: #ffffff !important;
+			box-shadow: 0 0 0 2px #ffffff, 0 6px 20px rgba(0, 0, 0, 0.6) !important;
+			transform: scale(1.02) !important;
+			outline: none !important;
+			z-index: 2;
+		}
 		#gdl-bp-detail-root .gdl-bp-ach-featured .gdl-bp-ach-img { width:88px;height:88px; }
 		#gdl-bp-detail-root .gdl-bp-ach-featured strong { font-size:18px;line-height:22px; }
 		#gdl-bp-detail-root .gdl-bp-ach-featured p { margin:3px 0;font-size:15px;color:#aeb3ba;line-height:20px; }
@@ -291,6 +218,42 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			box-sizing:border-box;
 			isolation:isolate;
 			overflow:visible;
+			cursor: pointer;
+			outline: none;
+			transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+		}
+		#gdl-bp-detail-root .gdl-bp-ach-icon-frame:hover,
+		#gdl-bp-detail-root .gdl-bp-ach-icon-frame:focus,
+		#gdl-bp-detail-root .gdl-bp-ach-icon-frame:focus-visible,
+		#gdl-bp-detail-root .gdl-bp-ach-icon-frame.gpfocus,
+		#gdl-bp-detail-root .gdl-bp-ach-icon-frame[data-focus="true"] {
+			border-color: #ffffff !important;
+			box-shadow: 0 0 0 2px #ffffff, 0 8px 22px rgba(0, 0, 0, 0.7) !important;
+			transform: scale(1.08) !important;
+			outline: none !important;
+			z-index: 5;
+		}
+		#gdl-bp-detail-root .gdl-bp-ach-footer-prompt-bar {
+			padding: 12px 16px 16px;
+			display: flex;
+			justify-content: flex-end;
+		}
+		#gdl-bp-detail-root .gdl-bp-open-ach-trigger {
+			cursor: pointer;
+			outline: none;
+			padding: 6px 14px;
+			border-radius: 4px;
+			transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
+		}
+		#gdl-bp-detail-root .gdl-bp-open-ach-trigger:hover,
+		#gdl-bp-detail-root .gdl-bp-open-ach-trigger:focus,
+		#gdl-bp-detail-root .gdl-bp-open-ach-trigger:focus-visible,
+		#gdl-bp-detail-root .gdl-bp-open-ach-trigger.gpfocus,
+		#gdl-bp-detail-root .gdl-bp-open-ach-trigger[data-focus="true"] {
+			background: rgba(255, 255, 255, 0.14) !important;
+			box-shadow: 0 0 0 2px #ffffff !important;
+			transform: scale(1.04) !important;
+			outline: none !important;
 		}
 		#gdl-bp-detail-root .gdl-bp-ach-icon-frame.is-rare {
 			border-color: rgba(0,0,0,.46);

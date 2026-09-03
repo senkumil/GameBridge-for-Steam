@@ -320,5 +320,14 @@ function M.set_game_options(request_json)
     return cjson.encode(effective)
 end
 
+function M.clear_all_settings()
+    logger:info("Clearing all achievement settings and resetting to defaults")
+    write_json("achievement_paths.json", {}, "per-game achievement paths")
+    write_json("achievement_options.json", {}, "per-game achievement options")
+    local base_path_file = config.state_path("achievement_base_path.json")
+    if fs.exists(base_path_file) then os.remove(base_path_file) end
+    return true
+end
+
 return M
 end

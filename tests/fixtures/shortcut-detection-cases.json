@@ -98,6 +98,15 @@
     }
   },
   {
+    "executable": "b1.exe",
+    "title": "b1",
+    "expect": {
+      "expectedAppId": "2358720",
+      "verifiedMaintainedAliasFastPath": true,
+      "requiresOfficialAppValidation": true
+    }
+  },
+  {
     "executable": "RDR2.exe",
     "title": "Red Dead Redemption 2",
     "expect": {

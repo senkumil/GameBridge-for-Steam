@@ -72,6 +72,13 @@ function mountManualLinkNoticeButton(doc: Document, noticeElement: Element, shor
 	button.dataset.gameTitle = gameTitle;
 	button.setAttribute('aria-label', `${gdlText('link_button', 'Link')} ${gameTitle}`);
 	button.textContent = gdlText('link_button', 'Link');
+	button.onclick = (event: MouseEvent) => {
+		event.preventDefault();
+		event.stopPropagation();
+		const id = Number(button.dataset.shortcutAppId || shortcutAppId || '0');
+		const title = button.dataset.gameTitle || gameTitle || '';
+		requestManualShortcutLink(id, title, doc);
+	};
 	if (row.parentElement !== host) host.appendChild(row);
 	return true;
 }

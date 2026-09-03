@@ -1,5 +1,7 @@
 import { gdlText } from '../../steam/localization';
 import { steamGameMainPageUrl } from '../../core/steam-links';
+import { PLAYBAR_CLASSES } from '../../steam/css';
+import { closestWithCssModuleClass, elementsWithCssModuleClass, isRenderedElement } from '../../steam/native-dom';
 import type { NativeLibraryLayout } from './layout';
 
 export interface PrimaryLinksOptions {
@@ -117,36 +119,109 @@ export function createPrimaryLinksBar(
 	return linkBar;
 }
 
+export function findNativePlaybar(doc: Document): HTMLElement | null {
+	const pb = PLAYBAR_CLASSES();
+	// 1. Check from AppButtonsContainer (holds the green Play button, gear, controller)
+	if (pb.AppButtonsContainer) {
+		const buttons = elementsWithCssModuleClass(doc, pb.AppButtonsContainer).find(c => isRenderedElement(doc, c))
+			|| elementsWithCssModuleClass(doc, pb.AppButtonsContainer)[0];
+		if (buttons) {
+			const container = (pb.Container ? closestWithCssModuleClass(buttons, pb.Container) : null)
+				|| buttons.closest<HTMLElement>('[class*="PlayBar"], [class*="playbar"]')
+				|| buttons.parentElement;
+			if (container) return container;
+		}
+	}
+	// 2. Check Container CSS module
+	if (pb.Container) {
+		const container = elementsWithCssModuleClass(doc, pb.Container).find(c => isRenderedElement(doc, c))
+			|| elementsWithCssModuleClass(doc, pb.Container)[0];
+		if (container) return container;
+	}
+	// 3. Check InPage CSS module
+	if (pb.InPage) {
+		const inPage = elementsWithCssModuleClass(doc, pb.InPage).find(c => isRenderedElement(doc, c))
+			|| elementsWithCssModuleClass(doc, pb.InPage)[0];
+		if (inPage) return inPage;
+	}
+	// 4. Check GameStatsSection
+	if (pb.GameStatsSection) {
+		const stats = elementsWithCssModuleClass(doc, pb.GameStatsSection).find(c => isRenderedElement(doc, c))
+			|| elementsWithCssModuleClass(doc, pb.GameStatsSection)[0];
+		if (stats) {
+			const container = (pb.Container ? closestWithCssModuleClass(stats, pb.Container) : null)
+				|| stats.closest<HTMLElement>('[class*="PlayBar"], [class*="playbar"]')
+				|| stats.parentElement;
+			if (container) return container;
+		}
+	}
+	// 5. Fallback: querySelector by Play button
+	const playBtn = doc.querySelector<HTMLElement>('button[class*="Play"], [class*="PlayButton"], [class*="playButton"]');
+	if (playBtn) {
+		const container = playBtn.closest<HTMLElement>('[class*="PlayBar"], [class*="playbar"], [class*="Container"]')
+			|| playBtn.parentElement?.parentElement
+			|| playBtn.parentElement;
+		if (container) return container;
+	}
+	return doc.querySelector<HTMLElement>('[class*="PlayBar"], [class*="playbar"]');
+}
+
+function anchorLinksBarAfterPlaybar(bar: HTMLElement, playbar: HTMLElement): boolean {
+	if (!playbar.parentElement) return false;
+	const doc = bar.ownerDocument;
+	const infoPanel = doc.getElementById('gdl-game-info-panel');
+	if (infoPanel && infoPanel.parentElement === playbar.parentElement
+		&& (playbar.compareDocumentPosition(infoPanel) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+		if (infoPanel.nextElementSibling) {
+			infoPanel.parentElement.insertBefore(bar, infoPanel.nextElementSibling);
+		} else {
+			infoPanel.parentElement.appendChild(bar);
+		}
+	} else if (playbar.nextElementSibling) {
+		playbar.parentElement.insertBefore(bar, playbar.nextElementSibling);
+	} else {
+		playbar.parentElement.appendChild(bar);
+	}
+	bar.style.removeProperty('visibility');
+	bar.style.removeProperty('display');
+	return true;
+}
+
 export function insertPrimaryLinksBar(
 	bar: HTMLElement,
-	layout: NativeLibraryLayout,
+	_layout: NativeLibraryLayout,
 	activityWrapper: HTMLElement,
 ): void {
 	const doc = bar.ownerDocument;
-	const playbar = doc.querySelector<HTMLElement>('[class*="PlayBar"], [class*="playbar"], button[class*="Play"]')
-		?.closest<HTMLElement>('[class*="PlayBar"], [class*="playbar"]');
+	const playbar = findNativePlaybar(doc);
 
-	// If a valid twoColumnRow is present and does NOT contain the playbar, insert right before it
-	if (layout.twoColumnRow?.parentElement && (!playbar || (!layout.twoColumnRow.contains(playbar) && layout.twoColumnRow !== playbar))) {
-		const playbarTop = playbar?.getBoundingClientRect().top ?? -Infinity;
-		const twoColumnTop = layout.twoColumnRow.getBoundingClientRect().top;
-		if (!playbar || twoColumnTop >= playbarTop) {
-			layout.twoColumnRow.parentElement.insertBefore(bar, layout.twoColumnRow);
-			return;
-		}
-	}
-
-	// If playbar is found, anchor directly after the playbar container
-	if (playbar && playbar.parentElement) {
-		if (playbar.nextElementSibling) {
-			playbar.parentElement.insertBefore(bar, playbar.nextElementSibling);
-		} else {
-			playbar.parentElement.appendChild(bar);
-		}
+	if (playbar && anchorLinksBarAfterPlaybar(bar, playbar)) {
 		return;
 	}
 
+	// Playbar is still mounting during route change / game switch.
+	// CRITICAL: Keep bar hidden so it NEVER flashes above the PlayBar for even 1 millisecond!
+	bar.style.setProperty('visibility', 'hidden', 'important');
 	if (!bar.isConnected && activityWrapper.parentElement) {
 		activityWrapper.parentElement.insertBefore(bar, activityWrapper);
 	}
+
+	const win = doc.defaultView || window;
+	let attempts = 0;
+	const retryAnchor = () => {
+		attempts += 1;
+		if (!bar.isConnected) return;
+		const pb = findNativePlaybar(doc);
+		if (pb && anchorLinksBarAfterPlaybar(bar, pb)) {
+			return;
+		}
+		if (attempts < 25) {
+			win.requestAnimationFrame(retryAnchor);
+		} else {
+			// Safety fallback after ~400ms if playbar never mounted
+			bar.style.removeProperty('visibility');
+			bar.style.removeProperty('display');
+		}
+	};
+	win.requestAnimationFrame(retryAnchor);
 }

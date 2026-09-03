@@ -45,6 +45,7 @@ deps.shortcut_detection_text = load_factory("shortcut_detection_text")(deps)
 deps.shortcut_detection_aliases = load_factory("shortcut_detection_aliases")(deps)
 deps.shortcut_detection_rules = load_factory("shortcut_detection_rules")(deps)
 deps.shortcut_detection_tracking = load_factory("shortcut_detection_tracking")(deps)
+deps.shortcut_detection_pe = load_factory("shortcut_detection_pe")(deps)
 
 local mappings = load_factory("mappings")(deps)
 local store = load_factory("store")(deps)
@@ -121,6 +122,18 @@ function set_playtime_data(request_json) return playtime.set_playtime(request_js
 function suppress_admin_prompt(request_json) return deps.util.suppress_admin_prompt(request_json) end
 function neutralize_steam_appid_file(request_json) return deps.util.neutralize_steam_appid_file(request_json) end
 function restore_steam_appid_file(request_json) return deps.util.restore_steam_appid_file(request_json) end
+function factory_reset(request_json)
+    local ok_req, req = pcall(cjson.decode, tostring(request_json or "{}"))
+    local delete_playtime = ok_req and type(req) == "table" and req.delete_playtime == true
+    logger:info("Executing factory reset (delete_playtime=" .. tostring(delete_playtime) .. ")")
+    pcall(function() artwork.clear_all_linked_artworks() end)
+    pcall(function() mappings.clear_all() end)
+    pcall(function() achievements.clear_all_settings() end)
+    if delete_playtime then
+        pcall(function() playtime.clear_all() end)
+    end
+    return cjson.encode({ ok = true, deleted_playtime = delete_playtime })
+end
 function fe_log(msg)
     logger:info("[FE] " .. tostring(msg))
     return "ok"

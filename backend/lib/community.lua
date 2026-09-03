@@ -185,11 +185,12 @@ local function parse_hub_cards(html, fallback_type, items)
             item.link = item.link:gsub("&amp;", "&")
         end
 
-        local is_latin_user = (safe_language ~= "russian" and safe_language ~= "ukrainian" and safe_language ~= "schinese" and safe_language ~= "tchinese" and safe_language ~= "japanese" and safe_language ~= "koreana")
+        local is_cyrillic_user = (safe_language == "russian" or safe_language == "ukrainian" or safe_language == "bulgarian")
+        local is_cjk_user = (safe_language == "schinese" or safe_language == "tchinese" or safe_language == "japanese" or safe_language == "koreana")
         local title_has_cyrillic = raw_title and (raw_title:find("[\208\209][\128-\191]") ~= nil)
         local desc_has_cyrillic = raw_desc and (raw_desc:find("[\208\209][\128-\191]") ~= nil)
         local title_has_cjk = raw_title and (raw_title:find("[\228-\233][\128-\191][\128-\191]") ~= nil)
-        local skip_script = is_latin_user and (title_has_cyrillic or desc_has_cyrillic or title_has_cjk)
+        local skip_script = (not is_cyrillic_user and (title_has_cyrillic or desc_has_cyrillic)) or (not is_cjk_user and title_has_cjk)
 
         local dedup_key = item.link or item.image
         if not skip_script and item.image and item.image ~= "" and dedup_key and not seen_items[dedup_key] then
@@ -214,7 +215,7 @@ function M.fetch_community_content(steam_app_id, language)
     if not appid:match("^%d+$") and requested_language:match("^%d+$") then
         appid, requested_language = requested_language, appid
     end
-    local safe_language = requested_language:match("^[%w_-]+$") or "english"
+    local safe_language = util.safe_language(requested_language)
     local items = {}
 	local successful_pages = 0
 
@@ -454,7 +455,8 @@ function M.fetch_community_items_catalog(steam_app_id, language)
         return cjson.encode({ error = "invalid_appid", cards = {}, badges = {} })
     end
 
-    local cache_key = appid .. "|" .. requested_language
+    local safe_language = util.safe_language(requested_language)
+    local cache_key = appid .. "|" .. safe_language
     if community_items_catalog_cache[cache_key] then
 		local cached = community_items_catalog_cache[cache_key]
 		local ttl = cached.complete and COMMUNITY_ITEMS_SUCCESS_CACHE_SECONDS or COMMUNITY_ITEMS_FAILURE_CACHE_SECONDS
@@ -467,7 +469,7 @@ function M.fetch_community_items_catalog(steam_app_id, language)
 
     local market_url = "https://steamcommunity.com/market/search/render/"
         .. "?query=&start=0&count=100&search_descriptions=0"
-        .. "&sort_column=name&sort_dir=asc&appid=753&l=" .. detection_url_encode(requested_language)
+        .. "&sort_column=name&sort_dir=asc&appid=753&l=" .. detection_url_encode(safe_language)
         .. "&category_753_Game%5B%5D=tag_app_" .. appid .. "&norender=1"
         .. "&category_753_item_class%5B%5D=tag_item_class_2"
         .. "&category_753_cardborder%5B%5D=tag_cardborder_0"

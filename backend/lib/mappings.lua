@@ -75,5 +75,12 @@ function M.get_all_mappings()
     return cjson.encode(read_mappings())
 end
 
+function M.clear_all()
+    logger:info("Clearing all mappings and backup")
+    local ok = config.write_json_atomic(config.get_config_path(), {})
+    local backup_ok = config.write_json_atomic(backup_path(), {})
+    return (ok and backup_ok) and "ok" or "error"
+end
+
 return M
 end

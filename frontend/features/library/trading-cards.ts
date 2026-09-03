@@ -9,6 +9,19 @@ import { buildNativeSidebarSection } from './layout';
 
 const tradingCardPreviewCleanup = new WeakMap<Document, () => void>();
 const responsiveGridCleanups = new Map<HTMLElement, () => void>();
+const preloadedArtworks = new Map<string, HTMLImageElement>();
+
+export function preloadTradingCardImage(url: string): void {
+	if (!url || preloadedArtworks.has(url)) return;
+	const img = new Image();
+	img.decoding = 'async';
+	img.src = url;
+	preloadedArtworks.set(url, img);
+	if (preloadedArtworks.size > 120) {
+		const oldest = preloadedArtworks.keys().next().value;
+		if (oldest) preloadedArtworks.delete(oldest);
+	}
+}
 
 export function disposeTradingCardPreview(doc: Document): void {
 	tradingCardPreviewCleanup.get(doc)?.();
@@ -26,8 +39,11 @@ export function resetTradingCardTilts(doc: Document): void {
 			for (const property of ['left', 'top', 'width', 'height']) hitbox.style.removeProperty(property);
 		}
 		card.style.removeProperty('--gdl-card-angle');
+		card.style.removeProperty('--gdl-sheen-pos');
 		card.style.removeProperty('--gdl-sheen-alpha');
 		card.style.removeProperty('--gdl-sheen-brightness');
+		card.style.removeProperty('--gdl-holo-x');
+		card.style.removeProperty('--gdl-holo-y');
 		card.style.removeProperty('--gdl-card-pointer-x');
 		card.style.removeProperty('--gdl-card-pointer-y');
 		card.style.removeProperty('--gdl-cursor-glow-alpha');
@@ -46,6 +62,14 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 	resetTradingCardTilts(doc);
 
 	const initialUrl = imageUrl || fallbackUrl || '';
+	const cachedPreload = preloadedArtworks.get(initialUrl);
+	const initialWidth = (cachedPreload && cachedPreload.complete && cachedPreload.naturalWidth > 0)
+		? cachedPreload.naturalWidth
+		: 1920;
+	const initialHeight = (cachedPreload && cachedPreload.complete && cachedPreload.naturalHeight > 0)
+		? cachedPreload.naturalHeight
+		: 1080;
+
 	const overlay = doc.createElement('div');
 	overlay.id = 'gdl-trading-card-preview';
 	overlay.setAttribute('role', 'dialog');
@@ -54,27 +78,33 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 	overlay.innerHTML = `
 		<div class="gdl-trading-card-preview-panel">
 			<button type="button" class="gdl-trading-card-preview-x" aria-label="${escapeHtml(gdlText('close', 'Close'))}">×</button>
-			<img class="gdl-trading-card-preview-image" src="${escapeHtml(initialUrl)}" alt="${escapeHtml(gameName)}" />
+			<img class="gdl-trading-card-preview-image" src="${escapeHtml(initialUrl)}" alt="${escapeHtml(gameName)}" decoding="async" />
 			<button type="button" class="gdl-trading-card-preview-close">${escapeHtml(gdlText('close', 'Close'))}</button>
 		</div>`;
 
 	const panel = overlay.querySelector<HTMLElement>('.gdl-trading-card-preview-panel');
 	const image = overlay.querySelector<HTMLImageElement>('.gdl-trading-card-preview-image');
 	let closed = false;
-	let previewRevealed = false;
 	let triedFallback = false;
 
-	const fitPreviewToImage = (): void => {
-		if (!panel || !image || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+	if (image && fallbackUrl && fallbackUrl !== initialUrl && (!cachedPreload || !cachedPreload.complete)) {
+		image.style.backgroundImage = `url("${fallbackUrl}")`;
+	}
+
+	const fitPreviewToImage = (naturalW?: number, naturalH?: number): void => {
+		if (!panel || !image) return;
+		const nw = naturalW || image.naturalWidth || initialWidth;
+		const nh = naturalH || image.naturalHeight || initialHeight;
+		if (nw <= 0 || nh <= 0) return;
 		const view = doc.defaultView;
 		const viewportWidth = Math.max(320, view?.innerWidth || doc.documentElement.clientWidth || 1280);
 		const viewportHeight = Math.max(240, view?.innerHeight || doc.documentElement.clientHeight || 720);
 		const maxPanelWidth = Math.max(240, viewportWidth - 30);
 		const maxImageWidth = Math.max(120, Math.min(1500, maxPanelWidth - 32));
 		const maxImageHeight = Math.max(120, viewportHeight - 114);
-		const scale = Math.min(maxImageWidth / image.naturalWidth, maxImageHeight / image.naturalHeight, 1);
-		const imageWidth = Math.max(1, Math.round(image.naturalWidth * scale));
-		const imageHeight = Math.max(1, Math.round(image.naturalHeight * scale));
+		const scale = Math.min(maxImageWidth / nw, maxImageHeight / nh, 1);
+		const imageWidth = Math.max(1, Math.round(nw * scale));
+		const imageHeight = Math.max(1, Math.round(nh * scale));
 
 		panel.style.width = `${imageWidth + 32}px`;
 		panel.style.maxWidth = `${maxPanelWidth}px`;
@@ -84,18 +114,11 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 		const closeButton = overlay.querySelector<HTMLElement>('.gdl-trading-card-preview-close');
 		if (closeButton) closeButton.style.width = `${Math.max(1, Math.min(780, Math.round(imageWidth * .5)))}px`;
 	};
-	const revealPreview = (): void => {
-		if (closed || previewRevealed) return;
-		if (!image || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
-		fitPreviewToImage();
-		previewRevealed = true;
-		const view = doc.defaultView;
-		if (view) view.requestAnimationFrame(() => overlay.classList.add('is-visible'));
-		else overlay.classList.add('is-visible');
-	};
+
 	const onImageLoad = (): void => {
 		if (image && image.naturalWidth > 0 && image.naturalHeight > 0) {
-			revealPreview();
+			image.style.backgroundImage = 'none';
+			fitPreviewToImage(image.naturalWidth, image.naturalHeight);
 		} else {
 			onImageError();
 		}
@@ -143,9 +166,6 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 			|| isInsideButton(event, '.gdl-trading-card-preview-close')
 			|| isInsideButton(event, '.gdl-trading-card-preview-x');
 		if (!hitCloseButton) return;
-		// Steam's CEF occasionally delivers the pointer event to a nested
-		// surface instead of the button's React target. Capture the whole button
-		// region here so its text, padding and icon all close the preview.
 		event.preventDefault();
 		event.stopPropagation();
 		dismiss();
@@ -158,7 +178,6 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 			|| isInsideButton(event, '.gdl-trading-card-preview-close')
 			|| isInsideButton(event, '.gdl-trading-card-preview-x');
 		if (!hitCloseButton) return;
-		// Do not let a double click escape to Steam's draggable window chrome.
 		event.preventDefault();
 		event.stopPropagation();
 	};
@@ -170,7 +189,14 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 		if (event.target === overlay) dismiss();
 	});
 	doc.addEventListener('keydown', onKeyDown, true);
+
+	fitPreviewToImage(cachedPreload?.naturalWidth, cachedPreload?.naturalHeight);
 	doc.body.appendChild(overlay);
+
+	const view = doc.defaultView;
+	if (view) view.requestAnimationFrame(() => overlay.classList.add('is-visible'));
+	else overlay.classList.add('is-visible');
+
 	if (image?.complete) {
 		if (image.naturalWidth > 0 && image.naturalHeight > 0) onImageLoad();
 		else onImageError();
@@ -244,25 +270,26 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			if (!card.classList.contains('gdl-card-tilt-active')) return;
 			const dx = pointerX - 0.5;
 			const dy = pointerY - 0.5;
-			const rotateY = dx * 72;
-			const rotateX = -dy * 60;
-			const translateX = dx * 15;
-			const translateY = dy * 12;
-			const lightAngle = Math.round(125 + dx * 72 + dy * 48);
-			// Match Steam foil directionality: raising the top edge catches more
-			// light, while lowering it darkens the card. Horizontal movement only
-			// moves the glint; it must not make the whole card brighter.
-			const sheenAlpha = Math.max(0.04, Math.min(0.45, 0.20 - dy * 0.50)).toFixed(3);
-			const sheenBrightness = Math.max(0.72, Math.min(1.28, 1 - dy * 0.56)).toFixed(2);
-			const cursorGlowAlpha = Math.max(0.20, Math.min(0.52, 0.38 - dy * 0.24)).toFixed(3);
+			// Refined physical tilt: natural 22-26 deg max with smooth perspective
+			const rotateY = dx * 26;
+			const rotateX = -dy * 22;
+			const translateX = dx * 8;
+			const translateY = dy * 6;
+			const lightAngle = Math.round(125 + dx * 50 + dy * 35);
+			// Linear specular sheen position shifts smoothly across the card surface
+			const sheenPos = Math.round(50 + (dx * 60 - dy * 40));
+			const sheenAlpha = Math.max(0.10, Math.min(0.35, 0.22 - dy * 0.22)).toFixed(3);
+			const sheenBrightness = Math.max(0.94, Math.min(1.08, 1.0 - dy * 0.14)).toFixed(2);
+			const holoX = Math.round(50 + dx * 70);
+			const holoY = Math.round(50 + dy * 70);
 
 			card.style.setProperty('--gdl-card-angle', `${lightAngle}deg`);
+			card.style.setProperty('--gdl-sheen-pos', `${sheenPos}%`);
 			card.style.setProperty('--gdl-sheen-alpha', sheenAlpha);
 			card.style.setProperty('--gdl-sheen-brightness', sheenBrightness);
-			card.style.setProperty('--gdl-card-pointer-x', `${(pointerX * 100).toFixed(2)}%`);
-			card.style.setProperty('--gdl-card-pointer-y', `${(pointerY * 100).toFixed(2)}%`);
-			card.style.setProperty('--gdl-cursor-glow-alpha', cursorGlowAlpha);
-			surface.style.transform = `perspective(560px) translate3d(${translateX.toFixed(2)}px,${translateY.toFixed(2)}px,0) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg)`;
+			card.style.setProperty('--gdl-holo-x', `${holoX}%`);
+			card.style.setProperty('--gdl-holo-y', `${holoY}%`);
+			surface.style.transform = `perspective(650px) translate3d(${translateX.toFixed(2)}px,${translateY.toFixed(2)}px,0) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg)`;
 		};
 
 		const queueRender = (): void => {
@@ -284,8 +311,11 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			for (const property of ['left', 'top', 'width', 'height', 'transform']) surface.style.removeProperty(property);
 			for (const property of ['left', 'top', 'width', 'height']) hitbox.style.removeProperty(property);
 			card.style.removeProperty('--gdl-card-angle');
+			card.style.removeProperty('--gdl-sheen-pos');
 			card.style.removeProperty('--gdl-sheen-alpha');
 			card.style.removeProperty('--gdl-sheen-brightness');
+			card.style.removeProperty('--gdl-holo-x');
+			card.style.removeProperty('--gdl-holo-y');
 			card.style.removeProperty('--gdl-card-pointer-x');
 			card.style.removeProperty('--gdl-card-pointer-y');
 			card.style.removeProperty('--gdl-cursor-glow-alpha');
@@ -378,10 +408,17 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			queueRender();
 		};
 		activators.set(card, activate);
+		let pointerDownX = 0;
+		let pointerDownY = 0;
+		let pointerDownTime = 0;
+		let lastPreviewOpenedTime = 0;
+
 		card.addEventListener('pointerenter', (event: PointerEvent) => {
 			lastClientX = event.clientX;
 			lastClientY = event.clientY;
 			activate(event.clientX, event.clientY);
+			const fullArtworkUrl = card.dataset.gdlFullImage;
+			if (fullArtworkUrl) preloadTradingCardImage(fullArtworkUrl);
 		});
 
 		// The local hitbox follows the expanded card with equal space on all sides.
@@ -416,6 +453,9 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 
 		card.addEventListener('pointercancel', reset);
 		const openPreview = (): void => {
+			const now = Date.now();
+			if (now - lastPreviewOpenedTime < 350) return;
+			lastPreviewOpenedTime = now;
 			reset();
 			resetTradingCardTilts(card.ownerDocument);
 			const image = card.querySelector<HTMLImageElement>('img');
@@ -425,6 +465,37 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			const preferredUrl = fullArtworkUrl || thumbnailUrl;
 			openTradingCardPreview(card.ownerDocument, preferredUrl, cardTitle, thumbnailUrl);
 		};
+
+		const onCardPointerDown = (event: PointerEvent): void => {
+			if (event.button !== 0) return;
+			pointerDownX = event.clientX;
+			pointerDownY = event.clientY;
+			pointerDownTime = Date.now();
+			const fullArtworkUrl = card.dataset.gdlFullImage;
+			if (fullArtworkUrl) preloadTradingCardImage(fullArtworkUrl);
+		};
+
+		const onCardPointerUp = (event: PointerEvent): void => {
+			if (event.button !== 0 || !pointerDownTime) return;
+			const dt = Date.now() - pointerDownTime;
+			pointerDownTime = 0;
+			const dx = Math.abs(event.clientX - pointerDownX);
+			const dy = Math.abs(event.clientY - pointerDownY);
+			if (dx < 16 && dy < 16 && dt < 650) {
+				event.preventDefault();
+				event.stopPropagation();
+				openPreview();
+			}
+		};
+
+		card.addEventListener('pointerdown', onCardPointerDown, { passive: true });
+		surface.addEventListener('pointerdown', onCardPointerDown, { passive: true });
+		hitbox.addEventListener('pointerdown', onCardPointerDown, { passive: true });
+
+		card.addEventListener('pointerup', onCardPointerUp);
+		surface.addEventListener('pointerup', onCardPointerUp);
+		hitbox.addEventListener('pointerup', onCardPointerUp);
+
 		card.addEventListener('click', event => {
 			event.preventDefault();
 			event.stopPropagation();
@@ -527,6 +598,7 @@ export async function renderOfficialTradingCards(
 		const image = normalizeCommunityAssetUrl(card.image);
 		if (!image) return '';
 		const artwork = normalizeCommunityAssetUrl(card.artwork) || image;
+		if (artwork) preloadTradingCardImage(artwork);
 		const title = card.title || gameName;
 		const foilClass = card.foil ? ' gdl-foil-card' : '';
 		return `<div class="gdl-trading-card gdl-official-card${foilClass}" data-gdl-card-index="${index}" data-gdl-full-image="${escapeHtml(artwork)}" role="button" tabindex="0" aria-label="${escapeHtml(title)}"><div class="gdl-trading-card-surface"><img src="${escapeHtml(image)}" alt="" /><span class="gdl-card-hologram" aria-hidden="true"></span></div></div>`;

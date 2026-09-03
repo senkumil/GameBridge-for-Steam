@@ -1,3 +1,4 @@
+import { loc } from '../../steam/localization';
 import { shortcutExecutableIdentity } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
 
@@ -23,15 +24,19 @@ function normalizedDialogText(value: unknown): string {
 }
 
 /** Steam renders Properties and “Add a Non-Steam Game” with many of the same
- * generic Dialog classes. A paged settings navigation is the stable structural
- * difference: the add-game picker never owns Shortcut/Controller/Customization
- * pages. Detect this before looking at text fields or executable paths. */
-function isPropertiesDialog(candidate: HTMLElement): boolean {
+ * container classes. Distinguish the native add-game flow by structural cues
+ * before any non-Steam shortcut exists in the user's library.
+ */
+export function hasNativePropertiesNavigation(candidate: HTMLElement): boolean {
 	const propertiesNavSelector = [
 		'[class*="PagedSettingsDialog"]', '[class*="pagedsettings"]',
 		'[class*="PageList"]', '[class*="SettingsNav"]', '[class*="DialogNav"]',
 	].join(',');
 	return candidate.matches(propertiesNavSelector) || Boolean(candidate.querySelector(propertiesNavSelector));
+}
+
+function isPropertiesDialog(candidate: HTMLElement): boolean {
+	return hasNativePropertiesNavigation(candidate);
 }
 
 function isNativeAddTitle(element: HTMLElement): boolean {
@@ -40,6 +45,18 @@ function isNativeAddTitle(element: HTMLElement): boolean {
 	));
 	const titleText = normalizedDialogText(titleElements.map(item => item.textContent || '').join(' '));
 	const scopedText = titleText || normalizedDialogText(element.textContent);
+
+	const nativeAddTokens = [
+		loc('AddShortcut_Title', ''),
+		loc('Menu_AddNonSteamGame', ''),
+		loc('AddNonSteamGame', ''),
+		loc('AddShortcut_Choose', ''),
+	].map(normalizedDialogText).filter(Boolean);
+
+	for (const token of nativeAddTokens) {
+		if (scopedText.includes(token)) return true;
+	}
+
 	return scopedText.includes('add a non-steam game')
 		|| scopedText.includes('add non-steam game')
 		|| scopedText.includes('select a program to add')
@@ -49,7 +66,42 @@ function isNativeAddTitle(element: HTMLElement): boolean {
 		|| scopedText.includes('adicionar um jogo nao steam')
 		|| scopedText.includes('adicionar um jogo que nao e steam')
 		|| scopedText.includes('ajouter un jeu non steam')
-		|| scopedText.includes('steam-fremdes spiel hinzufugen');
+		|| scopedText.includes('steam-fremdes spiel hinzufugen')
+		|| scopedText.includes('сторонняя игра')
+		|| scopedText.includes('сторонней игры')
+		|| scopedText.includes('добавление сторонней игры')
+		|| scopedText.includes('выберите программу')
+		|| scopedText.includes('添加非 steam 游戏')
+		|| scopedText.includes('新增非 steam 遊戲')
+		|| scopedText.includes('非 steam ゲームを追加')
+		|| scopedText.includes('비 steam 게임 추가')
+		|| scopedText.includes('dodaj gre spoza steam')
+		|| scopedText.includes('dodaj grę spoza steam')
+		|| scopedText.includes('steam disi oyun ekle')
+		|| scopedText.includes('steam dışı oyun ekle')
+		|| scopedText.includes('додати гру не зі steam')
+		|| scopedText.includes('aggiungi un gioco non di steam')
+		|| scopedText.includes('een niet-steam-spel toevoegen')
+		|| scopedText.includes('lagg till ett icke-steam-spel')
+		|| scopedText.includes('lägg till ett icke-steam-spel')
+		|| scopedText.includes('tilfoj et ikke-steam-spil')
+		|| scopedText.includes('tilføj et ikke-steam-spil')
+		|| scopedText.includes('lisaa muu kuin steam-peli')
+		|| scopedText.includes('lisää muu kuin steam-peli')
+		|| scopedText.includes('legg til et spill som ikke er fra steam')
+		|| scopedText.includes('pridat hru mimo sluzbu steam')
+		|| scopedText.includes('přidat hru mimo službu steam')
+		|| scopedText.includes('nem steam-jatek hozzaadasa')
+		|| scopedText.includes('nem steam-játék hozzáadása')
+		|| scopedText.includes('adauga un joc din afara steam')
+		|| scopedText.includes('adaugă un joc din afara steam')
+		|| scopedText.includes('προσθηκη παιχνιδιου εκτος steam')
+		|| scopedText.includes('προσθήκη παιχνιδιού εκτός steam')
+		|| scopedText.includes('them tro choi ngoai steam')
+		|| scopedText.includes('thêm trò chơi ngoài steam')
+		|| scopedText.includes('เพิ่มเกมที่ไม่ใช่ของ steam')
+		|| scopedText.includes('tambahkan game non-steam')
+		|| scopedText.includes('إضافة لعبة غير تابعة لـ steam');
 }
 
 function isSearchLikeField(element: HTMLElement): boolean {
@@ -59,7 +111,9 @@ function isSearchLikeField(element: HTMLElement): boolean {
 		element.getAttribute('placeholder'), element.getAttribute('aria-label'),
 		element.getAttribute('title'), element.getAttribute('name'),
 	].join(' '));
-	return /(?:^|\s)(?:search|buscar|busca|rechercher|suchen|cerca|поиск|検索|검색)(?:\s|$)/.test(signature);
+	const nativeSearch = normalizedDialogText(loc('Search', ''));
+	if (nativeSearch && signature.includes(nativeSearch)) return true;
+	return /(?:^|\s)(?:search|buscar|busca|rechercher|suchen|cerca|поиск|szukaj|ara|haku|sok|søk|zoek|szukaj|hledat|kereses|keresés|cautare|căutare|αναζήτηση|tìm kiếm|ค้นหา|cari|بحث|検索|검색)(?:\s|$)/.test(signature);
 }
 
 /** All Steam documents currently exposed by Millennium. */

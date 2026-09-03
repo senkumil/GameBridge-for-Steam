@@ -170,3 +170,5 @@ export const neutralizeSteamAppIdFileBackend = callable<[{ request_json: string 
 export const restoreSteamAppIdFileBackend = callable<[{ request_json: string }], string>('restore_steam_appid_file');
 
 export const suppressAdminPromptBackend = callable<[{ exe_path: string }], boolean>('suppress_admin_prompt');
+
+export const factoryResetBackend = callable<[{ request_json: string }], string>('factory_reset');

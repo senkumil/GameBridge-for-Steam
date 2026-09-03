@@ -27,7 +27,7 @@ export function steamGridDbApiKeyCandidates(preferredKey: string): string[] {
 	].filter(key => key.length >= 16 && key.length <= 160))];
 }
 
-const DEFAULT_PREFERENCES: GdlPreferences = {
+export const DEFAULT_PREFERENCES: GdlPreferences = {
 	autoDetectShortcuts: true,
 	simulateAchievements: false,
 	unlockOnlineAchievements: false,

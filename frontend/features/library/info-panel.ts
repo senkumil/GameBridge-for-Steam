@@ -4,6 +4,7 @@ import {
 	GAME_INFO_CLASS_MODULE,
 	GAME_INFO_OUTER_CLASS_MODULE,
 	PLAYBAR_CLASS_MODULE,
+	PLAYBAR_CLASSES,
 } from '../../steam/css';
 import type { CssClasses } from '../../steam/css';
 import { gdlText, loc } from '../../steam/localization';
@@ -121,13 +122,6 @@ function collectMainScrollTargets(doc: Document, knownTargets?: Iterable<HTMLEle
 		for (const target of knownTargets) consider(target);
 	}
 
-	// Shortcut/non-Steam pages can rebuild the details scroll container when the
-	// playbar becomes sticky. That new scroller is not always an ancestor of a
-	// NativeGameLink node, so include visible scrollable containers in the right pane.
-	for (const node of Array.from(doc.querySelectorAll<HTMLElement>('div,main,section'))) {
-		consider(node);
-	}
-
 	const scrolling = doc.scrollingElement;
 	if (scrolling instanceof HTMLElement && scrolling.scrollHeight > scrolling.clientHeight + 8) targets.add(scrolling);
 	return Array.from(targets);
@@ -143,17 +137,22 @@ function nativeInPagePlaybar(doc: Document): HTMLElement | null {
 	return candidates.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
 }
 function isStickyPlaybarVisible(doc: Document): boolean {
-	const playbar = PLAYBAR_CLASS_MODULE();
-	const classes = playbar.classes;
-	if (!playbar.native || !classes.Container || !classes.InPage) return false;
+	const topCapsule = doc.querySelector<HTMLElement>('[class*="TopCapsule"], [class*="topCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"]');
+	if (topCapsule && isRenderedElement(doc, topCapsule) && topCapsule.getBoundingClientRect().bottom > 40) {
+		return false;
+	}
 
 	const inPage = nativeInPagePlaybar(doc);
-	if (inPage) {
+	if (inPage && isRenderedElement(doc, inPage)) {
 		const rect = inPage.getBoundingClientRect();
 		// If the original in-page playbar is still visibly sitting below the hero,
 		// we are still at/near the top and must keep the info icon.
-		if (rect.top >= 96 && rect.bottom > 140) return false;
+		if (rect.top >= 30 && rect.bottom > 80) return false;
 	}
+
+	const playbar = PLAYBAR_CLASS_MODULE();
+	const classes = playbar.classes;
+	if (!playbar.native || !classes.Container || !classes.InPage) return false;
 
 	const viewportHeight = Math.max(0, doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0);
 	for (const container of elementsWithCssModuleClass(doc, classes.Container)) {
@@ -169,16 +168,21 @@ function isStickyPlaybarVisible(doc: Document): boolean {
 
 
 function isMainContentVisuallyScrolled(doc: Document): boolean {
+	const topCapsule = doc.querySelector<HTMLElement>('[class*="TopCapsule"], [class*="topCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"]');
+	if (topCapsule && isRenderedElement(doc, topCapsule) && topCapsule.getBoundingClientRect().bottom > 40) {
+		return false;
+	}
 	const inPage = nativeInPagePlaybar(doc);
-	if (inPage) {
+	if (inPage && isRenderedElement(doc, inPage)) {
 		const rect = inPage.getBoundingClientRect();
+		if (rect.bottom > 80 && rect.top > 0) return false;
 		// Once the original playbar has moved above the top chrome, Steam swaps to
 		// the sticky playbar. This is a more reliable signal than scrollTop on some
 		// non-Steam detail layouts.
 		if (rect.bottom < 28 || rect.top < -88) return true;
 	}
 	const linkBar = doc.getElementById('gdl-link-bar');
-	if (linkBar?.isConnected) {
+	if (linkBar?.isConnected && isRenderedElement(doc, linkBar)) {
 		const rect = linkBar.getBoundingClientRect();
 		if (rect.bottom < 30) return true;
 	}
@@ -212,6 +216,14 @@ function primaryLinksAreStillVisible(doc: Document): boolean {
 }
 
 function shouldShowScrollTopButton(doc: Document, knownTargets?: Iterable<HTMLElement>): boolean {
+	const topCapsule = doc.querySelector<HTMLElement>('[class*="TopCapsule"], [class*="topCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"]');
+	if (topCapsule && isRenderedElement(doc, topCapsule) && topCapsule.getBoundingClientRect().bottom > 40) {
+		return false;
+	}
+	const inPage = nativeInPagePlaybar(doc);
+	if (inPage && isRenderedElement(doc, inPage) && inPage.getBoundingClientRect().bottom > 80 && inPage.getBoundingClientRect().top > 0) {
+		return false;
+	}
 	if (primaryLinksAreStillVisible(doc)) return false;
 	const top = currentMainScrollTop(doc, knownTargets);
 	return top > SCROLL_TOP_BUTTON_THRESHOLD || isStickyPlaybarVisible(doc) || isMainContentVisuallyScrolled(doc);
@@ -322,9 +334,17 @@ function installInfoButtonScrollBehavior(
 
 	const applyMode = (active: boolean): void => {
 		ensureButtonNodes();
+		const topCapsule = doc.querySelector<HTMLElement>('[class*="TopCapsule"], [class*="topCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"]');
+		const heroVisible = topCapsule && isRenderedElement(doc, topCapsule) && topCapsule.getBoundingClientRect().bottom > 40;
+
 		for (const button of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-game-info-button="1"]'))) {
-			if ((button.dataset.gdlScrollTopActive === '1') !== active) {
-				setInfoButtonScrollMode(button, active, nativeWrapperClass);
+			const playbar = button.closest<HTMLElement>('[class*="Container"], [class*="playbar"], [class*="PlayBar"]');
+			const isButtonInPage = playbar ? (hasCssModuleClass(playbar, PLAYBAR_CLASSES().InPage) || playbar.getBoundingClientRect().top > 70) : true;
+
+			// An in-page playbar that is visible while the hero is on screen MUST NEVER show the scroll-to-top arrow!
+			const buttonActive = (!heroVisible && !isButtonInPage) ? active : false;
+			if ((button.dataset.gdlScrollTopActive === '1') !== buttonActive) {
+				setInfoButtonScrollMode(button, buttonActive, nativeWrapperClass);
 			}
 		}
 	};
