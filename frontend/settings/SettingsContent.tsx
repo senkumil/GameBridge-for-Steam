@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import type { LocalAchievementItem } from '../domain/types';
 import { backendLog } from '../api/backend';
 import { gdlText, getSteamLanguage, subscribeSteamLanguageChange } from '../steam/localization';
@@ -73,14 +73,37 @@ const SettingsToggle = ({ checked, disabled = false, label, onChange }: Settings
 			disabled={disabled}
 			tabIndex={disabled ? -1 : 0}
 			style={{
-				position: 'relative', width: '42px', height: '24px', borderRadius: '12px',
-				border: 'none', background: checked ? '#1a9fff' : '#4b5869', transition: 'background .12s ease',
-				cursor: disabled ? 'default' : 'pointer', opacity: disabled ? .45 : 1, pointerEvents: 'auto',
+				position: 'relative',
+				width: '42px',
+				minWidth: '42px',
+				maxWidth: '42px',
+				height: '24px',
+				minHeight: '24px',
+				maxHeight: '24px',
+				flexShrink: 0,
+				flexGrow: 0,
+				display: 'inline-block',
+				boxSizing: 'border-box',
+				padding: 0,
+				borderRadius: '12px',
+				border: 'none',
+				background: checked ? '#1a9fff' : '#4b5869',
+				transition: 'background .12s ease',
+				cursor: disabled ? 'default' : 'pointer',
+				opacity: disabled ? .45 : 1,
+				pointerEvents: 'auto',
 			}}
 		>
 			<span aria-hidden="true" style={{
-				position: 'absolute', top: '3px', left: checked ? '21px' : '3px', width: '18px', height: '18px',
-				borderRadius: '50%', background: '#f1f1f1', transition: 'left .12s ease',
+				position: 'absolute',
+				top: '3px',
+				left: checked ? '21px' : '3px',
+				width: '18px',
+				height: '18px',
+				borderRadius: '50%',
+				background: '#f1f1f1',
+				transition: 'left .12s ease',
+				boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
 			}} />
 		</button>
 	);

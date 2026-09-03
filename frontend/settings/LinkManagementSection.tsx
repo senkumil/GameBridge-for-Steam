@@ -421,9 +421,9 @@ export const LinkManagementSection: React.FC<LinkManagementSectionProps> = ({ pr
 					<div style={{ marginTop: '10px', paddingTop: '9px', borderTop: '1px solid rgba(229,173,55,.18)' }}>
 						<div style={{ fontWeight: 600, color: '#dcdedf', fontSize: '11.8px' }}>{gdlText('auto_detect_title', 'Native add-game detection')}</div>
 						<div style={{ marginTop: '3px', color: '#8f98a0', fontSize: '11px', lineHeight: 1.4 }}>{gdlText('auto_detect_native_add_description', 'Only watches the session created by Steam’s Add a Non-Steam Game dialog. Startup, navigation, language changes and unlinking can never trigger this prompt.')}</div>
-						<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+						<div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px' }}>
 							<Toggle checked={preferences.autoDetectShortcuts} onChange={checked => onChange({ autoDetectShortcuts: checked })} label={gdlText('auto_detect_shortcuts_toggle', 'Suggest linking only after adding a game through Steam’s native Add a Non-Steam Game dialog')} />
-							<span style={{ fontSize: '11.5px', color: '#c6d4df' }}>{gdlText('auto_detect_shortcuts_toggle', 'Suggest linking only after adding a game through Steam’s native Add a Non-Steam Game dialog')}</span>
+							<span style={{ flex: 1, minWidth: 0, fontSize: '11.5px', color: '#c6d4df', lineHeight: 1.4 }}>{gdlText('auto_detect_shortcuts_toggle', 'Suggest linking only after adding a game through Steam’s native Add a Non-Steam Game dialog')}</span>
 						</div>
 					</div>
 				</div>
