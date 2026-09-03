@@ -20,7 +20,7 @@ Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: reci
 - **Simulación y Farmeo de Cromos de Steam (Trading Cards):** Colección interactiva de tarjetas en 3D, seguimiento de cromos restantes, progreso de insignia y acceso directo a la comunidad.
 - **Simulador de Logros Simplificado para Juegos No-Steam:** Configuración ultra accesible por juego (100% completado, progreso simulado o manual) con compatibilidad de archivos locales.
 - **Detección Automática Inteligente:** Evalúa evidencias reales de ejecutables, rutas de instalación y niveles de confianza con previsualización de carátulas.
-- **Integración con Big Picture & Steam Deck UI:** Renderizado oficial de fondos hero, logos y tiempo de juego sincronizado de forma nativa.
+- **Integración con el Modo Big Picture:** Renderizado oficial de fondos hero, logos, navegación con mando y tiempo de juego sincronizado de forma nativa.
 
 ---
 
@@ -75,25 +75,30 @@ Estas capturas muestran la diferencia visual entre un acceso directo no vinculad
 
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/be7e3a13-1405-4b7b-b708-bdb45de6b14f" />
 
-### 4. Personalización de ilustraciones / integración con Propiedades
+### 4. Contenido de la comunidad
+
+<!-- Pega aquí la captura de contenido de la comunidad -->
+<img width="1917" height="1015" alt="Contenido de la comunidad" src="https://github.com/user-attachments/assets/" />
+
+### 5. Personalización de ilustraciones / integración con Propiedades
 
 <img width="1917" height="1020" alt="image" src="https://github.com/user-attachments/assets/763d36c1-8f60-4bd2-9901-4a1da09cd12a" />
 
 
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/f4e460c7-d7df-46f6-ac8d-645aeae06ccd" />
 
-### 5. Integración con Big Picture
+### 6. Integración con Big Picture
 
 <img width="1917" height="1077" alt="aa" src="https://github.com/user-attachments/assets/55e55988-6749-4673-ab26-7efb3003fb3e" />
 
 
 <img width="1917" height="1077" alt="ASDADASD" src="https://github.com/user-attachments/assets/3808bca5-ef79-4d78-9c1f-1fca03857067" />
 
-### 6. Vinculación de AppID / detección automática
+### 7. Vinculación de AppID / detección automática
 
 <img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/bb057d46-3946-4b83-842c-0f7171bf9fc2" />
 
-### 7. Herramientas de Gestión de Logros Oficiales
+### 8. Herramientas de Gestión de Logros Oficiales
 
 <img width="2558" height="1356" alt="image" src="https://github.com/user-attachments/assets/d25978a0-7b77-4695-890c-03a4560d618d" />
 
@@ -212,7 +217,7 @@ Las versiones de Steam Beta que incluyen medición nativa para juegos externos s
 
 NativeGameLink comprueba si el cliente actual ya expone tiempo de juego nativo para cada acceso vinculado. Cuando existe, utiliza el valor de Steam y no crea un contador duplicado. Cuando no existe, NativeGameLink activa automáticamente su propio seguimiento local alternativo. Este fallback viene activado por defecto y puede deshabilitarse desde los ajustes del complemento.
 
-El historial canónico del seguimiento local se guarda fuera de la carpeta del complemento, en `%APPDATA%\\NativeGameLinkForSteam\\playtime_sessions.json`. Al actualizar o reinstalar el complemento, el archivo antiguo se migra automáticamente y se conservan tres copias de recuperación. Aun así, conviene exportar o copiar periódicamente ese directorio si también quieres protegerte contra el borrado completo del perfil de Windows o un fallo del disco.
+El historial canónico del seguimiento local se guarda fuera de la carpeta del complemento, en `%APPDATA%\\NativeGameLinkForSteam\\playtime_sessions.json`, con tres copias rotativas de recuperación. Los archivos de estado encontrados dentro de la carpeta del plugin se ignoran deliberadamente porque paquetes de desarrollo antiguos podían contener datos específicos de otra máquina. Al iniciar, el historial persistido se valida contra el `shortcuts.vdf` real de la cuenta de Steam activa y se eliminan automáticamente los registros de accesos directos que no pertenecen a esa biblioteca. Aun así, conviene exportar o copiar periódicamente el directorio de datos por usuario si también quieres protegerte contra el borrado completo del perfil de Windows o un fallo del disco.
 
 El seguimiento alternativo puede:
 
@@ -261,12 +266,13 @@ Las ventanas propias del complemento, mensajes de detección, ajustes y resultad
 
 1. Instala [Millennium](https://steambrew.app/) para Steam.
 2. Descarga la versión más reciente `NativeGameLink-for-Steam.zip`.
-3. Descomprime el archivo y coloca la carpeta `NativeGameLink for Steam` en el directorio de plugins de Millennium:
+3. Descomprime el archivo y copia la carpeta incluida `NativeGameLinkForSteam` dentro de `millennium\plugins` de **la instalación de Steam que realmente utilizas**. No asumas que Steam está instalado en `C:`.
 
-   - **Windows:**
+   - El destino siempre es relativo a la carpeta real de tu Steam:
      ```text
-     C:\Program Files (x86)\Steam\millennium\plugins\NativeGameLink for Steam\
+     <instalación de Steam>\millennium\plugins\NativeGameLinkForSteam\
      ```
+   - Por ejemplo, si Steam está en `D:\Steam`, instala el plugin en `D:\Steam\millennium\plugins\NativeGameLinkForSteam\`.
 4. Reinicia Steam.
 5. Activa **NativeGameLink for Steam** en la sección de complementos de Millennium.
 
@@ -290,11 +296,11 @@ Si la detección es incierta o no aparece:
 
 ## 🛠️ Compilación desde el código fuente
 
-El repositorio incluye el bundle de producción en `.millennium/Dist/index.js`.
+El repositorio incluye el bundle de producción en `.millennium/Dist/index.js`. `plugin.source.json` es el manifiesto canónico; cada compilación regenera `plugin.json` desde ese archivo para impedir que la versión o los metadatos generados queden desactualizados.
 
 ```bash
-# Instalar dependencias
-npm install
+# Instalar exactamente las dependencias bloqueadas en package-lock.json
+npm ci
 
 # Comprobar TypeScript, arquitectura, localización, detección y Lua
 npm run check
@@ -304,26 +310,60 @@ npm run build
 
 # Ejecutar todas las comprobaciones y validar el bundle
 npm run verify
+
+# Preparar las carpetas de release limpio y código fuente
+npm run package:prepare
 ```
 
 Los cambios dentro de `backend/` se aplican después de reiniciar Steam.
+
+### GitHub Actions / releases automáticos
+
+El repositorio queda preparado para CI/CD dentro de `.github/workflows/`:
+
+- `ci.yml` se ejecuta en pull requests y pushes a `main`: instala con `npm ci`, ejecuta el build limpio completo mediante `npm run verify`, sube el frontend generado como artifact y, en pushes confiables a `main`, sincroniza automáticamente `plugin.json` y `.millennium/Dist/index.js` en el repositorio si cambiaron.
+- `release.yml` se ejecuta al publicar tags semánticos como `v3.0.2`. Comprueba que el tag coincida con `package.json`, `plugin.source.json` y `plugin.json`, recompila todo desde cero, genera un paquete limpio de runtime y otro con el código fuente, calcula SHA-256 y crea o actualiza automáticamente el GitHub Release.
+
+Para publicar una versión nueva:
+
+```bash
+# Sincronizar package.json, package-lock.json y ambos manifiestos del plugin
+npm run version:set -- 3.0.2
+
+# Primero subir los cambios de código
+git add .
+git commit -m "release: v3.0.2"
+git push origin main
+
+# Cuando CI termine correctamente, etiquetar el commit que quieres publicar
+git tag v3.0.2
+git push origin v3.0.2
+```
+
+El workflow del tag publica `NativeGameLinkForSteam-v3.0.2-CLEAN-INSTALL.zip`, `NativeGameLinkForSteam-v3.0.2-SOURCE.zip` y `SHA256SUMS.txt`. El usuario final no necesita Node ni compilar manualmente el frontend.
+
+Si la sincronización de archivos generados o la publicación del release recibe un error de permisos, activa **Settings → Actions → General → Workflow permissions → Read and write permissions** en el repositorio. Una regla de protección de `main` que prohíba pushes desde GitHub Actions también puede bloquear únicamente la sincronización automática; la verificación y el empaquetado por tag siguen siendo independientes.
 
 ---
 
 ## ☕ Apoya el proyecto
 
-Si NativeGameLink for Steam ha mejorado tu Biblioteca, puedes apoyar su desarrollo, pruebas, traducción y mantenimiento en [Ko-fi](https://ko-fi.com/senkumil). Cada contribución ayuda a que el proyecto siga avanzando.
+Si NativeGameLink for Steam ha mejorado tu Biblioteca, puedes apoyar su desarrollo, pruebas, traducción y mantenimiento en Ko-fi. Cada contribución ayuda a que el proyecto siga avanzando.
+
+<a href="https://ko-fi.com/senkumil" target="_blank">
+  <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi" />
+</a>
 
 ---
 
-## 💖 Créditos y Agradecimientos Especiales
+## 💖 Créditos y Agradecimientos
 
-NativeGameLink for Steam se apoya en el trabajo pionero, el espíritu de código abierto y la dedicación de desarrolladores excepcionales de la comunidad. Un agradecimiento sincero y muy especial a:
+Gracias por hacer este proyecto posible:
 
-- **[retrotoolsdev-wq/game-data-linker](https://github.com/retrotoolsdev-wq/game-data-linker):** Por crear la visión original del proyecto y ser los primeros en demostrar que era posible integrar metadatos oficiales de Steam, ilustraciones y centros comunitarios en accesos directos dentro de Millennium. Su trabajo sentó las bases de esta evolución.
-- **[gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) (Rick / Gibbed y colaboradores):** Por su legendaria investigación en la arquitectura interna de estadísticas y logros del cliente de Steam (`ISteamUserStats`). Su labor ha sido el estándar de oro en la gestión de logros de Steam durante más de una década.
-- **[xan105/Achievement-Watcher](https://github.com/xan105/Achievement-Watcher) (xan105):** Por su brillante e innovador enfoque en el análisis en tiempo real de archivos de logros locales, la deduplicación de eventos y las notificaciones emergentes con sonido oficial. Ha sido una enorme fuente de inspiración técnica para el ecosistema.
-- **[k0d13/steam-non-steam-playtimes](https://github.com/k0d13/steam-non-steam-playtimes) (k0d13):** Por idear y perfeccionar soluciones inteligentes para el seguimiento y persistencia local de horas de juego en aplicaciones No-Steam, resolviendo una de las funciones más solicitadas por la comunidad de PC.
+- [retrotoolsdev-wq/game-data-linker](https://github.com/retrotoolsdev-wq/game-data-linker)
+- [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager)
+- [xan105/Achievement-Watcher](https://github.com/xan105/Achievement-Watcher)
+- [k0d13/steam-non-steam-playtimes](https://github.com/k0d13/steam-non-steam-playtimes)
 
 ---
 
