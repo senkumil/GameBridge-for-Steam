@@ -411,7 +411,7 @@ export default definePlugin(() => {
 		}
 	});
 
-	try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.startsWith('events8_') || k.startsWith('events7_') || k.startsWith('friends_') || k.startsWith('gdl_cache_friends_'))) localStorage.removeItem(k); } } catch {}
+	try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.startsWith('events8_') || k.startsWith('events7_') || k.startsWith('friends_') || k.startsWith('gdl_cache_friends_') || k === 'gdl_info_panel_expanded' || k === 'gdl_native_info_panel_expanded')) localStorage.removeItem(k); } } catch {}
 	loadMappings().then(() => {
 		backendLog('Loaded ' + Object.keys(mappings).length + ' mapping(s)');
 		steamComponents.prewarmComponents();

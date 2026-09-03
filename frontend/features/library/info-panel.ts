@@ -21,16 +21,13 @@ import {
 const GDL_INFO_PANEL_EXPANDED_KEY = 'gdl_info_panel_expanded';
 
 export function getPersistentInfoExpanded(): boolean {
-	try {
-		return localStorage.getItem(GDL_INFO_PANEL_EXPANDED_KEY) === '1';
-	} catch {
-		return false;
-	}
+	// Info panel must always start collapsed when selecting, switching or exiting games.
+	return false;
 }
 
-export function setPersistentInfoExpanded(expanded: boolean): void {
+export function setPersistentInfoExpanded(_expanded: boolean): void {
 	try {
-		localStorage.setItem(GDL_INFO_PANEL_EXPANDED_KEY, expanded ? '1' : '0');
+		localStorage.removeItem(GDL_INFO_PANEL_EXPANDED_KEY);
 	} catch {}
 }
 
@@ -69,7 +66,8 @@ function setInfoButtonScrollMode(button: HTMLElement, active: boolean, nativeWra
 	const html = active ? scrollToTopSvg() : informationSvgForButton(button);
 	if (svg) svg.outerHTML = html;
 	else button.innerHTML = `<div class="${nativeWrapperClass}">${html}</div>`;
-	const label = active ? scrollTopButtonLabel() : infoButtonLabel(getPersistentInfoExpanded());
+	const isExpanded = (button.ownerDocument?.getElementById('gdl-game-info-panel') as HTMLElement | null)?.dataset.expanded === '1';
+	const label = active ? scrollTopButtonLabel() : infoButtonLabel(isExpanded);
 	button.setAttribute('aria-label', label);
 	button.title = label;
 }
@@ -746,7 +744,7 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 	}
 	const linkBar = doc.getElementById('gdl-link-bar');
 	if (linkBar?.parentElement && panel.nextElementSibling !== linkBar) linkBar.parentElement.insertBefore(panel, linkBar);
-	setNativeInfoExpanded(doc, model.key, getPersistentInfoExpanded(), false, false);
+	setNativeInfoExpanded(doc, model.key, false, false, false);
 	return panel;
 }
 
@@ -805,8 +803,10 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 						return;
 					}
 					const key = button!.dataset.gameKey || '';
-					const nextState = !getPersistentInfoExpanded();
-					setNativeInfoExpanded(doc, key, nextState, true, true);
+					const panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
+					const isCurrentlyExpanded = panel ? panel.dataset.expanded === '1' : false;
+					const nextState = !isCurrentlyExpanded;
+					setNativeInfoExpanded(doc, key, nextState, false, true);
 				});
 				let favorite = elementsWithCssModuleClass(container, classes.FavoriteButton)[0] || null;
 				while (favorite && favorite.parentElement !== container) favorite = favorite.parentElement;
@@ -820,7 +820,7 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 
 	syncButtons();
 	installInfoButtonScrollBehavior(doc, playbarModule.native ? (classes.DotDotDot || '') : '', syncButtons);
-	setNativeInfoExpanded(doc, model.key, getPersistentInfoExpanded(), false, false);
+	setNativeInfoExpanded(doc, model.key, false, false, false);
 }
 
 export function removeNativeInfoButton(doc: Document): void {
@@ -829,5 +829,7 @@ export function removeNativeInfoButton(doc: Document): void {
 }
 
 export function clearNativeInfoSessionState(): void {
-	// Persistent user choice is preserved across session reloads and game transitions.
+	try {
+		localStorage.removeItem(GDL_INFO_PANEL_EXPANDED_KEY);
+	} catch {}
 }

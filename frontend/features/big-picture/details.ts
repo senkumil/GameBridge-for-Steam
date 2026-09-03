@@ -15,7 +15,7 @@ import { ensureBigPictureDetailsStyles } from './styles';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
 import { gamepadFeatureFlags } from '../gamepad/flags';
 import { mountSingleNativeAchievement } from '../gamepad/achievements/SingleNativeAchievement';
-import { getFocusableElements, installBigPictureGamepadNavigation, disposeBigPictureGamepadNavigation } from './gamepad-nav';
+import { installBigPictureGamepadNavigation, disposeBigPictureGamepadNavigation } from './gamepad-nav';
 import { syncBigPicturePlaybarEnhancements, removeBigPicturePlaybarEnhancements } from './playbar';
 import { getCachedFriendData, getFriendData } from '../library/social/friends';
 import { cachePersona, hasCachedPersona } from '../library/social/personas';
@@ -549,54 +549,8 @@ function bindTabs(
 		control.addEventListener('keydown', event => {
 			if (event.key === 'Enter' || event.key === ' ') {
 				scheduleTabSync(doc, tab);
-			} else if (event.key === 'ArrowDown' || event.key === 'Down') {
-				const root = doc.getElementById('gdl-bp-detail-root');
-				if (root) {
-					const primary = root.querySelector<HTMLElement>(
-						'.gdl-bp-feed-card, .gdl-bp-ach-featured, .gdl-bp-ach-progress, .gdl-bp-community-card, .gdl-bp-card-item, .gdl-bp-info-link'
-					);
-					const first = primary || getFocusableElements(root)[0];
-					if (first) {
-						event.preventDefault();
-						event.stopPropagation();
-						root.querySelectorAll<HTMLElement>('.gpfocus, [data-focus="true"]').forEach(el => {
-							el.classList.remove('gpfocus');
-							delete el.dataset.focus;
-						});
-						first.classList.add('gpfocus');
-						first.dataset.focus = 'true';
-						first.focus({ preventScroll: true });
-						first.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-					}
-				}
 			}
 		});
-	}
-	if (strip.dataset.gdlBpBound !== '1') {
-		strip.dataset.gdlBpBound = '1';
-		strip.addEventListener('keydown', event => {
-			if (event.key === 'ArrowDown' || event.key === 'Down' || event.keyCode === 40) {
-				const root = doc.getElementById('gdl-bp-detail-root');
-				if (root) {
-					const primary = root.querySelector<HTMLElement>(
-						'.gdl-bp-feed-card, .gdl-bp-ach-featured, .gdl-bp-ach-progress, .gdl-bp-community-card, .gdl-bp-card-item, .gdl-bp-info-link'
-					);
-					const first = primary || getFocusableElements(root)[0];
-					if (first) {
-						event.preventDefault();
-						event.stopPropagation();
-						root.querySelectorAll<HTMLElement>('.gpfocus, [data-focus="true"]').forEach(el => {
-							el.classList.remove('gpfocus');
-							delete el.dataset.focus;
-						});
-						first.classList.add('gpfocus');
-						first.dataset.focus = 'true';
-						first.focus({ preventScroll: true });
-						first.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-					}
-				}
-			}
-		}, true);
 	}
 	const current = detailTabObservers.get(doc);
 	if (current?.strip === strip) return;

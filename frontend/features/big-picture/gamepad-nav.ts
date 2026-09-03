@@ -3,12 +3,18 @@ import type { BigPicturePanelTab } from './panel-mount';
 export function getFocusableElements(root: HTMLElement): HTMLElement[] {
 	if (!root || !root.isConnected) return [];
 	const selector = '.Focusable, .gdl-bp-feed-card, .gdl-bp-community-card, .gdl-bp-community-video-card, .gdl-bp-community-guide-card, .gdl-bp-action-button, .gdl-bp-info-link, .gdl-bp-ach-featured, .gdl-bp-ach-icon-frame, .gdl-bp-card-item, .gdl-bp-feed-post-input, .gdl-bp-feed-jump-news, .gdl-bp-feed-load-more-btn, .gdl-bp-open-ach-trigger, .gdl-bp-friend-card, [data-focusable="true"], [tabindex="0"], button, a[href], input';
-	return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(el => {
+	const elements = Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(el => {
 		if (el.hidden || el.getAttribute('aria-hidden') === 'true') return false;
 		const style = el.ownerDocument.defaultView?.getComputedStyle(el);
 		if (style?.display === 'none' || style?.visibility === 'hidden') return false;
 		const rect = el.getBoundingClientRect();
 		return rect.width > 0 && rect.height > 0;
+	});
+	return elements.filter(el => {
+		const parentCard = el.parentElement?.closest<HTMLElement>(
+			'.gdl-bp-feed-card, .gdl-bp-community-card, .gdl-bp-community-video-card, .gdl-bp-community-guide-card, .gdl-bp-card-item, .gdl-bp-friend-card, .gdl-bp-ach-featured'
+		);
+		return !parentCard || parentCard === el;
 	});
 }
 
@@ -144,7 +150,7 @@ export function installBigPictureGamepadNavigation(
 			target.classList.add('gpfocus');
 			target.dataset.focus = 'true';
 			target.focus({ preventScroll: true });
-			target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+			target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
 		} catch {}
 	};
 
@@ -177,11 +183,8 @@ export function installBigPictureGamepadNavigation(
 			const marked = currentScope.querySelector<HTMLElement>('.gpfocus, [data-focus="true"]');
 			if (marked && marked.isConnected) {
 				current = marked;
-			} else if (currentScope === root && lastFocusedElement && lastFocusedElement.isConnected && root.contains(lastFocusedElement)) {
-				// Only reuse lastFocusedElement if we are already inside the panel
-				if (isInsidePanel()) {
-					current = lastFocusedElement;
-				}
+			} else if (lastFocusedElement && lastFocusedElement.isConnected && currentScope.contains(lastFocusedElement)) {
+				current = lastFocusedElement;
 			}
 		}
 
@@ -234,8 +237,8 @@ export function installBigPictureGamepadNavigation(
 				}
 			}
 
-			// If focus is currently on the tab strip or outside the panel, enter the panel
-			if (!modal && (!current || isTabStripFocused())) {
+			// If focus is currently on the tab strip, enter the panel
+			if (!modal && isTabStripFocused()) {
 				const primary = currentScope.querySelector<HTMLElement>(
 					'.gdl-bp-feed-card, .gdl-bp-ach-featured, .gdl-bp-ach-progress, .gdl-bp-community-card, .gdl-bp-card-item, .gdl-bp-info-link'
 				);
@@ -248,10 +251,9 @@ export function installBigPictureGamepadNavigation(
 			}
 
 			if (!current) {
-				const primary = currentScope.querySelector<HTMLElement>(
-					'.gdl-bp-feed-card, .gdl-bp-ach-featured, .gdl-bp-ach-progress, .gdl-bp-community-card, .gdl-bp-card-item, .gdl-bp-info-link'
-				);
-				const target = primary || focusables[0];
+				const target = (lastFocusedElement && lastFocusedElement.isConnected && currentScope.contains(lastFocusedElement))
+					? lastFocusedElement
+					: (currentScope.querySelector<HTMLElement>('.gdl-bp-feed-card, .gdl-bp-ach-featured, .gdl-bp-ach-progress, .gdl-bp-community-card, .gdl-bp-card-item, .gdl-bp-info-link') || focusables[0]);
 				if (target) {
 					setFocusedElement(target, currentScope);
 					return true;
@@ -268,7 +270,7 @@ export function installBigPictureGamepadNavigation(
 				if (r.top >= currentRect.top + 8) {
 					const vert = r.top - currentRect.top;
 					const horiz = Math.abs((r.left + r.width / 2) - (currentRect.left + currentRect.width / 2));
-					const dist = vert + horiz * 0.4;
+					const dist = vert + horiz * 0.3;
 					if (dist < bestDist) {
 						bestDist = dist;
 						target = el;
@@ -302,6 +304,11 @@ export function installBigPictureGamepadNavigation(
 				}
 				return false;
 			}
+			if (!current) {
+				current = (lastFocusedElement && lastFocusedElement.isConnected && currentScope.contains(lastFocusedElement))
+					? lastFocusedElement
+					: null;
+			}
 			if (!current) return false;
 			const currentRect = current.getBoundingClientRect();
 			let target: HTMLElement | null = null;
@@ -313,7 +320,7 @@ export function installBigPictureGamepadNavigation(
 					const vert = currentRect.top - r.top;
 					if (vert > 5) {
 						const horiz = Math.abs((r.left + r.width / 2) - (currentRect.left + currentRect.width / 2));
-						const dist = vert + horiz * 0.4;
+						const dist = vert + horiz * 0.3;
 						if (dist < bestDist) {
 							bestDist = dist;
 							target = el;
@@ -325,10 +332,7 @@ export function installBigPictureGamepadNavigation(
 			if (!target) {
 				const idx = focusables.indexOf(current);
 				if (idx > 0) {
-					const prev = focusables[idx - 1];
-					if (prev.getBoundingClientRect().top < currentRect.top) {
-						target = prev;
-					}
+					target = focusables[idx - 1];
 				}
 			}
 
@@ -466,10 +470,13 @@ export function installBigPictureGamepadNavigation(
 	};
 
 	const onFocusOut = (event: FocusEvent) => {
-		const target = event.target as HTMLElement | null;
-		if (target) {
-			target.classList.remove('gpfocus');
-			delete target.dataset.focus;
+		const related = event.relatedTarget as HTMLElement | null;
+		if (related && !root.contains(related) && !strip.contains(related)) {
+			const target = event.target as HTMLElement | null;
+			if (target) {
+				target.classList.remove('gpfocus');
+				delete target.dataset.focus;
+			}
 		}
 	};
 

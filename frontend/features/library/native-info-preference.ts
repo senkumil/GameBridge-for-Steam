@@ -29,16 +29,12 @@ interface NativeInfoPreferenceState {
 const nativeInfoPreferenceStates = new WeakMap<Document, NativeInfoPreferenceState>();
 
 function readNativeInfoPreference(): boolean | null {
-	try {
-		const value = localStorage.getItem(NATIVE_INFO_PREFERENCE_KEY);
-		return value === '1' ? true : value === '0' ? false : null;
-	} catch {
-		return null;
-	}
+	// Info panel must always return to collapsed state when switching or leaving games.
+	return false;
 }
 
-function writeNativeInfoPreference(expanded: boolean): void {
-	try { localStorage.setItem(NATIVE_INFO_PREFERENCE_KEY, expanded ? '1' : '0'); }
+function writeNativeInfoPreference(_expanded: boolean): void {
+	try { localStorage.setItem(NATIVE_INFO_PREFERENCE_KEY, '0'); }
 	catch {}
 }
 
@@ -202,11 +198,9 @@ function clickedNativeInfoButton(doc: Document, event: Event, state: NativeInfoP
 	const before = nativeInfoExpanded(button, panel);
 	if (before === null) return;
 
-	// Capture intent before React handles the click. Reading the later DOM is
-	// racy because Steam may replace the whole route in the same frame.
-	writeNativeInfoPreference(!before);
+	// Do not propagate expansion to other games. Next route always returns to collapsed.
+	writeNativeInfoPreference(false);
 	resetRoute(state, libraryRouteIdentity(doc));
-	scheduleAttempt(doc, state, retryDelay(0));
 }
 
 function ensurePreferenceState(doc: Document): NativeInfoPreferenceState {

@@ -121,10 +121,29 @@ export function createPrimaryLinksBar(
 
 export function findNativePlaybar(doc: Document): HTMLElement | null {
 	const pb = PLAYBAR_CLASSES();
-	// 1. Check from AppButtonsContainer (holds the green Play button, gear, controller)
+	// Must find the IN-PAGE playbar, which sits at top > 80 (never the sticky header at top <= 40).
+	const playButtons = Array.from(doc.querySelectorAll<HTMLElement>('button[class*="Play"], [class*="PlayButton"], [class*="playButton"]'))
+		.filter(el => {
+			const rect = el.getBoundingClientRect();
+			return rect.width > 0 && rect.height > 0 && rect.top > 80;
+		});
+
+	if (playButtons.length > 0) {
+		const btn = playButtons[0];
+		const container = (pb.Container ? closestWithCssModuleClass(btn, pb.Container) : null)
+			|| btn.closest<HTMLElement>('[class*="PlayBar"], [class*="playbar"]')
+			|| btn.parentElement?.parentElement
+			|| btn.parentElement;
+		if (container) return container;
+	}
+
+	// Check AppButtonsContainer with top > 80
 	if (pb.AppButtonsContainer) {
-		const buttons = elementsWithCssModuleClass(doc, pb.AppButtonsContainer).find(c => isRenderedElement(doc, c))
-			|| elementsWithCssModuleClass(doc, pb.AppButtonsContainer)[0];
+		const buttons = elementsWithCssModuleClass(doc, pb.AppButtonsContainer)
+			.find(c => {
+				const rect = c.getBoundingClientRect();
+				return isRenderedElement(doc, c) && rect.top > 80;
+			});
 		if (buttons) {
 			const container = (pb.Container ? closestWithCssModuleClass(buttons, pb.Container) : null)
 				|| buttons.closest<HTMLElement>('[class*="PlayBar"], [class*="playbar"]')
@@ -132,96 +151,78 @@ export function findNativePlaybar(doc: Document): HTMLElement | null {
 			if (container) return container;
 		}
 	}
-	// 2. Check Container CSS module
-	if (pb.Container) {
-		const container = elementsWithCssModuleClass(doc, pb.Container).find(c => isRenderedElement(doc, c))
-			|| elementsWithCssModuleClass(doc, pb.Container)[0];
-		if (container) return container;
-	}
-	// 3. Check InPage CSS module
+
+	// Check InPage CSS module specifically
 	if (pb.InPage) {
-		const inPage = elementsWithCssModuleClass(doc, pb.InPage).find(c => isRenderedElement(doc, c))
-			|| elementsWithCssModuleClass(doc, pb.InPage)[0];
+		const inPage = elementsWithCssModuleClass(doc, pb.InPage)
+			.find(c => {
+				const rect = c.getBoundingClientRect();
+				return isRenderedElement(doc, c) && rect.top > 80;
+			});
 		if (inPage) return inPage;
 	}
-	// 4. Check GameStatsSection
-	if (pb.GameStatsSection) {
-		const stats = elementsWithCssModuleClass(doc, pb.GameStatsSection).find(c => isRenderedElement(doc, c))
-			|| elementsWithCssModuleClass(doc, pb.GameStatsSection)[0];
-		if (stats) {
-			const container = (pb.Container ? closestWithCssModuleClass(stats, pb.Container) : null)
-				|| stats.closest<HTMLElement>('[class*="PlayBar"], [class*="playbar"]')
-				|| stats.parentElement;
-			if (container) return container;
-		}
-	}
-	// 5. Fallback: querySelector by Play button
-	const playBtn = doc.querySelector<HTMLElement>('button[class*="Play"], [class*="PlayButton"], [class*="playButton"]');
-	if (playBtn) {
-		const container = playBtn.closest<HTMLElement>('[class*="PlayBar"], [class*="playbar"], [class*="Container"]')
-			|| playBtn.parentElement?.parentElement
-			|| playBtn.parentElement;
-		if (container) return container;
-	}
-	return doc.querySelector<HTMLElement>('[class*="PlayBar"], [class*="playbar"]');
-}
 
-function anchorLinksBarAfterPlaybar(bar: HTMLElement, playbar: HTMLElement): boolean {
-	if (!playbar.parentElement) return false;
-	const doc = bar.ownerDocument;
-	const infoPanel = doc.getElementById('gdl-game-info-panel');
-	if (infoPanel && infoPanel.parentElement === playbar.parentElement
-		&& (playbar.compareDocumentPosition(infoPanel) & Node.DOCUMENT_POSITION_FOLLOWING)) {
-		if (infoPanel.nextElementSibling) {
-			infoPanel.parentElement.insertBefore(bar, infoPanel.nextElementSibling);
-		} else {
-			infoPanel.parentElement.appendChild(bar);
-		}
-	} else if (playbar.nextElementSibling) {
-		playbar.parentElement.insertBefore(bar, playbar.nextElementSibling);
-	} else {
-		playbar.parentElement.appendChild(bar);
-	}
-	bar.style.removeProperty('visibility');
-	bar.style.removeProperty('display');
-	return true;
+	return null;
 }
 
 export function insertPrimaryLinksBar(
 	bar: HTMLElement,
-	_layout: NativeLibraryLayout,
+	layout: NativeLibraryLayout,
 	activityWrapper: HTMLElement,
 ): void {
 	const doc = bar.ownerDocument;
-	const playbar = findNativePlaybar(doc);
+	const twoColumnRow = layout.twoColumnRow;
 
-	if (playbar && anchorLinksBarAfterPlaybar(bar, playbar)) {
+	// In native Steam, the links bar is ALWAYS inserted immediately before ColumnContainer (twoColumnRow).
+	// If twoColumnRow is present, anchor it right there!
+	if (twoColumnRow && twoColumnRow.parentElement) {
+		const parent = twoColumnRow.parentElement;
+		const infoPanel = doc.getElementById('gdl-game-info-panel');
+		if (infoPanel && infoPanel.parentElement === parent
+			&& (twoColumnRow.compareDocumentPosition(infoPanel) & Node.DOCUMENT_POSITION_PRECEDING)) {
+			if (infoPanel.nextElementSibling) {
+				parent.insertBefore(bar, infoPanel.nextElementSibling);
+			} else {
+				parent.appendChild(bar);
+			}
+		} else {
+			parent.insertBefore(bar, twoColumnRow);
+		}
+	} else {
+		// Fallback to in-page playbar or activityWrapper
+		const playbar = findNativePlaybar(doc);
+		if (playbar && playbar.parentElement) {
+			if (playbar.nextElementSibling) {
+				playbar.parentElement.insertBefore(bar, playbar.nextElementSibling);
+			} else {
+				playbar.parentElement.appendChild(bar);
+			}
+		} else if (activityWrapper.parentElement) {
+			activityWrapper.parentElement.insertBefore(bar, activityWrapper);
+		}
+	}
+
+	// Zero-flicker guard: check if the in-page playbar is mounted and positioned above the bar
+	const hasMountedPlaybar = Boolean(findNativePlaybar(doc));
+	if (hasMountedPlaybar) {
+		bar.style.removeProperty('visibility');
+		bar.style.removeProperty('display');
 		return;
 	}
 
-	// Playbar is still mounting during route change / game switch.
-	// CRITICAL: Keep bar hidden so it NEVER flashes above the PlayBar for even 1 millisecond!
+	// If playbar is still mounting during route switch, hide bar until playbar arrives
 	bar.style.setProperty('visibility', 'hidden', 'important');
-	if (!bar.isConnected && activityWrapper.parentElement) {
-		activityWrapper.parentElement.insertBefore(bar, activityWrapper);
-	}
-
 	const win = doc.defaultView || window;
 	let attempts = 0;
-	const retryAnchor = () => {
+	const checkPlaybar = () => {
 		attempts += 1;
 		if (!bar.isConnected) return;
-		const pb = findNativePlaybar(doc);
-		if (pb && anchorLinksBarAfterPlaybar(bar, pb)) {
-			return;
-		}
-		if (attempts < 25) {
-			win.requestAnimationFrame(retryAnchor);
-		} else {
-			// Safety fallback after ~400ms if playbar never mounted
+		if (findNativePlaybar(doc) || attempts >= 20) {
 			bar.style.removeProperty('visibility');
 			bar.style.removeProperty('display');
+			return;
 		}
+		win.requestAnimationFrame(checkPlaybar);
 	};
-	win.requestAnimationFrame(retryAnchor);
+	win.requestAnimationFrame(checkPlaybar);
 }
