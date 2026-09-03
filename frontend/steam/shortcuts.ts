@@ -5,6 +5,38 @@ import { normalizeTitle } from '../core/text';
 export const SHORTCUT_THRESHOLD = 2147483648;
 const shortcutPlaytimeRequests = new Map<number, Promise<number | null>>();
 
+const fallbackShortcutApps = new Map<number, any>();
+
+/** Backend-derived shortcut overviews used only while Steam's appStore is
+ * unavailable or still hydrating. This keeps clean-start detection independent
+ * from private appStore timing without replacing richer live Steam objects. */
+export function replaceFallbackShortcutApps(records: Array<{ id: number; app: any }>): void {
+	fallbackShortcutApps.clear();
+	for (const record of records) {
+		const id = Number(record?.id);
+		if (Number.isFinite(id) && id >= SHORTCUT_THRESHOLD && record.app) fallbackShortcutApps.set(id, record.app);
+	}
+}
+
+function isUsableAppStore(store: any): boolean {
+	return Boolean(store && (store.m_mapApps || store.allApps || store.m_rgApps || typeof store.GetAppOverviewByAppID === 'function'));
+}
+
+function collectStoreEntries(store: any): Array<[unknown, any]> {
+	const entries: Array<[unknown, any]> = [];
+	if (!store) return entries;
+	try {
+		if (store.m_mapApps instanceof Map || typeof store.m_mapApps?.[Symbol.iterator] === 'function') {
+			for (const [id, app] of store.m_mapApps) entries.push([id, app]);
+		} else if (store.m_mapApps && typeof store.m_mapApps === 'object') {
+			for (const [id, app] of Object.entries(store.m_mapApps)) entries.push([id, app]);
+		}
+	} catch {}
+	try { for (const app of Array.from(store.allApps || []) as any[]) entries.push([app?.appid, app]); } catch {}
+	try { for (const app of Array.from(store.m_rgApps || []) as any[]) entries.push([app?.appid, app]); } catch {}
+	return entries;
+}
+
 
 export function cleanShortcutPath(value: unknown): string {
 	const text = String(value ?? '').trim();
@@ -104,28 +136,31 @@ export function looseMatchTitle(a: string, b: string): boolean {
 }
 
 export function getSteamAppStore(doc?: Document): any | null {
-	if (doc?.defaultView && (doc.defaultView as any).appStore?.m_mapApps) return (doc.defaultView as any).appStore;
-	if (doc?.defaultView && (doc.defaultView as any).AppStore?.m_mapApps) return (doc.defaultView as any).AppStore;
-	if ((window as any).appStore?.m_mapApps) return (window as any).appStore;
-	if ((window as any).AppStore?.m_mapApps) return (window as any).AppStore;
-	if (typeof document !== 'undefined' && (document.defaultView as any)?.appStore?.m_mapApps) {
-		return (document.defaultView as any).appStore;
-	}
-	const pm = (window as any).g_PopupManager;
-	if (pm) {
+	const windows: any[] = [];
+	const seen = new Set<any>();
+	const enqueue = (candidate: any): void => {
+		if (!candidate || seen.has(candidate)) return;
+		seen.add(candidate);
+		windows.push(candidate);
+	};
+	try { enqueue(doc?.defaultView); } catch {}
+	try { enqueue(window); } catch {}
+	try { enqueue(document?.defaultView); } catch {}
+
+	for (let index = 0; index < windows.length && index < 32; index += 1) {
+		const win = windows[index];
+		try { if (isUsableAppStore(win?.appStore)) return win.appStore; } catch {}
+		try { if (isUsableAppStore(win?.AppStore)) return win.AppStore; } catch {}
+		try { enqueue(win?.parent); enqueue(win?.top); enqueue(win?.opener); } catch {}
+		try { for (let frame = 0; frame < Number(win?.frames?.length || 0); frame += 1) enqueue(win.frames[frame]); } catch {}
 		try {
+			const pm = win?.g_PopupManager;
 			for (const name of ['SP Desktop_uid0', 'SP Desktop', 'SP BPM_uid0', 'SP BPM']) {
-				const p = pm.GetExistingPopup?.(name) || pm.m_mapPopups?.get?.(name);
-				const win = p?.m_popup?.window || p?.window || p?.m_popup || p;
-				if (win?.appStore?.m_mapApps) return win.appStore;
+				const popup = pm?.GetExistingPopup?.(name) || pm?.m_mapPopups?.get?.(name);
+				enqueue(popup?.m_popup?.window || popup?.window || popup?.m_popup || popup);
 			}
-			const popups = pm.m_mapPopups instanceof Map
-				? Array.from(pm.m_mapPopups.values())
-				: Object.values(pm.m_mapPopups || {});
-			for (const p of popups as any[]) {
-				const win = p?.m_popup?.window || p?.window;
-				if (win?.appStore?.m_mapApps) return win.appStore;
-			}
+			const popups = pm?.m_mapPopups instanceof Map ? Array.from(pm.m_mapPopups.values()) : Object.values(pm?.m_mapPopups || {});
+			for (const popup of popups as any[]) enqueue(popup?.m_popup?.window || popup?.window);
 		} catch {}
 	}
 	return null;
@@ -135,24 +170,27 @@ export function getSteamAppStore(doc?: Document): any | null {
  * Exact normalized equality wins. Canonical equality is allowed only when it
  * identifies a single shortcut; ambiguous franchise/name matches return null. */
 export function findShortcutAppIdByName(title: string): number | null {
-	const appStore = getSteamAppStore();
-	if (!appStore?.m_mapApps) return null;
 	const normalizedTarget = normalizeTitle(title);
 	const canonicalTarget = canonicalizeGameTitle(title);
 	const exact: number[] = [];
 	const canonical: number[] = [];
-	for (const [id, app] of appStore.m_mapApps) {
-		const rawId = Number(id);
+	const seen = new Set<number>();
+	const entries = collectStoreEntries(getSteamAppStore());
+	for (const [id, app] of fallbackShortcutApps) entries.push([id, app]);
+	for (const [id, app] of entries) {
+		const rawId = Number(id ?? app?.appid);
 		if (!Number.isFinite(rawId)) continue;
 		const numId = rawId < 0 ? (rawId >>> 0) : rawId;
-		if (numId < SHORTCUT_THRESHOLD) continue;
-		const name = String(app?.display_name || app?.m_strDisplayName || '').trim();
+		if (numId < SHORTCUT_THRESHOLD || seen.has(numId)) continue;
+		seen.add(numId);
+		const name = String(app?.display_name || app?.m_strDisplayName || app?.strDisplayName || app?.strAppName || app?.name || '').trim();
 		if (!name) continue;
 		if (normalizedTarget && normalizeTitle(name) === normalizedTarget) exact.push(numId);
 		else if (canonicalTarget && canonicalizeGameTitle(name) === canonicalTarget) canonical.push(numId);
 	}
-	if (exact.length > 0) return exact[0];
-	if (canonical.length > 0) return canonical[0];
+	if (exact.length === 1) return exact[0];
+	if (exact.length > 1) return exact[0];
+	if (canonical.length === 1) return canonical[0];
 	return null;
 }
 
@@ -232,15 +270,15 @@ export function findActiveShortcutAppId(doc: Document, title: string): string | 
 
 /** Find every shortcut matching a display name; useful while Steam is rebuilding an ID after rename. */
 export function findShortcutAppIdsByName(title: string): number[] {
-	const appStore = getSteamAppStore();
-	if (!appStore?.m_mapApps) return [];
 	const normalized = normalizeTitle(title);
 	const result: number[] = [];
-	for (const [id, app] of appStore.m_mapApps) {
-		const rawId = Number(id);
+	const entries = collectStoreEntries(getSteamAppStore());
+	for (const [id, app] of fallbackShortcutApps) entries.push([id, app]);
+	for (const [id, app] of entries) {
+		const rawId = Number(id ?? app?.appid);
 		const numId = rawId < 0 ? (rawId >>> 0) : rawId;
 		if (!Number.isFinite(numId) || numId < SHORTCUT_THRESHOLD) continue;
-		const name = app?.display_name || app?.m_strDisplayName || '';
+		const name = app?.display_name || app?.m_strDisplayName || app?.strDisplayName || app?.strAppName || app?.name || '';
 		if (name && normalizeTitle(name) === normalized && !result.includes(numId)) result.push(numId);
 	}
 	return result;
@@ -249,9 +287,9 @@ export function findShortcutAppIdsByName(title: string): number[] {
 /** Find native Steam AppID by game display name from Steam's loaded app store. */
 export function findNativeSteamAppIdByName(title: string): string | null {
 	const appStore = getSteamAppStore();
-	if (!appStore?.m_mapApps) return null;
+	if (!appStore) return null;
 	const normalized = normalizeTitle(title);
-	for (const [id, app] of appStore.m_mapApps) {
+	for (const [id, app] of collectStoreEntries(appStore)) {
 		const rawId = Number(id);
 		const numId = rawId < 0 ? (rawId >>> 0) : rawId;
 		if (!Number.isFinite(numId) || numId >= SHORTCUT_THRESHOLD || numId === 0) continue;
@@ -265,7 +303,7 @@ export function findNativeSteamAppIdByName(title: string): string | null {
 
 export function getShortcutAppById(shortcutAppId: number): any | null {
 	const appStore = getSteamAppStore();
-	if (!appStore) return null;
+	if (!appStore) return fallbackShortcutApps.get(shortcutAppId) || null;
 	const signedId = toSignedShortcutAppId(shortcutAppId);
 	if (typeof appStore.GetAppOverviewByAppID === 'function') {
 		try {
@@ -313,7 +351,7 @@ export function getShortcutAppById(shortcutAppId: number): any | null {
 			if (ids.has(rawId) || ids.has(normalizedId)) return app;
 		}
 	} catch {}
-	return null;
+	return fallbackShortcutApps.get(shortcutAppId) || null;
 }
 
 /** Get shortcut lifetime playtime from Steam without permanently caching transient empty startup values. */

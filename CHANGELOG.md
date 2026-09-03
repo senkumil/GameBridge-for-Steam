@@ -1,3 +1,15 @@
+## v3.0.1 - Clean-install portability and recovery hardening (2026-09-02)
+
+- Moves mutable mappings, achievement settings and playtime history to a per-user data directory instead of the plugin installation folder.
+- Rejects developer-local or foreign state from historical archives and validates cached mappings against the active Steam account's real `shortcuts.vdf`.
+- Prioritizes the currently active Steam account from `loginusers.vdf` and adds direct `shortcuts.vdf` lookup when Steam's internal app store is not hydrated yet.
+- Makes shortcut renaming best-effort so a missing or delayed private Steam API can no longer abort an otherwise valid link.
+- Hardens artwork selection with isolated click handling, explicit native image dialogs, backend local-image loading/download fallbacks and direct Steam grid-file fallback when private artwork APIs are unavailable.
+- Removes fixed Steam-installation assumptions and resolves helper paths from Millennium's actual plugin location.
+- Purges persisted playtime records that do not belong to shortcuts in the active Steam library, repairing installs previously contaminated by packaged session state.
+- Adds a clean-install regression check so packaged user state, fixed paths and critical fallback logic cannot silently return.
+- Adds GitHub Actions CI/CD: reproducible verification on pushes/PRs, automatic synchronization of the compiled Millennium frontend on `main`, and tag-driven clean/source GitHub Releases with SHA-256 checksums.
+
 ## v3.0.0 - Major Release: Delisted Games Support, Direct Artwork Management, Achievement Management Tools & Trading Card Farming (2026-08-31)
 
 - **Comprehensive Support for Delisted & Removed Steam Games**:

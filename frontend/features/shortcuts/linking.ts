@@ -11,7 +11,7 @@ import { invalidateLinkedGameResourceCaches } from '../library/resource-cache';
 import { clearLinkedGameNote } from './linked-notes';
 import { shortcutRuntimeHost } from './host';
 import { isShortcutDismissed, undismissShortcut } from './dismissed';
-import { findMappingForShortcut, getAllShortcutRecords } from './registry';
+import { findMappingForShortcut, getAllShortcutRecords, refreshShortcutRecordsFromBackend } from './registry';
 import { rememberOriginalShortcutTitle, rememberShortcutSteamAppId } from './link-history';
 import { runShortcutMutations, shortcutMutationKeys } from './operation-lock';
 
@@ -48,9 +48,11 @@ async function resolveShortcutForLink(
 	canonicalName = '',
 ): Promise<number | null> {
 	const waits = [0, 100, 250, 500, 900, 1500, 2500];
+	await refreshShortcutRecordsFromBackend().catch(() => {});
 	const expectedExecutable = shortcutExecutableIdentity(executableHint);
 	for (const wait of waits) {
 		if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+		if (wait >= 900) await refreshShortcutRecordsFromBackend().catch(() => {});
 		if (initialId) {
 			const exact = Number(initialId);
 			if (Number.isFinite(exact) && exact >= 2147483648 && getShortcutAppById(exact)) return exact;
@@ -284,19 +286,20 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 					backendLog(`Shortcut ${originalShortcutId} rename ${nameReady ? 'confirmed' : 'pending'} as "${officialName}" (resolved ID ${shortcutAppId}).`);
 				} catch (error) {
 					backendLog('Official shortcut rename failed: ' + error);
-					if (String(error).includes('shortcut_rename_pending')) {
-						// SetShortcutName may have been applied even though Steam's
-						// promise never settled. Keep the concrete shortcut identity and
-						// finish the link; the next library refresh will reconcile the
-						// title instead of trapping the modal/queue on step 2.
-						if (getShortcutAppById(shortcutAppId)) {
-							nameReady = true;
-							backendLog(`Continuing link for ${shortcutAppId} after a delayed Steam rename response.`);
-						} else {
-							throw error;
-						}
+					// Renaming is cosmetic enrichment, not a prerequisite for a
+					// valid link. Keep the concrete shortcut identity and let the
+					// durable reconciler retry the visible name later.
+					if (getShortcutAppById(shortcutAppId)) {
+						nameReady = true;
+						backendLog(`Continuing link for ${shortcutAppId}; Steam rename will be retried asynchronously.`);
+					} else if (String(error).includes('shortcut_rename_pending')) {
+						throw error;
 					}
 				}
+			} else {
+				// SetShortcutName is not guaranteed in every Steam CEF context.
+				nameReady = true;
+				backendLog(`SetShortcutName unavailable for ${shortcutAppId}; linking by stable shortcut identity.`);
 			}
 		}
 

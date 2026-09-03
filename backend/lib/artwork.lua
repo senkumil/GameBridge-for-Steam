@@ -413,6 +413,7 @@ function M.fetch_library_assets(request_json)
     return encoded
 end
 
+
 -- Optional community fallback. It is deliberately separate from the official
 -- resolver above: callers invoke it only for slots Steam did not publish, and
 -- the API key is supplied per request (never written to the plugin log/files).
@@ -668,6 +669,44 @@ function M.fetch_community_artwork(request_json)
         .. tostring((result.portrait ~= "" and 1 or 0) + (result.hero ~= "" and 1 or 0)
             + (result.logo ~= "" and 1 or 0) + (result.wide ~= "" and 1 or 0)))
     return cjson.encode(result)
+end
+
+function M.save_shortcut_artwork(request_json)
+    local ok_request, request = pcall(cjson.decode, tostring(request_json or ""))
+    if not ok_request or type(request) ~= "table" then return cjson.encode({ ok = false, error = "invalid_request" }) end
+    local shortcut_app_id = tostring(request.shortcut_app_id or "")
+    local image_type = tonumber(request.image_type)
+    local ext = tostring(request.extension or "png"):lower()
+    if ext == "jpeg" then ext = "jpg" end
+    if not shortcut_app_id:match("^%d+$") or not image_type or image_type < 0 or image_type > 3
+        or (ext ~= "png" and ext ~= "jpg") then
+        return cjson.encode({ ok = false, error = "invalid_request" })
+    end
+    local body = icon_files.decode_base64(request.data_base64 or request.image_base64 or "")
+    if not icon_files.validate(body, ext) then return cjson.encode({ ok = false, error = "invalid_image" }) end
+    local account_id = get_active_account_id()
+    if not account_id then return cjson.encode({ ok = false, error = "active_user_not_found" }) end
+    local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
+    if not fs.exists(grid_dir) then fs.create_directories(grid_dir) end
+    if not fs.exists(grid_dir) then return cjson.encode({ ok = false, error = "grid_directory_failed" }) end
+    local suffixes = { [0] = "p", [1] = "_hero", [2] = "_logo", [3] = "" }
+    local suffix = suffixes[math.floor(image_type)]
+    local target = fs.join(grid_dir, shortcut_app_id .. suffix .. "." .. ext)
+    local temp = target .. ".tmp"
+    local file = io.open(temp, "wb")
+    if not file then return cjson.encode({ ok = false, error = "open_failed" }) end
+    local wrote = file:write(body)
+    local closed = file:close()
+    if not wrote or not closed then os.remove(temp); return cjson.encode({ ok = false, error = "write_failed" }) end
+    if fs.exists(target) then os.remove(target) end
+    local moved = os.rename(temp, target)
+    if not moved then os.remove(temp); return cjson.encode({ ok = false, error = "commit_failed" }) end
+    for _, old_ext in ipairs({ "png", "jpg", "jpeg" }) do
+        local old = fs.join(grid_dir, shortcut_app_id .. suffix .. "." .. old_ext)
+        if old ~= target and fs.exists(old) then os.remove(old) end
+    end
+    logger:info("Custom shortcut artwork saved: " .. target)
+    return cjson.encode({ ok = true, saved = true, path = target, image_type = image_type })
 end
 
 function M.save_shortcut_icon(request_json)

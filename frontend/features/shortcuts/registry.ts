@@ -1,5 +1,6 @@
+import { listShortcutsBackend, backendLog } from '../../api/backend';
 import { findMappingByExe, findMappingForTitle, mappings, shortcutMappingKey } from '../../core/mappings';
-import { getSteamAppStore, readShortcutOverviewField, shortcutExecutableIdentity, shortcutPathBasename, toSignedShortcutAppId } from '../../steam/shortcuts';
+import { getSteamAppStore, readShortcutOverviewField, replaceFallbackShortcutApps, shortcutExecutableIdentity, shortcutPathBasename, toSignedShortcutAppId } from '../../steam/shortcuts';
 
 export interface ShortcutRecord {
 	id: number;
@@ -14,13 +15,63 @@ export function normalizedShortcutAppId(value: unknown): number | null {
 	return appId >= 2147483648 ? appId : null;
 }
 
+
+interface BackendShortcutRecord {
+	shortcut_app_id?: string | number;
+	title?: string;
+	exe_path?: string;
+	start_dir?: string;
+	launch_options?: string;
+}
+
+let backendShortcutRecords: ShortcutRecord[] = [];
+let backendRegistryRefresh: Promise<void> | null = null;
+
+function parseBackendShortcutList(raw: unknown): BackendShortcutRecord[] {
+	try {
+		let value: any = raw;
+		for (let attempt = 0; attempt < 3 && typeof value === 'string'; attempt += 1) value = JSON.parse(value);
+		return Array.isArray(value?.shortcuts) ? value.shortcuts : [];
+	} catch { return []; }
+}
+
+/** Hydrate a VDF-backed shortcut registry. Steam's private appStore is not a
+ * startup contract and can be absent for several seconds on a clean client. */
+export function refreshShortcutRecordsFromBackend(): Promise<void> {
+	if (backendRegistryRefresh) return backendRegistryRefresh;
+	backendRegistryRefresh = (async () => {
+		try {
+			const rows = parseBackendShortcutList(await listShortcutsBackend());
+			const next: ShortcutRecord[] = [];
+			const seen = new Set<number>();
+			for (const row of rows) {
+				const id = normalizedShortcutAppId(row.shortcut_app_id);
+				const title = String(row.title || '').trim();
+				if (!id || !title || seen.has(id)) continue;
+				seen.add(id);
+				const app = {
+					appid: id, display_name: title, m_strDisplayName: title,
+					strShortcutExe: String(row.exe_path || ''), m_strShortcutExe: String(row.exe_path || ''),
+					strShortcutStartDir: String(row.start_dir || ''), m_strShortcutStartDir: String(row.start_dir || ''),
+					strShortcutLaunchOptions: String(row.launch_options || ''), m_strShortcutLaunchOptions: String(row.launch_options || ''),
+				};
+				next.push({ id, title, app });
+			}
+			backendShortcutRecords = next;
+			replaceFallbackShortcutApps(next.map(record => ({ id: record.id, app: record.app })));
+		} catch (error) {
+			backendLog(`Shortcut VDF registry refresh failed: ${String(error)}`);
+		}
+	})().finally(() => { backendRegistryRefresh = null; });
+	return backendRegistryRefresh;
+}
+
 export function isUnrealShippingExecutable(value: string): boolean {
 	return /(?:^|[-_\s])(?:win32|win64|linux)[-_\s]*shipping\.exe$/i.test(shortcutPathBasename(value));
 }
 
 export function getAllShortcutRecords(): ShortcutRecord[] {
 	const appStore = getSteamAppStore();
-	if (!appStore) return [];
 	const records: ShortcutRecord[] = [];
 	const seen = new Set<number>();
 	const add = (rawId: unknown, app: any) => {
@@ -31,15 +82,18 @@ export function getAllShortcutRecords(): ShortcutRecord[] {
 		seen.add(id);
 		records.push({ id, title, app });
 	};
-	try {
-		if (appStore.m_mapApps instanceof Map || typeof appStore.m_mapApps?.[Symbol.iterator] === 'function') {
-			for (const [id, app] of appStore.m_mapApps) add(id, app);
-		} else if (appStore.m_mapApps && typeof appStore.m_mapApps === 'object') {
-			for (const [id, app] of Object.entries(appStore.m_mapApps)) add(id, app);
-		}
-	} catch {}
-	try { for (const app of Array.from(appStore.allApps || []) as any[]) add(app?.appid, app); } catch {}
-	try { for (const app of Array.from(appStore.m_rgApps || []) as any[]) add(app?.appid, app); } catch {}
+	if (appStore) {
+		try {
+			if (appStore.m_mapApps instanceof Map || typeof appStore.m_mapApps?.[Symbol.iterator] === 'function') {
+				for (const [id, app] of appStore.m_mapApps) add(id, app);
+			} else if (appStore.m_mapApps && typeof appStore.m_mapApps === 'object') {
+				for (const [id, app] of Object.entries(appStore.m_mapApps)) add(id, app);
+			}
+		} catch {}
+		try { for (const app of Array.from(appStore.allApps || []) as any[]) add(app?.appid, app); } catch {}
+		try { for (const app of Array.from(appStore.m_rgApps || []) as any[]) add(app?.appid, app); } catch {}
+	}
+	for (const record of backendShortcutRecords) add(record.id, record.app);
 	return records;
 }
 

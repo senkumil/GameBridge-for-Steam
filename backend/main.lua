@@ -49,10 +49,13 @@ deps.shortcut_detection_tracking = load_factory("shortcut_detection_tracking")(d
 local mappings = load_factory("mappings")(deps)
 local store = load_factory("store")(deps)
 local shortcut_detection = load_factory("shortcut_detection")(deps)
+local shortcut_registry = load_factory("shortcut_registry")(deps)
+deps.shortcut_registry = shortcut_registry
 local news = load_factory("news")(deps)
 local social = load_factory("social")(deps)
 local community = load_factory("community")(deps)
 local artwork = load_factory("artwork")(deps)
+local artwork_image_io = load_factory("artwork_image_io")(deps)
 local artwork_candidates = load_factory("artwork_candidates")(deps)
 deps.achievement_settings = load_factory("achievement_settings")(deps)
 deps.achievement_policy = load_factory("achievement_policy")(deps)
@@ -71,7 +74,8 @@ function remove_mapping(non_steam_id) return mappings.remove_mapping(non_steam_i
 function update_mappings(request_json) return mappings.update_mappings(request_json) end
 function get_all_mappings() return mappings.get_all_mappings() end
 function fetch_game_data(steam_app_id, language) return store.fetch_game_data(steam_app_id, language) end
-function get_shortcut_details(shortcut_app_id) return shortcut_detection.get_shortcut_details(shortcut_app_id) end
+function get_shortcut_details(shortcut_app_id, title) return shortcut_detection.get_shortcut_details(shortcut_app_id, title) end
+function list_shortcuts() return shortcut_registry.list() end
 function detect_game_candidates(request_json) return shortcut_detection.detect_game_candidates(request_json) end
 function fetch_news(steam_app_id, language) return news.fetch_news(steam_app_id, language) end
 function fetch_partner_events(steam_app_id, language) return news.fetch_partner_events(steam_app_id, language) end
@@ -84,8 +88,11 @@ function fetch_community_items_catalog(steam_app_id, language) return community.
 function fetch_library_assets(request_json) return artwork.fetch_library_assets(request_json) end
 function fetch_community_artwork(request_json) return artwork.fetch_community_artwork(request_json) end
 function fetch_community_artwork_candidates(request_json) return artwork_candidates.fetch(request_json) end
+function fetch_artwork_image(request_json) return artwork_image_io.fetch_remote(request_json) end
+function read_local_artwork_image(request_json) return artwork_image_io.read_local(request_json) end
 function validate_steamgriddb_api_key(request_json) return artwork.validate_steamgriddb_api_key(request_json) end
 function save_shortcut_icon(request_json) return artwork.save_shortcut_icon(request_json) end
+function save_shortcut_artwork(request_json) return artwork.save_shortcut_artwork(request_json) end
 function clear_artwork(shortcut_app_id) return artwork.clear_artwork(shortcut_app_id) end
 function clear_artwork_except_icon(shortcut_app_id) return artwork.clear_artwork_except_icon(shortcut_app_id) end
 function clear_all_linked_artworks() return artwork.clear_all_linked_artworks() end

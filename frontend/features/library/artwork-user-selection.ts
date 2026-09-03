@@ -1,4 +1,4 @@
-import { backendLog, saveShortcutIconBackend } from '../../api/backend';
+import { backendLog, saveShortcutArtworkBackend, saveShortcutIconBackend } from '../../api/backend';
 import {
 	imageUrlToBase64,
 	normalizeCommunityArtworkDataUrl,
@@ -24,9 +24,6 @@ export async function applyCommunityArtworkSelection(
 		return { complete: false, slots: [], missing: ['invalid_shortcut'], communitySlots: [] };
 	}
 	const apps = (window as any).SteamClient?.Apps;
-	if (typeof apps?.SetCustomArtworkForApp !== 'function') {
-		return { complete: false, slots: [], missing: ['steam_client_api'], communitySlots: [] };
-	}
 	const slots: CommunityArtworkSlot[] = ['portrait', 'hero', 'logo', 'wide', 'icon'];
 	const chosenSlots = slots.filter(slot => Boolean(selection?.[slot]));
 	if (!chosenSlots.length || !chosenSlots.every(slot => isTrustedArtworkChoiceUrl(selection[slot]?.url))) {
@@ -49,13 +46,31 @@ export async function applyCommunityArtworkSelection(
 				missingSlots.push(item.slot);
 				continue;
 			}
-			try {
-				await apps.SetCustomArtworkForApp(targetAppId, item.dataUrl.slice(item.dataUrl.indexOf(',') + 1), 'png', item.imageType);
-				successfulSlots.push(item.imageType);
-			} catch (error) {
-				backendLog(`User artwork error (${item.slot}) for ${steamAppId}: ${String(error)}`);
-				missingSlots.push(item.slot);
+			const base64 = item.dataUrl.slice(item.dataUrl.indexOf(',') + 1);
+			let saved = false;
+			if (typeof apps?.SetCustomArtworkForApp === 'function') {
+				try {
+					await Promise.resolve(apps.SetCustomArtworkForApp(targetAppId, base64, 'png', item.imageType));
+					saved = true;
+				} catch (error) {
+					backendLog(`Steam artwork API failed (${item.slot}) for ${steamAppId}; trying grid-file fallback: ${String(error)}`);
+				}
 			}
+			if (!saved) {
+				try {
+					const raw = await saveShortcutArtworkBackend({ request_json: JSON.stringify({
+						shortcut_app_id: targetAppId, steam_app_id: steamAppId, image_type: item.imageType,
+						data_base64: base64, extension: 'png',
+					}) });
+					let response: any = raw;
+					for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
+					saved = response?.saved === true || response?.ok === true;
+				} catch (error) {
+					backendLog(`Grid-file artwork fallback failed (${item.slot}) for ${steamAppId}: ${String(error)}`);
+				}
+			}
+			if (saved) successfulSlots.push(item.imageType);
+			else missingSlots.push(item.slot);
 		}
 	}
 
@@ -65,7 +80,7 @@ export async function applyCommunityArtworkSelection(
 			const dataUrl = await imageUrlToBase64(selection.icon.url);
 			if (dataUrl) {
 				const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-				await saveShortcutIconBackend({
+				const raw = await saveShortcutIconBackend({
 					request_json: JSON.stringify({
 						shortcut_app_id: targetAppId,
 						steam_app_id: steamAppId,
@@ -74,7 +89,10 @@ export async function applyCommunityArtworkSelection(
 						source: selection.icon.isCustom ? 'custom_upload' : 'steamgriddb',
 					}),
 				});
-				successfulSlots.push(4);
+				let response: any = raw;
+				for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
+				if (response?.saved === true) successfulSlots.push(4);
+				else missingSlots.push('icon');
 			} else {
 				missingSlots.push('icon');
 			}

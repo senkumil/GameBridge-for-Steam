@@ -52,8 +52,23 @@ function M.persistent_path(filename)
     return fs.join(persistent_data_directory(), filename)
 end
 
+-- Runtime state inside the plugin directory is deliberately never trusted.
+-- Historical ZIPs accidentally contained developer-local mappings, paths and
+-- sessions; migrating those files would contaminate another user's install.
+-- Existing trustworthy state already lives in the per-user data directory,
+-- while frontend mapping snapshots are independently validated against the
+-- active Steam shortcut registry before they can repair an empty backend.
+function M.state_path(filename)
+    return M.persistent_path(tostring(filename or ""))
+end
+
 function M.get_config_path()
-    return M.path("mappings.json")
+    return M.state_path("mappings.json")
+end
+
+-- Compatibility alias used by the artwork cleanup module.
+function M.mappings_file_path()
+    return M.get_config_path()
 end
 
 function M.read_text(path)
