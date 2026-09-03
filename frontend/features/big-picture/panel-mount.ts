@@ -165,7 +165,10 @@ export function ensureNativePanelRoot(
 	if (panel.firstChild !== root) panel.insertBefore(root, panel.firstChild);
 	Array.from(panel.children).forEach(child => {
 		if (child !== root && child.id !== 'gdl-bp-detail-root') {
-			(child as HTMLElement).style.display = 'none';
+			const text = (child.textContent || '').toLowerCase();
+			if (child.matches('[class*="EmptyDetails"], [class*="NonSteamNotice"], [class*="NonSteamExplanation"], [class*="CollectionsSection"]') || text.includes('no-steam') || text.includes('non-steam')) {
+				(child as HTMLElement).style.display = 'none';
+			}
 		}
 	});
 	const fallback = doc.getElementById('gdl-bp-detail-fallback-panel');
