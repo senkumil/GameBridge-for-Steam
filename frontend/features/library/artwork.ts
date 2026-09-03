@@ -12,7 +12,7 @@ import {
 import { waitForSteamBridge } from './steam-bridge';
 export async function resolveShortcutIdAfterRename(officialName: string, previousId: number,
 	idsBeforeMutation: Set<number> = new Set<number>(), expectedExecutable = ''): Promise<number> {
-	const waits = [0, 100, 180, 300, 500, 800, 1200, 1800, 2500];
+	const waits = [0, 50, 100, 180, 300, 500, 800];
 	const expectedIdentity = shortcutExecutableIdentity(expectedExecutable);
 	const requiresFreshIdentity = idsBeforeMutation.size > 0;
 	let stableCandidate = 0, stableSamples = 0;

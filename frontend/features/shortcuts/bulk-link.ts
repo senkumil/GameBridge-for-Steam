@@ -30,14 +30,15 @@ function reliableBulkCandidate(context: ShortcutDetectionContext, candidates: Sh
 	const exactTitle = normalizeTitle(context.title) !== '' && normalizeTitle(context.title) === normalizeTitle(top.name);
 	const secondExactTitle = Boolean(second && normalizeTitle(context.title) !== '' && normalizeTitle(context.title) === normalizeTitle(second.name));
 	const reasons = new Set((top.reasons || []).map(String));
-	if (top.direct && top.score >= 80) return top;
-	if (top.confidence === 'exact' && top.score >= 82) return top;
-	if (exactTitle && !secondExactTitle && top.score >= 70) return top;
-	if (reasons.has('folder_exact') && top.score >= 80 && margin >= 5) return top;
-	if (top.executable_match && top.score >= 76 && (exactTitle || margin >= 8)) return top;
-	if (reasons.has('franchise_alias') && top.score >= 82 && margin >= 12) return top;
-	if (top.confidence === 'high' && top.score >= 88 && margin >= 8) return top;
-	return top.score >= 93 && margin >= 12 && !reasons.has('alias_requires_confirmation') ? top : null;
+	if (top.direct && top.score >= 70) return top;
+	if (top.confidence === 'exact' && top.score >= 75) return top;
+	if (exactTitle && !secondExactTitle && top.score >= 65) return top;
+	if (reasons.has('folder_exact') && top.score >= 75) return top;
+	if (top.executable_match && top.score >= 70) return top;
+	if (reasons.has('franchise_alias') && top.score >= 75) return top;
+	if (top.confidence === 'high' && top.score >= 80) return top;
+	if (top.score >= 84) return top;
+	return top.score >= 75 && margin >= 5 && !reasons.has('alias_requires_confirmation') ? top : null;
 }
 
 function enqueueBulkRetry(item: { record: { id: number; title: string }; context: ShortcutDetectionContext; candidate: ShortcutDetectionCandidate }, repairResources: boolean, shortcutAppId = item.record.id): void {
