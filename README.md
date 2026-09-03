@@ -76,8 +76,7 @@ These captures show the visual difference between an unlinked shortcut and a lin
 
 ### 4. Community Content
 
-<!-- Paste the community content screenshot here -->
-<img width="1917" height="1015" alt="Community Content" src="https://github.com/user-attachments/assets/" />
+<img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/a330b5a7-bf30-4301-8627-d73a5e1f00c9" />
 
 ### 5. Artwork customization / Properties integration
 

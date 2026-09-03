@@ -77,8 +77,7 @@ Estas capturas muestran la diferencia visual entre un acceso directo no vinculad
 
 ### 4. Contenido de la comunidad
 
-<!-- Pega aquí la captura de contenido de la comunidad -->
-<img width="1917" height="1015" alt="Contenido de la comunidad" src="https://github.com/user-attachments/assets/" />
+<img width="1917" height="1015" alt="image" src="https://github.com/user-attachments/assets/81ea9dbf-a7bb-4556-bc39-d7d4413c508d" />
 
 ### 5. Personalización de ilustraciones / integración con Propiedades
 
