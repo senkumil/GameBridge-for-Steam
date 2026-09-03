@@ -95,7 +95,6 @@ export function installBigPictureGamepadNavigation(
 		const nextKey = TAB_ORDER[nextIdx];
 		const targetControl = controls.get(nextKey);
 		if (targetControl && targetControl.isConnected) {
-			playSteamNavSound(1);
 			for (const c of controls.values()) {
 				c.classList.remove('gpfocus');
 			}
@@ -156,7 +155,9 @@ export function installBigPictureGamepadNavigation(
 		if (!target || !target.isConnected) return;
 		if (scope === root) lastFocusedElement = target;
 		try {
-			playSteamNavSound(1);
+			if (scope !== root) {
+				playSteamNavSound(1);
+			}
 			strip.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => el.classList.remove('gpfocus'));
 			scope.querySelectorAll<HTMLElement>('.gpfocus, [data-focus="true"]').forEach(el => {
 				if (el !== target) {

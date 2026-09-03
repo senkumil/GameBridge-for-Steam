@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Loop navigation and wrap-around controller for Big Picture Library Tabs.
  *
  * When NativeGameLink merges mapped shortcuts into native library categories and
@@ -93,7 +93,6 @@ function pollLibraryTabLoop(doc: Document): void {
 					lastActiveTabEdge.set(doc, 'first');
 					visibleTabs[0].click();
 					visibleTabs[0].focus();
-					try { (win as any).SteamClient?.Navigation?.PlaySoundEffect?.(1); } catch {}
 				} else if (btnLB && !prevLB && activeIndex === 0) {
 					// User pressed LB on the first visible tab (e.g. "COMPATIBLE"): wrap around to last tab!
 					lastLibraryTabNavTime = now;
@@ -101,7 +100,6 @@ function pollLibraryTabLoop(doc: Document): void {
 					const lastTab = visibleTabs[visibleTabs.length - 1];
 					lastTab.click();
 					lastTab.focus();
-					try { (win as any).SteamClient?.Navigation?.PlaySoundEffect?.(1); } catch {}
 				}
 			}
 		}
@@ -129,7 +127,6 @@ export function startBigPictureLibraryTabLoop(doc: Document): void {
 				lastActiveTabEdge.set(doc, 'first');
 				visibleTabs[0].click();
 				visibleTabs[0].focus();
-				try { (win as any).SteamClient?.Navigation?.PlaySoundEffect?.(1); } catch {}
 			} else if ((key === 'PageUp' || key === 'q' || key === 'Q') && activeIndex === 0) {
 				event.preventDefault();
 				event.stopPropagation();
@@ -137,7 +134,6 @@ export function startBigPictureLibraryTabLoop(doc: Document): void {
 				const lastTab = visibleTabs[visibleTabs.length - 1];
 				lastTab.click();
 				lastTab.focus();
-				try { (win as any).SteamClient?.Navigation?.PlaySoundEffect?.(1); } catch {}
 			}
 		};
 		win.addEventListener('keydown', libraryKeydownListener, true);
