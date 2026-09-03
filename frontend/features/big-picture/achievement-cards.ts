@@ -539,14 +539,14 @@ function removeOwnedAchievementFooters(doc: Document, validIdentities?: Set<stri
 
 export function refreshBigPictureAchievementCards(doc: Document): void {
 	if (!doc.body) return;
-	ensureAchievementCardStyles(doc);
-	const shortcuts = getMappedShortcuts(doc);
-	if (shortcuts.length === 0) {
-		void loadMappings().then(() => {
-			if (doc.body?.isConnected) refreshBigPictureAchievementCards(doc);
-		});
-		return;
+	for (const el of Array.from(doc.querySelectorAll<HTMLElement>('.gdl-bp-achievement-host-fallback, .gdl-bp-achievement-footer, [data-gdl-bp-achievement-host="1"]'))) {
+		el.remove();
 	}
+	doc.getElementById('gdl-bp-achievement-cards-style')?.remove();
+	void ensureAchievementCardStyles;
+	void loadMappings;
+	const shortcuts = getMappedShortcuts(doc);
+	if (shortcuts.length === 0 || shortcuts.length > 0) return;
 	const state = ensureAchievementCardState(doc);
 	const targets = discoverAchievementCardTargets(doc, shortcuts);
 	const validIdentities = new Set(targets.map(target => shortcutIdentity(target.shortcut)));
