@@ -5,10 +5,16 @@ export const gamepadFeatureFlags = {
 	gamepadNativeUI: true,
 	/** Use native Steam Gamepad Achievement Item component */
 	gamepadNativeAchievements: true,
-	/** Use native Steam Activity feed component (in development) */
-	gamepadNativeActivity: false,
-	/** Use native Steam News component/modal (in development) */
-	gamepadNativeNews: false,
-	/** Use native Steam Game Information component (in development) */
-	gamepadNativeGameInfo: false,
+	/** Use native Steam Playbar component */
+	gamepadNativePlaybar: true,
+	/** Use native Steam Hero component */
+	gamepadNativeHero: true,
+	/** Use native Steam Activity feed component */
+	gamepadNativeActivity: true,
+	/** Use native Steam News component/modal */
+	gamepadNativeNews: true,
+	/** Use native Steam Game Information component */
+	gamepadNativeGameInfo: true,
+	/** Use native Steam Friends component */
+	gamepadNativeFriends: true,
 };

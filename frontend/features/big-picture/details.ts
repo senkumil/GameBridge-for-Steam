@@ -2,8 +2,7 @@ import { backendLog } from '../../api/backend';
 import { getCachedGameData, getGameData } from '../../core/game-data';
 import { normalizeTitle } from '../../core/text';
 import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
-import { getMappedShortcuts, getSteamAppStore, getShortcutAppById, toSignedShortcutAppId } from '../../steam/shortcuts';
-import { findMappingForShortcut } from '../shortcuts/registry';
+import { getMappedShortcuts, getSteamAppStore, toSignedShortcutAppId } from '../../steam/shortcuts';
 import { getCachedLocalAchievementsForGame } from '../achievements/cache';
 import { fetchLocalAchievementData } from '../achievements/service';
 import { openBigPictureAchievementsScreen } from './achievements-view';
@@ -13,6 +12,7 @@ import { type LocalActivityPost, saveLocalActivityPost, getCurrentSteamUser } fr
 import { ensureNativePanelRoot, hideBigPictureNonSteamNotices, removeBigPictureFallbackPanel } from './panel-mount';
 import { ensureBigPictureDetailsStyles } from './styles';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
+import { resolveActiveGameContext, gamepadRuntime } from '../../steam/gamepad';
 import { gamepadFeatureFlags } from '../gamepad/flags';
 import { mountSingleNativeAchievement } from '../gamepad/achievements/SingleNativeAchievement';
 import { installBigPictureGamepadNavigation, disposeBigPictureGamepadNavigation } from './gamepad-nav';
@@ -156,26 +156,18 @@ function isNativeSteamGameActive(doc: Document): boolean {
 }
 
 function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
-	if (!doc.body || isNativeSteamGameActive(doc)) return null;
-	const shortcuts = getMappedShortcuts();
-
-	// 1. Authoritative AppID from DOM / React Fiber / Route
-	const activeDomAppId = findActiveAppIdFromDOM(doc);
-	if (activeDomAppId) {
-		const unsigned = activeDomAppId < 0 ? (activeDomAppId >>> 0) : activeDomAppId;
-		const signed = activeDomAppId > 2147483647 ? toSignedShortcutAppId(activeDomAppId) : activeDomAppId;
-		const match = shortcuts.find(s => s.id === activeDomAppId || s.id === unsigned || s.id === signed);
-		if (match) return match;
-		if (activeDomAppId > 0 && activeDomAppId < 2147483648) return null;
-
-		const app = getShortcutAppById(activeDomAppId);
-		const title = String(app?.display_name || app?.m_strDisplayName || '').trim();
-		const mappedAppId = findMappingForShortcut(activeDomAppId, title);
-		if (mappedAppId && /^\d+$/.test(mappedAppId)) {
-			return { id: unsigned, title: title || `App ${unsigned}`, steamAppId: mappedAppId };
-		}
-		return null;
+	if (!doc.body) return null;
+	const context = resolveActiveGameContext(doc);
+	if (context.type === 'steam') return null;
+	if (context.type === 'shortcut-linked' && context.identity) {
+		return {
+			id: context.identity.shortcutAppId,
+			title: context.identity.title,
+			steamAppId: String(context.identity.steamAppId),
+		};
 	}
+	if (isNativeSteamGameActive(doc)) return null;
+	const shortcuts = getMappedShortcuts();
 
 	const byLongestTitle = [...shortcuts].sort((a, b) => b.title.length - a.title.length);
 
@@ -332,7 +324,10 @@ function markupSignature(tab: BigPictureTab, markup: string): string {
 
 function renderRoot(state: BigPictureDetailState): void {
 	const root = state.root;
-	try { steamWebpackRuntime.captureRuntime(root.ownerDocument); } catch {}
+	try {
+		steamWebpackRuntime.captureRuntime(root.ownerDocument);
+		gamepadRuntime.initialize(root.ownerDocument);
+	} catch {}
 	hideBigPictureNonSteamNotices(root.ownerDocument);
 	let markup = '<div class="gdl-bp-loading">Steam</div>';
 	if (state.data) {

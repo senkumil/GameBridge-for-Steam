@@ -55,3 +55,28 @@ export function toSteamAchievement(
 		onClick: options?.onClick,
 	};
 }
+
+export interface SteamNativeAchievementSectionProps {
+	rgAchievements: SteamNativeAchievementShape[];
+	nUnlocked: number;
+	nTotal: number;
+	flPercentage: number;
+	appid?: number;
+	onViewAll?: () => void;
+}
+
+export function toSteamAchievementSection(
+	data: { total: number; unlocked: number; achievements: LocalAchievementItem[] },
+	options?: { appid?: number; onViewAll?: () => void },
+): SteamNativeAchievementSectionProps {
+	const pct = Math.max(0, Math.min(100, Math.round((data.unlocked * 100) / Math.max(1, data.total))));
+	return {
+		rgAchievements: (data.achievements || []).map(item => toSteamAchievement(item).achievement),
+		nUnlocked: data.unlocked || 0,
+		nTotal: data.total || 0,
+		flPercentage: pct,
+		appid: options?.appid,
+		onViewAll: options?.onViewAll,
+	};
+}
+

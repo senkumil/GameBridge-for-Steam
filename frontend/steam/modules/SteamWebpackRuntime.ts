@@ -9,9 +9,17 @@ class SteamWebpackRuntime {
 	private requireFn: any = null;
 	private moduleCache = new Map<string | number, any>();
 	private inspected = false;
+	private lastProbeTime = 0;
+	private boundWindows = new WeakSet<Window>();
 
 	public captureRuntime(doc?: Document): boolean {
 		if (this.inspected && this.requireFn) return true;
+
+		const now = Date.now();
+		if (now - this.lastProbeTime < 500) {
+			return this.inspected;
+		}
+		this.lastProbeTime = now;
 
 		const targetWindows = this.collectTargetWindows(doc);
 		for (const targetWin of targetWindows) {
@@ -31,7 +39,7 @@ class SteamWebpackRuntime {
 				if (this.requireFn && typeof this.requireFn.c === 'object') {
 					const cache = this.requireFn.c;
 					const keys = Object.keys(cache);
-					backendLog(`[NGL][Webpack] Runtime captured successfully, found ${keys.length} loaded modules in registry`);
+					backendLog(`[NGL][Webpack] Runtime captured successfully from window, found ${keys.length} loaded modules in registry`);
 
 					for (const key of keys) {
 						const mod = cache[key]?.exports;
@@ -40,6 +48,7 @@ class SteamWebpackRuntime {
 						}
 					}
 					this.inspected = true;
+					this.bindWindowUnload(targetWin);
 					return true;
 				}
 			} catch (error) {
@@ -48,6 +57,14 @@ class SteamWebpackRuntime {
 		}
 
 		return false;
+	}
+
+	public invalidate(): void {
+		this.requireFn = null;
+		this.moduleCache.clear();
+		this.inspected = false;
+		this.lastProbeTime = 0;
+		backendLog('[NGL][Webpack] Runtime cache invalidated');
 	}
 
 	public getAllModules(): WebpackModuleEntry[] {
@@ -62,6 +79,15 @@ class SteamWebpackRuntime {
 	public getRequire(): any | null {
 		if (!this.inspected) this.captureRuntime();
 		return this.requireFn;
+	}
+
+	private bindWindowUnload(win: Window): void {
+		if (this.boundWindows.has(win)) return;
+		this.boundWindows.add(win);
+		win.addEventListener('beforeunload', () => {
+			backendLog('[NGL][Webpack] Window unloading, resetting captured Webpack runtime');
+			this.invalidate();
+		});
 	}
 
 	private collectTargetWindows(doc?: Document): any[] {
