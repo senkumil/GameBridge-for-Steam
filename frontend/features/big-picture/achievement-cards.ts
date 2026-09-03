@@ -397,10 +397,10 @@ function renderAchievementFooter(footer: HTMLElement, data: LocalAchievementData
 	const label = pending ? labels.loading : hasAchievements ? labels.progress : labels.empty;
 	const host = footer.parentElement;
 	if (host) {
-		host.style.display = '';
-		host.style.overflow = 'visible';
+		host.style.display = 'none';
+		host.style.overflow = 'hidden';
 	}
-	footer.style.display = '';
+	footer.style.display = 'none';
 	footer.className = `gdl-bp-achievement-footer${pending ? ' is-loading' : ''}${isComplete ? ' is-complete' : (hasAchievements ? ' has-progress' : ' is-empty')}`;
 	footer.innerHTML = `${isComplete ? completionMedal() : ''}<span class="gdl-bp-card-ach-label">${escapeHtml(label)}</span>${hasAchievements && !isComplete ? `<span class="gdl-bp-card-ach-track"><span class="gdl-bp-card-ach-fill" style="width:${percent}%"></span></span>` : ''}`;
 	footer.setAttribute('aria-label', label);
@@ -420,93 +420,10 @@ function ensureAchievementCardStyles(doc: Document): void {
 	const style = doc.createElement('style');
 	style.id = 'gdl-bp-achievement-cards-style';
 	style.textContent = `
-		[data-gdl-bp-achievement-card="1"] { position: relative !important; overflow: visible !important; }
-		.gdl-bp-achievement-host-fallback {
-			box-sizing: border-box !important;
-			position: absolute !important;
-			left: 0 !important;
-			right: 0 !important;
-			bottom: 0 !important;
-			height: 32px !important;
-			max-height: 32px !important;
-			z-index: 20 !important;
-			pointer-events: none !important;
-			border-radius: 0 0 4px 4px !important;
-			overflow: visible !important;
-		}
+		.gdl-bp-achievement-host-fallback,
 		.gdl-bp-achievement-footer {
-			box-sizing: border-box !important;
-			position: absolute !important;
-			left: 0 !important;
-			right: 0 !important;
-			bottom: 0 !important;
-			width: 100% !important;
-			height: 32px !important;
-			max-height: 32px !important;
-			display: flex !important;
-			align-items: center !important;
-			justify-content: center !important;
-			gap: 6px !important;
-			padding: 2px 8px 4px !important;
-			background: rgba(30, 36, 44, 0.92) !important;
-			color: #e7e8ea !important;
-			font: 600 13px/18px "Motiva Sans", Arial, sans-serif !important;
-			text-align: center !important;
-			white-space: nowrap !important;
-			overflow: visible !important;
-			text-overflow: ellipsis !important;
-			border-radius: 0 0 4px 4px !important;
+			display: none !important;
 		}
-		.gdl-bp-achievement-footer.is-loading {
-			color: #aeb4ba !important;
-			background: linear-gradient(90deg, rgba(32,38,46,.92), rgba(52,60,72,.92), rgba(32,38,46,.92)) !important;
-			background-size: 220% 100% !important;
-			animation: gdl-bp-ach-loading 1.8s linear infinite !important;
-		}
-		.gdl-bp-achievement-footer.has-progress {
-			background: rgba(30, 36, 44, 0.92) !important;
-			color: #e7e8ea !important;
-		}
-		.gdl-bp-achievement-footer.is-complete {
-			background: #199fff !important;
-			background: linear-gradient(180deg, #1ea3ff 0%, #0885f0 100%) !important;
-			color: #ffffff !important;
-			font-weight: 700 !important;
-			text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25) !important;
-			padding-left: 36px !important;
-			border-radius: 0 0 4px 4px !important;
-		}
-		.gdl-bp-card-ach-label {
-			overflow: hidden !important;
-			text-overflow: ellipsis !important;
-			white-space: nowrap !important;
-			pointer-events: none !important;
-		}
-		.gdl-bp-card-ach-track {
-			position: absolute !important;
-			left: 0 !important;
-			right: 0 !important;
-			bottom: 0 !important;
-			height: 3px !important;
-			background: rgba(0, 0, 0, 0.5) !important;
-			overflow: hidden !important;
-		}
-		.gdl-bp-card-ach-fill {
-			display: block !important;
-			height: 100% !important;
-			background: #1a9fff !important;
-		}
-		.gdl-bp-card-medal {
-			position: absolute !important;
-			left: 6px !important;
-			bottom: -5px !important;
-			width: 32px !important;
-			height: 40px !important;
-			z-index: 35 !important;
-			pointer-events: none !important;
-			filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5)) !important;
-		}
-		@keyframes gdl-bp-ach-loading { from { background-position: 100% 0 } to { background-position: -120% 0 } }
 	`;
 	(doc.head || doc.documentElement).appendChild(style);
 }
