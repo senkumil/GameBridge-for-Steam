@@ -1,27 +1,12 @@
 import type { LocalAchievementData, LocalAchievementItem } from '../../domain/types';
 import { escapeHtml, escapeAttr } from '../../core/text';
-import { gdlText, loc, steamIntlLocale } from '../../steam/localization';
+import { gdlText, loc } from '../../steam/localization';
 import { formatLastPlayedDate, formatPlaytimeMinutes } from '../playtime/format';
+import { formatLocalUnlockDate } from '../achievements/format';
 import { getInstantPlaytimeStats } from '../playtime/service';
 import { getShortcutAppById } from '../../steam/shortcuts';
 import { ensureBigPictureModalStyles } from './modal-styles';
 import { completionMedal } from './achievement-cards';
-
-function formatUnlockDate(timestamp?: number): string {
-	if (!timestamp || timestamp <= 0) return '';
-	try {
-		const d = new Date(timestamp * 1000);
-		return d.toLocaleDateString(steamIntlLocale(), {
-			day: 'numeric',
-			month: 'short',
-			year: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit',
-		});
-	} catch {
-		return '';
-	}
-}
 
 export function openBigPictureAchievementsScreen(
 	doc: Document,
@@ -73,7 +58,7 @@ export function openBigPictureAchievementsScreen(
 		return filtered.map(item => {
 			const isEarned = Boolean(item.earned);
 			const iconUrl = isEarned ? item.icon : (item.icon_gray || item.icon);
-			const unlockDateStr = isEarned && item.earned_time ? formatUnlockDate(item.earned_time) : '';
+			const unlockDateStr = isEarned && item.earned_time ? formatLocalUnlockDate(item.earned_time) : '';
 			const globalPct = typeof item.global_percent === 'number' ? item.global_percent.toFixed(1) : null;
 
 			return `

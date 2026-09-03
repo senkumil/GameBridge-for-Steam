@@ -21,11 +21,16 @@ class SteamUIModeService {
 
 	public initialize(): void {
 		if (this.initialized) return;
+		const win = typeof window !== 'undefined' ? (window as any) : null;
+		if (win && win.__GDL_STEAM_UI_MODE_SERVICE__ && win.__GDL_STEAM_UI_MODE_SERVICE__ !== this) {
+			try { win.__GDL_STEAM_UI_MODE_SERVICE__.dispose(); } catch {}
+		}
+		if (win) win.__GDL_STEAM_UI_MODE_SERVICE__ = this;
 		this.initialized = true;
 
-		// 1. Initial mode detection from SteamClient.UI
+		// 1. Native SteamClient.UI API (preferred)
 		try {
-			const steamUi = (window as any).SteamClient?.UI;
+			const steamUi = (window as unknown as { SteamClient?: { UI?: { GetUIMode?: () => Promise<number>; RegisterForUIModeChanged?: (cb: (mode: number) => void) => () => void } } })?.SteamClient?.UI;
 			if (typeof steamUi?.GetUIMode === 'function') {
 				void steamUi.GetUIMode().then((mode: number | undefined) => {
 					if (mode !== undefined) {

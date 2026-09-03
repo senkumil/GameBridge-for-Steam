@@ -402,12 +402,26 @@ async function pollRunningApps(): Promise<void> {
 }
 
 export function startPlaytimeTracker(): void {
-	if (trackerInterval) return;
+	const win = typeof window !== 'undefined' ? (window as any) : null;
+	if (win && win.__GDL_TRACKER_INTERVAL__) {
+		clearInterval(win.__GDL_TRACKER_INTERVAL__);
+		win.__GDL_TRACKER_INTERVAL__ = null;
+	}
+	if (trackerInterval) {
+		clearInterval(trackerInterval);
+		trackerInterval = null;
+	}
 	trackerInterval = setInterval(pollRunningApps, 10000);
+	if (win) win.__GDL_TRACKER_INTERVAL__ = trackerInterval;
 	void pollRunningApps();
 }
 
 export function stopPlaytimeTracker(): void {
+	const win = typeof window !== 'undefined' ? (window as any) : null;
+	if (win && win.__GDL_TRACKER_INTERVAL__) {
+		clearInterval(win.__GDL_TRACKER_INTERVAL__);
+		win.__GDL_TRACKER_INTERVAL__ = null;
+	}
 	if (trackerInterval) {
 		clearInterval(trackerInterval);
 		trackerInterval = null;

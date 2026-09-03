@@ -15,8 +15,8 @@ export function deterministicTestUnlockCount(appid: string, total: number): numb
 	return Math.max(1, Math.min(total - 1, Math.floor(total * pctTarget)));
 }
 
-export function formatLocalUnlockDate(timestampSeconds: number): string {
-	if (!timestampSeconds) return '';
+export function formatLocalUnlockDate(timestampSeconds?: number): string {
+	if (!timestampSeconds || timestampSeconds <= 0) return '';
 	try {
 		return new Date(timestampSeconds * 1000).toLocaleString(steamIntlLocale(), {
 			day: 'numeric',

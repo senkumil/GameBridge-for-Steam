@@ -123,12 +123,26 @@ function pollFirstLaunchAchievementReplay(): void {
 }
 
 export function startFirstLaunchAchievementWatcher(): void {
-	if (watcherInterval) return;
+	const win = typeof window !== 'undefined' ? (window as any) : null;
+	if (win && win.__GDL_LAUNCH_WATCHER_INTERVAL__) {
+		clearInterval(win.__GDL_LAUNCH_WATCHER_INTERVAL__);
+		win.__GDL_LAUNCH_WATCHER_INTERVAL__ = null;
+	}
+	if (watcherInterval) {
+		clearInterval(watcherInterval);
+		watcherInterval = null;
+	}
 	watcherInterval = setInterval(pollFirstLaunchAchievementReplay, POLL_INTERVAL_MS);
+	if (win) win.__GDL_LAUNCH_WATCHER_INTERVAL__ = watcherInterval;
 	pollFirstLaunchAchievementReplay();
 }
 
 export function stopFirstLaunchAchievementWatcher(): void {
+	const win = typeof window !== 'undefined' ? (window as any) : null;
+	if (win && win.__GDL_LAUNCH_WATCHER_INTERVAL__) {
+		clearInterval(win.__GDL_LAUNCH_WATCHER_INTERVAL__);
+		win.__GDL_LAUNCH_WATCHER_INTERVAL__ = null;
+	}
 	if (watcherInterval) clearInterval(watcherInterval);
 	watcherInterval = null;
 	completedSessions.clear();

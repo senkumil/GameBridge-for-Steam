@@ -179,25 +179,43 @@ export function tryInjectNativePropertiesField(doc: Document, gameTitle: string,
 	let farmingInterval: number | null = null;
 	let farmingStartTime = 0;
 
+	const stopFarmingTimer = () => {
+		if (farmingInterval !== null) {
+			window.clearInterval(farmingInterval);
+			farmingInterval = null;
+		}
+	};
+
+	const startFarmingTimer = () => {
+		stopFarmingTimer();
+		farmingInterval = window.setInterval(() => {
+			if (!section.isConnected) {
+				stopFarmingTimer();
+				return;
+			}
+			const curSec = Math.max(0, Math.floor((Date.now() - farmingStartTime) / 1000));
+			farmStatusEl.textContent = gdlText('native_steam_card_farming_active_status', '🟢 Farming cards ({elapsed} elapsed)...', {
+				elapsed: formatElapsedMinutes(curSec),
+			});
+		}, 5000);
+	};
+
 	const updateFarmingUI = (active: boolean, elapsedSec = 0) => {
 		isFarming = active;
 		if (active) {
-			farmBtn.innerHTML = `⏹️ <span>${escapeHtml(gdlText('native_steam_card_farming_stop_btn', 'Stop card farming'))}</span>`;
 			farmBtn.style.background = '#8a2323';
-			farmBtn.style.color = '#ffffff';
-			farmStatusEl.textContent = gdlText('native_steam_card_farming_active_status', 'Farming cards ({elapsed} elapsed)...', {
+			farmBtn.style.color = '#fff';
+			farmBtn.innerHTML = `${cardsSvg()}<span>${escapeHtml(gdlText('native_steam_card_farming_stop_btn', 'Stop card farming'))}</span>`;
+			farmStatusEl.textContent = gdlText('native_steam_card_farming_active_status', '🟢 Farming cards ({elapsed} elapsed)...', {
 				elapsed: formatElapsedMinutes(elapsedSec),
 			});
-			farmStatusEl.style.color = '#a4d007';
+			farmStatusEl.style.color = '#59bf40';
 		} else {
-			farmBtn.innerHTML = `${cardsSvg()} <span>${escapeHtml(gdlText('native_steam_card_farming_start_btn', 'Start card farming'))}</span>`;
+			stopFarmingTimer();
 			farmBtn.style.background = '#3d4450';
 			farmBtn.style.color = '#dfe3e6';
+			farmBtn.innerHTML = `${cardsSvg()}<span>${escapeHtml(gdlText('native_steam_card_farming_start_btn', 'Start card farming'))}</span>`;
 			farmStatusEl.textContent = '';
-			if (farmingInterval) {
-				clearInterval(farmingInterval);
-				farmingInterval = null;
-			}
 		}
 	};
 
@@ -227,12 +245,7 @@ export function tryInjectNativePropertiesField(doc: Document, gameTitle: string,
 			if (status?.active && status.steam_app_id === resolvedAppId) {
 				farmingStartTime = status.started_at ? status.started_at * 1000 : Date.now() - ((status.elapsed_seconds || 0) * 1000);
 				updateFarmingUI(true, status.elapsed_seconds || 0);
-				farmingInterval = window.setInterval(() => {
-					const curSec = Math.max(0, Math.floor((Date.now() - farmingStartTime) / 1000));
-					farmStatusEl.textContent = gdlText('native_steam_card_farming_active_status', '🟢 Farming cards ({elapsed} elapsed)...', {
-						elapsed: formatElapsedMinutes(curSec),
-					});
-				}, 5000);
+				startFarmingTimer();
 			}
 		} catch {}
 	})();
@@ -262,12 +275,7 @@ export function tryInjectNativePropertiesField(doc: Document, gameTitle: string,
 				}
 				farmingStartTime = Date.now();
 				updateFarmingUI(true, 0);
-				farmingInterval = window.setInterval(() => {
-					const curSec = Math.max(0, Math.floor((Date.now() - farmingStartTime) / 1000));
-					farmStatusEl.textContent = gdlText('native_steam_card_farming_active_status', '🟢 Farming cards ({elapsed} elapsed)...', {
-						elapsed: formatElapsedMinutes(curSec),
-					});
-				}, 5000);
+				startFarmingTimer();
 			}
 		} catch {
 			farmStatusEl.textContent = gdlText('native_steam_card_farming_failed', 'Could not start card farming.');
