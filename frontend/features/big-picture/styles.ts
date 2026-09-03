@@ -22,7 +22,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			align-self: stretch;
 			margin: 0 auto;
 			padding: 36px 0 108px;
-			color: #e7e8ea;
+			color: var(--gp-text-color-body, #e7e8ea);
 			background: transparent;
 		}
 		[data-gdl-bp-native-panel="1"]:not([class*="Tab"]):not([role="tablist"]) > :not(#gdl-bp-detail-root):not([class*="Tab"]):not([role="tablist"]) {
@@ -59,7 +59,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			font-size: 22px;
 			line-height: 28px;
 			font-weight: 700;
-			color: #f3f4f5;
+			color: var(--gp-text-color-primary, #f3f4f5);
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-group {
 			margin-bottom: 24px;
@@ -76,7 +76,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			display: flex;
 			align-items: center;
 			justify-content: center;
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 			align-self: center;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-avatar {
@@ -85,7 +85,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			border-radius: 4px;
 			object-fit: cover;
 			flex-shrink: 0;
-			background: #191e25;
+			background: var(--gp-color-avatar-bg, #191e25);
 			align-self: flex-start;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-meta {
@@ -94,11 +94,11 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			display: flex;
 			align-items: center;
 			gap: 14px;
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 			font-size: 13px;
 		}
 		#gdl-bp-detail-root .gdl-bp-summary-box {
-			background: rgba(59,64,73,.82);
+			background: var(--gp-color-card, rgba(59,64,73,.82));
 			padding: 22px 16px;
 			overflow: hidden;
 		}
@@ -143,7 +143,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			width: 100%;
 			height: 100%;
 			object-fit: cover;
-			background: #11161d;
+			background: var(--gp-color-icon-bg, #11161d);
 			box-shadow: 0 3px 8px rgba(0,0,0,.5);
 		}
 		#gdl-bp-detail-root .gdl-bp-ach-img-frame.is-rare .gdl-bp-ach-img {
@@ -152,7 +152,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		}
 		#gdl-bp-detail-root .gdl-bp-summary-ach strong { display:block;font-size:17px;line-height:21px;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
 		#gdl-bp-detail-root .gdl-bp-summary-ach span { display:block;font-size:14px;line-height:18px;color:#a3a9b0; }
-		#gdl-bp-detail-root .gdl-bp-achievements-shell { background: rgba(31,36,44,.82); }
+		#gdl-bp-detail-root .gdl-bp-achievements-shell { background: var(--gp-color-card, rgba(31,36,44,.82)); }
 		#gdl-bp-detail-root .gdl-bp-ach-progress {
 			position: relative;
 			display: grid;
@@ -161,7 +161,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			align-items: center;
 			min-height: 62px;
 			padding: 8px 18px 8px 6px;
-			background: rgba(24,30,38,.88);
+			background: var(--gp-color-card-dark, rgba(24,30,38,.88));
 			cursor: pointer;
 			outline: none;
 			transition: background 0.15s, box-shadow 0.15s;
@@ -176,12 +176,12 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			outline: none !important;
 			z-index: 2;
 		}
-		#gdl-bp-detail-root .gdl-bp-medal { width: 48px;height: 54px;display:flex;align-items:center;justify-content:center;color:#1a9fff; }
+		#gdl-bp-detail-root .gdl-bp-medal { width: 48px;height: 54px;display:flex;align-items:center;justify-content:center;color:var(--gp-color-blue, #1a9fff); }
 		#gdl-bp-detail-root .gdl-bp-ach-progress-copy { min-width:0; }
-		#gdl-bp-detail-root .gdl-bp-ach-progress-label { font-size:20px;line-height:26px;color:#dcdfe3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+		#gdl-bp-detail-root .gdl-bp-ach-progress-label { font-size:20px;line-height:26px;color:var(--gp-text-color-body, #dcdfe3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
 		#gdl-bp-detail-root .gdl-bp-ach-progress-label strong { color:#fff; }
-		#gdl-bp-detail-root .gdl-bp-progress-track { height:10px;border-radius:2px;background:#3d444c;margin-top:8px;overflow:hidden; }
-		#gdl-bp-detail-root .gdl-bp-progress-fill { height:100%;background:#1a9fff; }
+		#gdl-bp-detail-root .gdl-bp-progress-track { height:10px;border-radius:2px;background:var(--gp-progress-track, #3d444c);margin-top:8px;overflow:hidden; }
+		#gdl-bp-detail-root .gdl-bp-progress-fill { height:100%;background:var(--gp-color-blue, #1a9fff); }
 		#gdl-bp-detail-root .gdl-bp-ach-strip { display:grid;grid-template-columns:minmax(390px,1.15fr) minmax(0,1fr);gap:12px;padding:24px 14px 14px;align-items:center; }
 		#gdl-bp-detail-root .gdl-bp-ach-featured {
 			display:grid;grid-template-columns:88px minmax(0,1fr);gap:14px;padding:10px;background:rgba(75,83,95,.76);min-height:110px;align-items:center;
@@ -203,7 +203,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		}
 		#gdl-bp-detail-root .gdl-bp-ach-featured .gdl-bp-ach-img { width:88px;height:88px; }
 		#gdl-bp-detail-root .gdl-bp-ach-featured strong { font-size:18px;line-height:22px; }
-		#gdl-bp-detail-root .gdl-bp-ach-featured p { margin:3px 0;font-size:15px;color:#aeb3ba;line-height:20px; }
+		#gdl-bp-detail-root .gdl-bp-ach-featured p { margin:3px 0;font-size:15px;color:var(--gp-text-color-secondary, #aeb3ba);line-height:20px; }
 		#gdl-bp-detail-root .gdl-bp-ach-icons { display:flex;gap:8px;align-items:center;overflow:hidden; }
 		#gdl-bp-detail-root .gdl-bp-ach-icon-frame {
 			position: relative;
@@ -265,7 +265,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			width:100%;
 			height:100%;
 			object-fit:cover;
-			background:#11161d;
+			background:var(--gp-color-icon-bg, #11161d);
 		}
 		#gdl-bp-detail-root .gdl-bp-ach-icon-frame.is-rare .gdl-bp-ach-icon {
 			width:100%;
@@ -307,14 +307,14 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			filter:drop-shadow(0 0 2px rgba(255,224,86,.92))
 				drop-shadow(0 0 9px rgba(255,174,36,.72));
 		}
-		#gdl-bp-detail-root .gdl-bp-cards-shell { background: rgba(57,62,71,.82); }
-		#gdl-bp-detail-root .gdl-bp-badge-row { min-height:86px;background:rgba(31,36,44,.88);display:flex;align-items:center;gap:16px;padding:10px 16px; }
+		#gdl-bp-detail-root .gdl-bp-cards-shell { background: var(--gp-color-card, rgba(57,62,71,.82)); }
+		#gdl-bp-detail-root .gdl-bp-badge-row { min-height:86px;background:var(--gp-color-card-dark, rgba(31,36,44,.88));display:flex;align-items:center;gap:16px;padding:10px 16px; }
 		#gdl-bp-detail-root .gdl-bp-badge-img { width:64px;height:64px;border-radius:50%;object-fit:cover;border:2px dashed rgba(255,255,255,.3); }
 		#gdl-bp-detail-root .gdl-bp-badge-copy { font-size:17px;line-height:24px;color:#c9ccd1; }
 		#gdl-bp-detail-root .gdl-bp-media-box,
-		#gdl-bp-detail-root .gdl-bp-notes-box { background:rgba(57,62,71,.82);padding:28px 16px;min-height:110px; }
+		#gdl-bp-detail-root .gdl-bp-notes-box { background:var(--gp-color-card, rgba(57,62,71,.82));padding:28px 16px;min-height:110px; }
 		#gdl-bp-detail-root .gdl-bp-media-box { display:flex;align-items:center;justify-content:center;position:relative; }
-		#gdl-bp-detail-root .gdl-bp-media-copy { font-size:18px;color:#a6abb2;text-align:center; }
+		#gdl-bp-detail-root .gdl-bp-media-copy { font-size:18px;color:var(--gp-text-color-secondary, #a6abb2);text-align:center; }
 		#gdl-bp-detail-root .gdl-bp-action-button,
 		#gdl-bp-detail-root .gdl-bp-info-link {
 			display:inline-flex;
@@ -322,8 +322,8 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			justify-content:center;
 			min-height:52px;
 			padding:0 28px;
-			background:#454d5a;
-			color:#f1f2f3;
+			background:var(--gp-button-bg, #454d5a);
+			color:var(--gp-text-color-primary, #f1f2f3);
 			font-size:18px;
 			font-weight:500;
 			border:0;
@@ -348,15 +348,15 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		}
 		#gdl-bp-detail-root .gdl-bp-media-box .gdl-bp-action-button { position:absolute;left:14px;bottom:14px; }
 		#gdl-bp-detail-root .gdl-bp-info-grid { display:grid;grid-template-columns:220px minmax(0,1fr) 300px;gap:24px;align-items:start;margin-top:14px; }
-		#gdl-bp-detail-root .gdl-bp-info-portrait { width:220px;height:330px;object-fit:cover;background:#171b21;border-radius:4px;box-shadow:0 8px 24px rgba(0,0,0,0.5); }
-		#gdl-bp-detail-root .gdl-bp-info-description { font-size:16.5px;line-height:27px;color:#e4e5e7;min-height:100px; }
-		#gdl-bp-detail-root .gdl-bp-info-meta { margin-top:28px;font-size:14.5px;line-height:24px;color:#939aa3; }
+		#gdl-bp-detail-root .gdl-bp-info-portrait { width:220px;height:330px;object-fit:cover;background:var(--gp-color-thumb-bg, #171b21);border-radius:4px;box-shadow:0 8px 24px rgba(0,0,0,0.5); }
+		#gdl-bp-detail-root .gdl-bp-info-description { font-size:16.5px;line-height:27px;color:var(--gp-text-color-body, #e4e5e7);min-height:100px; }
+		#gdl-bp-detail-root .gdl-bp-info-meta { margin-top:28px;font-size:14.5px;line-height:24px;color:var(--gp-text-color-secondary, #939aa3); }
 		#gdl-bp-detail-root .gdl-bp-info-meta strong { color:#e2e4e6;font-weight:500; }
-		#gdl-bp-detail-root .gdl-bp-feature { display:flex;align-items:center;gap:12px;min-height:35px;color:#a6abb2;font-size:16px; }
+		#gdl-bp-detail-root .gdl-bp-feature { display:flex;align-items:center;gap:12px;min-height:35px;color:var(--gp-text-color-secondary, #a6abb2);font-size:16px; }
 		#gdl-bp-detail-root .gdl-bp-feature svg { width:26px;height:26px;color:#9da2a8;flex:0 0 26px; }
 		#gdl-bp-detail-root .gdl-bp-info-links { display:flex;flex-wrap:wrap;gap:10px;margin-top:28px; }
-		#gdl-bp-detail-root .gdl-bp-loading { min-height:310px;display:flex;align-items:center;justify-content:center;color:#9da4ab;font-size:18px; }
-		#gdl-bp-detail-root .gdl-bp-empty { padding:28px;background:rgba(49,55,64,.68);font-size:17px;color:#aeb3ba; }
+		#gdl-bp-detail-root .gdl-bp-loading { min-height:310px;display:flex;align-items:center;justify-content:center;color:var(--gp-text-color-secondary, #9da4ab);font-size:18px; }
+		#gdl-bp-detail-root .gdl-bp-empty { padding:28px;background:var(--gp-color-card, rgba(49,55,64,.68));font-size:17px;color:var(--gp-text-color-secondary, #aeb3ba); }
 		/* Cloud status banner (matches Steam Big Picture native divider in Image 3) */
 		.gdl-bp-cloud-divider {
 			display: flex !important;
@@ -390,7 +390,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			font-size: 13.5px !important;
 			font-weight: 700 !important;
 			letter-spacing: 0.8px !important;
-			color: #b8bcbf !important;
+			color: var(--gp-text-color-secondary, #b8bcbf) !important;
 			text-transform: uppercase !important;
 			white-space: nowrap !important;
 			flex: 0 0 auto !important;
@@ -398,7 +398,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		.gdl-bp-cloud-badge svg {
 			width: 18px !important;
 			height: 18px !important;
-			color: #b8bcbf !important;
+			color: var(--gp-text-color-secondary, #b8bcbf) !important;
 			display: block !important;
 		}
 
@@ -415,7 +415,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			font-size: 12px !important;
 			font-weight: 700 !important;
 			letter-spacing: 0.8px !important;
-			color: #8f98a0 !important;
+			color: var(--gp-text-color-secondary, #8f98a0) !important;
 			text-transform: uppercase !important;
 			line-height: 1 !important;
 		}
@@ -455,7 +455,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		}
 		.gdl-bp-stat-progress-fill {
 			height: 100% !important;
-			background: #2d73ff !important;
+			background: var(--gp-color-blue, #2d73ff) !important;
 			border-radius: 3px !important;
 		}
 
@@ -479,7 +479,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			font-size: 11px;
 			font-weight: 700;
 			letter-spacing: 0.8px;
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 			text-transform: uppercase;
 			margin-bottom: 8px;
 		}
@@ -494,7 +494,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			height: 38px;
 			border-radius: 3px;
 			overflow: hidden;
-			background: #191e25;
+			background: var(--gp-color-avatar-bg, #191e25);
 			cursor: pointer;
 			border: 1px solid transparent;
 			transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
@@ -515,7 +515,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			object-fit: cover;
 		}
 		#gdl-bp-detail-root .gdl-bp-friends-empty {
-			color: #616871;
+			color: var(--gp-text-color-dim, #616871);
 			font-size: 14px;
 		}
 
@@ -531,7 +531,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			font-size: 12px;
 			font-weight: 700;
 			letter-spacing: 0.8px;
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 			text-transform: uppercase;
 			margin: 18px 0 8px;
 		}
@@ -595,7 +595,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-post-input::placeholder {
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-post-input:focus,
 		#gdl-bp-detail-root .gdl-bp-feed-post-input.gpfocus {
@@ -606,7 +606,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		#gdl-bp-detail-root .gdl-bp-feed-jump-news {
 			background: transparent;
 			border: none;
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 			font-size: 13.5px;
 			font-weight: 600;
 			cursor: pointer;
@@ -632,7 +632,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			font-size: 13px;
 			font-weight: 700;
 			letter-spacing: 0.8px;
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 			text-transform: uppercase;
 			margin: 0;
 		}
@@ -642,7 +642,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			height: 180px;
 			border-radius: 4px;
 			overflow: hidden;
-			background: #15191f;
+			background: var(--gp-color-thumb-bg, #15191f);
 			flex-shrink: 0;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-thumb {
@@ -652,7 +652,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			display: block;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-card {
-			background: rgba(25, 30, 38, 0.7);
+			background: var(--gp-color-card, rgba(25, 30, 38, 0.7));
 			border: 1px solid rgba(255, 255, 255, 0.06);
 			border-radius: 6px;
 			padding: 16px;
@@ -678,7 +678,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			font-size: 12px;
 			font-weight: 700;
 			letter-spacing: 0.8px;
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 			text-transform: uppercase;
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-title {
@@ -689,7 +689,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		}
 		#gdl-bp-detail-root .gdl-bp-feed-desc {
 			font-size: 14px;
-			color: #b8bcbf;
+			color: var(--gp-text-color-secondary, #b8bcbf);
 			line-height: 1.45;
 			margin-top: 4px;
 		}
@@ -726,7 +726,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			margin-bottom: 28px;
 		}
 		#gdl-bp-detail-root .gdl-bp-community-video-card {
-			background: rgba(25, 30, 38, 0.75);
+			background: var(--gp-color-card, rgba(25, 30, 38, 0.75));
 			border: 1px solid rgba(255, 255, 255, 0.06);
 			border-radius: 6px;
 			overflow: hidden;
@@ -762,7 +762,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			gap: 16px;
 		}
 		#gdl-bp-detail-root .gdl-bp-community-guide-card {
-			background: rgba(25, 30, 38, 0.75);
+			background: var(--gp-color-card, rgba(25, 30, 38, 0.75));
 			border: 1px solid rgba(255, 255, 255, 0.06);
 			border-radius: 6px;
 			padding: 14px;
@@ -785,7 +785,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			font-size: 11px;
 			font-weight: 700;
 			letter-spacing: 0.8px;
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 			text-transform: uppercase;
 		}
 		#gdl-bp-detail-root .gdl-bp-community-guide-content {
@@ -798,7 +798,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 			height: 64px;
 			object-fit: cover;
 			border-radius: 4px;
-			background: #11161d;
+			background: var(--gp-color-icon-bg, #11161d);
 			flex-shrink: 0;
 		}
 		#gdl-bp-detail-root .gdl-bp-community-guide-title {
@@ -809,7 +809,7 @@ export function ensureBigPictureDetailsStyles(doc: Document): void {
 		}
 		#gdl-bp-detail-root .gdl-bp-community-guide-desc {
 			font-size: 12.5px;
-			color: #8f98a0;
+			color: var(--gp-text-color-secondary, #8f98a0);
 			line-height: 1.45;
 			display: -webkit-box;
 			-webkit-line-clamp: 2;

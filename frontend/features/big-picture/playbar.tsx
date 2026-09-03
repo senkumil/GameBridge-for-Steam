@@ -1,15 +1,13 @@
+import React from 'react';
 import type { LocalAchievementData } from '../../domain/types';
-import { escapeHtml } from '../../core/text';
 import { gdlText, loc } from '../../steam/localization';
 import { detectConnectedController } from '../library/controller';
 import { CONTROLLERS_IMAGE_DATA_URI } from './controllers-asset';
 import { getInstantPlaytimeStats } from '../playtime/service';
 import { formatLastPlayedDate, formatPlaytimeMinutes } from '../playtime/format';
 import { getShortcutAppById } from '../../steam/shortcuts';
-
-function cloudSynchronizedSvg(): string {
-	return `<svg class="gdl-bp-cloud-svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM10 17l-3.5-3.5 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>`;
-}
+import { BigPicturePlaybarStats } from './BigPicturePlaybarStats';
+import { BigPictureCloudDivider } from './BigPictureCloudDivider';
 
 interface ActiveGamepadContext {
 	doc: Document;
@@ -65,13 +63,22 @@ export function syncBigPicturePlaybarEnhancements(
 	const tabContainer = tabStrip.closest<HTMLElement>('[class*="TabsContainer"], [class*="tabsContainer"], [class*="TabsRow"], [class*="tabsRow"], [class*="TabsStrip"], [class*="tabsStrip"], [role="tablist"]') || tabStrip;
 	const parent = tabContainer.parentElement;
 
-	// Only check for native cloud status in the vicinity of the game details container
 	const hasNativeCloud = Boolean(
 		parent?.querySelector('[class*="CloudStatus"], [class*="cloudStatus"], [class*="CloudSync"], [class*="cloudSync"]')
 	);
 
+	const win = doc.defaultView as any;
+	const reactDom = win?.ReactDOM || (typeof window !== 'undefined' ? (window as any).ReactDOM : null);
+
 	if (hasNativeCloud) {
-		doc.getElementById('gdl-bp-cloud-divider')?.remove();
+		const old = doc.getElementById('gdl-bp-cloud-divider');
+		if (old) {
+			try {
+				const r = (old as any).__gdlReactRoot;
+				if (r && typeof r.unmount === 'function') r.unmount();
+			} catch {}
+			old.remove();
+		}
 	} else if (parent) {
 		parent.style.flexWrap = 'wrap';
 		let cloudDivider = doc.getElementById('gdl-bp-cloud-divider');
@@ -86,12 +93,21 @@ export function syncBigPicturePlaybarEnhancements(
 
 		const cloudTitle = 'STEAM CLOUD';
 		const cloudState = loc('AppDetails_CloudStatus_Synchronized', 'ACTUALIZADO').toUpperCase();
-		cloudDivider.innerHTML = `
-			<div class="gdl-bp-cloud-badge">
-				${cloudSynchronizedSvg()}
-				<span>${cloudTitle}: ${escapeHtml(cloudState)}</span>
-			</div>
-		`;
+
+		let cloudRoot = (cloudDivider as any).__gdlReactRoot;
+		if (!cloudRoot && reactDom && typeof reactDom.createRoot === 'function') {
+			cloudRoot = reactDom.createRoot(cloudDivider);
+			(cloudDivider as any).__gdlReactRoot = cloudRoot;
+		}
+
+		const cloudElement = <BigPictureCloudDivider title={cloudTitle} state={cloudState} />;
+		try {
+			if (cloudRoot && typeof cloudRoot.render === 'function') {
+				cloudRoot.render(cloudElement);
+			} else if (reactDom && typeof reactDom.render === 'function') {
+				reactDom.render(cloudElement, cloudDivider);
+			}
+		} catch {}
 	}
 
 	// 2. Discover or create PlayBar stats row if available
@@ -119,7 +135,7 @@ export function syncBigPicturePlaybarEnhancements(
 	].map(s => s.trim().toLowerCase()).filter(Boolean);
 
 	const hasNativeLastSession = Array.from(playbarStats.children).some(child => {
-		if (child.id?.startsWith('gdl-bp-stat-')) return false;
+		if (child.id?.startsWith('gdl-bp-stat-') || child.id === 'gdl-bp-playbar-stats-mount') return false;
 		const t = (child.textContent || '').toLowerCase();
 		if (nativeLastSessionTokens.some(tok => t.includes(tok))) return true;
 		return t.includes('última sesión') || t.includes('ultima sesion') || t.includes('last session') || t.includes('last played')
@@ -134,7 +150,7 @@ export function syncBigPicturePlaybarEnhancements(
 	].map(s => s.trim().toLowerCase()).filter(Boolean);
 
 	const hasNativePlaytime = Array.from(playbarStats.children).some(child => {
-		if (child.id?.startsWith('gdl-bp-stat-')) return false;
+		if (child.id?.startsWith('gdl-bp-stat-') || child.id === 'gdl-bp-playbar-stats-mount') return false;
 		const t = (child.textContent || '').toLowerCase();
 		if (nativePlaytimeTokens.some(tok => t.includes(tok))) return true;
 		return t.includes('tiempo de juego') || t.includes('play time') || t.includes('playtime')
@@ -142,47 +158,6 @@ export function syncBigPicturePlaybarEnhancements(
 			|| t.includes('время в игре') || t.includes('czas gry') || t.includes('oyun süresi')
 			|| t.includes('游戏时间') || t.includes('遊戲時間') || t.includes('プレイ時間') || t.includes('플레이 시간');
 	});
-
-	// Inject or update "LAST SESSION" if not provided by Steam native
-	let lastSessionStat = playbarStats.querySelector<HTMLElement>('#gdl-bp-stat-last-session');
-	if (!hasNativeLastSession) {
-		const lastPlayedText = lastPlayedTimestamp > 0
-			? formatLastPlayedDate(lastPlayedTimestamp)
-			: (loc('DateTime_Today', '') || gdlText('last_played_today', 'Today'));
-
-		if (!lastSessionStat) {
-			lastSessionStat = doc.createElement('div');
-			lastSessionStat.id = 'gdl-bp-stat-last-session';
-			lastSessionStat.className = 'gdl-bp-playbar-stat';
-		}
-		const lastSessionLabel = loc('AppDetails_SectionTitle_LastSession', '') || loc('AppDetails_SectionTitle_LastPlayed', '') || gdlText('last_played_section_title', 'LAST SESSION');
-		lastSessionStat.innerHTML = `
-			<div class="gdl-bp-stat-label">${escapeHtml(lastSessionLabel.toUpperCase())}</div>
-			<div class="gdl-bp-stat-value">${escapeHtml(lastPlayedText)}</div>
-		`;
-	} else if (lastSessionStat) {
-		lastSessionStat.remove();
-		lastSessionStat = null;
-	}
-
-	// Inject or update "PLAY TIME" if not provided by Steam native
-	let playtimeStat = playbarStats.querySelector<HTMLElement>('#gdl-bp-stat-playtime');
-	if (!hasNativePlaytime && minutesForever > 0) {
-		const playtimeText = formatPlaytimeMinutes(minutesForever);
-		if (!playtimeStat) {
-			playtimeStat = doc.createElement('div');
-			playtimeStat.id = 'gdl-bp-stat-playtime';
-			playtimeStat.className = 'gdl-bp-playbar-stat';
-		}
-		const playtimeLabel = loc('AppDetails_SectionTitle_Playtime', '') || gdlText('playtime_section_title', 'PLAY TIME');
-		playtimeStat.innerHTML = `
-			<div class="gdl-bp-stat-label">${escapeHtml(playtimeLabel.toUpperCase())}</div>
-			<div class="gdl-bp-stat-value">${escapeHtml(playtimeText)}</div>
-		`;
-	} else if (playtimeStat) {
-		playtimeStat.remove();
-		playtimeStat = null;
-	}
 
 	// Hide duplicate native achievements block if we have achievements to show
 	const nativeAchievementTokens = [
@@ -192,7 +167,7 @@ export function syncBigPicturePlaybarEnhancements(
 
 	if (achievements && achievements.total > 0) {
 		Array.from(playbarStats.children).forEach(child => {
-			if (child.id?.startsWith('gdl-bp-stat-')) return;
+			if (child.id?.startsWith('gdl-bp-stat-') || child.id === 'gdl-bp-playbar-stats-mount') return;
 			const text = (child.textContent || '').toLowerCase();
 			if (nativeAchievementTokens.some(tok => text.includes(tok))
 				|| text.includes('logros') || text.includes('achievements') || text.includes('erfolge') || text.includes('succès')
@@ -215,7 +190,7 @@ export function syncBigPicturePlaybarEnhancements(
 	].map(s => s.trim().toLowerCase()).filter(Boolean);
 
 	const hasNativeControl = Array.from(playbarStats.children).some(child => {
-		if (child.id?.startsWith('gdl-bp-stat-')) return false;
+		if (child.id?.startsWith('gdl-bp-stat-') || child.id === 'gdl-bp-playbar-stats-mount') return false;
 		const text = (child.textContent || '').toLowerCase();
 		if (nativeControlTokens.some(tok => text.includes(tok))) return true;
 		return text.includes('control') || text.includes('controller') || text.includes('mando')
@@ -224,58 +199,81 @@ export function syncBigPicturePlaybarEnhancements(
 			|| text.includes('コントローラ') || text.includes('컨트롤러');
 	});
 
-	let ctrlStat = playbarStats.querySelector<HTMLElement>('#gdl-bp-stat-control');
-	if (hasConnectedController && !hasNativeControl) {
-		if (!ctrlStat) {
-			ctrlStat = doc.createElement('div');
-			ctrlStat.id = 'gdl-bp-stat-control';
-			ctrlStat.className = 'gdl-bp-playbar-stat';
-		}
-		ctrlStat.innerHTML = `
-			<div class="gdl-bp-stat-label">${escapeHtml(loc('AppDetails_SectionTitle_Controller', 'CONTROL').toUpperCase())}</div>
-			<div class="gdl-bp-stat-value gdl-bp-ctrl-icons">
-				<img class="gdl-bp-ctrl-img" src="${CONTROLLERS_IMAGE_DATA_URI}" alt="Control" />
-			</div>
-		`;
-	} else if (ctrlStat) {
-		ctrlStat.remove();
-		ctrlStat = null;
-	}
-
 	ensureGamepadListeners(doc, tabStrip, achievements, shortcutAppId);
 
-	// Inject or update Achievements in playbar
-	let achStat = playbarStats.querySelector<HTMLElement>('#gdl-bp-stat-achievements');
-	if (achievements && achievements.total > 0) {
-		if (!achStat) {
-			achStat = doc.createElement('div');
-			achStat.id = 'gdl-bp-stat-achievements';
-			achStat.className = 'gdl-bp-playbar-stat';
-		}
-		const pct = Math.max(0, Math.min(100, Math.round((achievements.unlocked * 100) / Math.max(1, achievements.total))));
-		achStat.innerHTML = `
-			<div class="gdl-bp-stat-label">${escapeHtml(loc('AppDetails_SectionTitle_Achievements', 'LOGROS').toUpperCase())}</div>
-			<div class="gdl-bp-stat-value gdl-bp-ach-value">
-				<span>${achievements.unlocked}/${achievements.total}</span>
-				<div class="gdl-bp-stat-progress-track">
-					<div class="gdl-bp-stat-progress-fill" style="width:${pct}%"></div>
-				</div>
-			</div>
-		`;
-	} else if (achStat) {
-		achStat.remove();
-		achStat = null;
+	// Mount or update React Playbar Stats component
+	let statsMount = playbarStats.querySelector<HTMLElement>('#gdl-bp-playbar-stats-mount');
+	if (!statsMount) {
+		statsMount = doc.createElement('div');
+		statsMount.id = 'gdl-bp-playbar-stats-mount';
+		statsMount.style.display = 'contents';
+		playbarStats.appendChild(statsMount);
 	}
 
-	// Keep strict visual order: Última Sesión -> Tiempo de Juego -> Control -> Logros
-	const ordered = [lastSessionStat, playtimeStat, ctrlStat, achStat].filter(Boolean) as HTMLElement[];
-	for (const el of ordered) {
-		playbarStats.appendChild(el);
+	let root = (statsMount as any).__gdlReactRoot;
+	if (!root && reactDom && typeof reactDom.createRoot === 'function') {
+		root = reactDom.createRoot(statsMount);
+		(statsMount as any).__gdlReactRoot = root;
+	}
+
+	const lastPlayedText = lastPlayedTimestamp > 0
+		? formatLastPlayedDate(lastPlayedTimestamp)
+		: (loc('DateTime_Today', '') || gdlText('last_played_today', 'Today'));
+
+	const lastSessionLabel = loc('AppDetails_SectionTitle_LastSession', '')
+		|| loc('AppDetails_SectionTitle_LastPlayed', '')
+		|| gdlText('last_played_section_title', 'LAST SESSION');
+
+	const playtimeLabel = loc('AppDetails_SectionTitle_Playtime', '')
+		|| gdlText('playtime_section_title', 'PLAY TIME');
+
+	const controllerLabel = loc('AppDetails_SectionTitle_Controller', 'CONTROL');
+	const achievementsLabel = loc('AppDetails_SectionTitle_Achievements', 'LOGROS');
+
+	const element = (
+		<BigPicturePlaybarStats
+			lastSessionText={!hasNativeLastSession ? lastPlayedText : undefined}
+			lastSessionLabel={!hasNativeLastSession ? lastSessionLabel.toUpperCase() : undefined}
+			playtimeText={!hasNativePlaytime && minutesForever > 0 ? formatPlaytimeMinutes(minutesForever) : undefined}
+			playtimeLabel={!hasNativePlaytime && minutesForever > 0 ? playtimeLabel.toUpperCase() : undefined}
+			hasConnectedController={hasConnectedController && !hasNativeControl}
+			controllerLabel={controllerLabel.toUpperCase()}
+			controllerImageUri={CONTROLLERS_IMAGE_DATA_URI}
+			achievements={achievements && achievements.total > 0 ? { unlocked: achievements.unlocked, total: achievements.total } : null}
+			achievementsLabel={achievementsLabel.toUpperCase()}
+		/>
+	);
+
+	try {
+		if (root && typeof root.render === 'function') {
+			root.render(element);
+		} else if (reactDom && typeof reactDom.render === 'function') {
+			reactDom.render(element, statsMount);
+		}
+	} catch (err) {
+		console.error('[NGL][BigPicture] Error mounting PlaybarStats:', err);
 	}
 }
 
 export function removeBigPicturePlaybarEnhancements(doc: Document): void {
-	doc.getElementById('gdl-bp-cloud-divider')?.remove();
+	const cloud = doc.getElementById('gdl-bp-cloud-divider');
+	if (cloud) {
+		try {
+			const r = (cloud as any).__gdlReactRoot;
+			if (r && typeof r.unmount === 'function') r.unmount();
+		} catch {}
+		cloud.remove();
+	}
+	const statsMount = doc.getElementById('gdl-bp-playbar-stats-mount');
+	if (statsMount) {
+		try {
+			const root = (statsMount as any).__gdlReactRoot;
+			if (root && typeof root.unmount === 'function') {
+				root.unmount();
+			}
+		} catch {}
+		statsMount.remove();
+	}
 	doc.getElementById('gdl-bp-stat-last-session')?.remove();
 	doc.getElementById('gdl-bp-stat-playtime')?.remove();
 	doc.getElementById('gdl-bp-stat-control')?.remove();

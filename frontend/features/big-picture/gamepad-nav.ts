@@ -20,6 +20,18 @@ export function getFocusableElements(root: HTMLElement): HTMLElement[] {
 
 const TAB_ORDER: BigPicturePanelTab[] = ['activity', 'stuff', 'community', 'info'];
 
+function playSteamNavSound(soundId: number): void {
+	try {
+		const win = typeof window !== 'undefined' ? (window as any) : null;
+		const steamClient = win?.SteamClient;
+		if (typeof steamClient?.Sounds?.PlaySoundEffect === 'function') {
+			steamClient.Sounds.PlaySoundEffect(soundId);
+		} else if (typeof steamClient?.Sounds?.PlaySound === 'function') {
+			steamClient.Sounds.PlaySound(soundId);
+		}
+	} catch {}
+}
+
 interface NavInstance {
 	doc: Document;
 	root: HTMLElement;
@@ -51,7 +63,11 @@ export function installBigPictureGamepadNavigation(
 		existing.controls = controls;
 		return;
 	}
-	disposeBigPictureGamepadNavigation(doc);
+
+	if (existing) {
+		existing.cleanup();
+		activeNavInstances.delete(doc);
+	}
 
 	const win = doc.defaultView || window;
 
@@ -65,7 +81,7 @@ export function installBigPictureGamepadNavigation(
 
 	const getCurrentTabKey = (): BigPicturePanelTab => {
 		for (const [key, el] of controls.entries()) {
-			if (el.getAttribute('aria-selected') === 'true' || el.classList.contains('active') || el.classList.contains('Selected') || el.classList.contains('gpfocus')) {
+			if (el.matches('[aria-selected="true"], .active, .selected, [class*="Active"], [class*="Selected"]') || el.classList.contains('gpfocus')) {
 				return key;
 			}
 		}
@@ -79,6 +95,7 @@ export function installBigPictureGamepadNavigation(
 		const nextKey = TAB_ORDER[nextIdx];
 		const targetControl = controls.get(nextKey);
 		if (targetControl && targetControl.isConnected) {
+			playSteamNavSound(1);
 			for (const c of controls.values()) {
 				c.classList.remove('gpfocus');
 			}
@@ -139,6 +156,7 @@ export function installBigPictureGamepadNavigation(
 		if (!target || !target.isConnected) return;
 		if (scope === root) lastFocusedElement = target;
 		try {
+			playSteamNavSound(1);
 			strip.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => el.classList.remove('gpfocus'));
 			scope.querySelectorAll<HTMLElement>('.gpfocus, [data-focus="true"]').forEach(el => {
 				if (el !== target) {
@@ -164,6 +182,7 @@ export function installBigPictureGamepadNavigation(
 		const focusables = getFocusableElements(currentScope);
 		if (!focusables.length) {
 			if (direction === 'back' && modal) {
+				playSteamNavSound(4);
 				const closeBtn = modal.querySelector<HTMLElement>('.gdl-bp-news-modal-close, .gdl-bp-ach-close-trigger, .gdl-bp-fullscreen-card-close-btn');
 				if (closeBtn) closeBtn.click();
 				else modal.remove();
@@ -198,6 +217,7 @@ export function installBigPictureGamepadNavigation(
 					current.focus();
 					return true;
 				}
+				playSteamNavSound(3);
 				current.click();
 				return true;
 			}
@@ -205,6 +225,7 @@ export function installBigPictureGamepadNavigation(
 		}
 
 		if (direction === 'back') {
+			playSteamNavSound(4);
 			if (modal) {
 				const closeBtn = modal.querySelector<HTMLElement>('.gdl-bp-news-modal-close, .gdl-bp-news-modal-close-btn, .gdl-bp-ach-close-trigger, .gdl-bp-fullscreen-card-close-btn');
 				if (closeBtn) closeBtn.click();
