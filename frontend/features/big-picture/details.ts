@@ -21,7 +21,7 @@ import { getCachedFriendData, getFriendData } from '../library/social/friends';
 import { cachePersona, hasCachedPersona } from '../library/social/personas';
 import { fetchFriendPersonasBackend } from '../../api/backend';
 import { linkedShortcutPortrait } from '../library/artwork';
-import { openBigPictureCardModal, openBigPictureNewsModal } from './news-modal';
+import { openBigPictureCardModal, openBigPictureNewsModal, openBigPictureCommunityModal } from './news-modal';
 import {
 	renderActivity,
 	renderAchievements,
@@ -29,6 +29,7 @@ import {
 	renderMediaAndNotes,
 	renderCommunity,
 	renderInfo,
+	fallbackCommunity,
 	type BigPictureDetailData,
 	type BigPictureTab,
 	type MappedShortcut,
@@ -485,17 +486,34 @@ function renderRoot(state: BigPictureDetailState): void {
 		}
 	}
 	if (state.activeTab === 'community') {
-		root.querySelectorAll<HTMLElement>('.gdl-bp-community-video-card').forEach(cardEl => {
-			cardEl.addEventListener('click', e => {
-				const ytId = cardEl.dataset.gdlYtId;
-				const wrap = cardEl.querySelector<HTMLElement>('.gdl-bp-community-media-wrap');
-				if (wrap && ytId && !cardEl.classList.contains('is-playing')) {
+		const communityItems = fallbackCommunity(state.data || { game: null, achievements: null, news: [], community: [], cards: null, friends: null }).filter(item => item.image);
+		const videos = communityItems.filter(item => item.type === 'video' || Boolean(item.youtube_id)).slice(0, 2);
+		const nonVideos = communityItems.filter(item => item.type !== 'video' && !item.youtube_id);
+		const displayedVideos = videos.length > 0 ? videos : communityItems.slice(0, 2);
+		const displayedGuides = nonVideos.length > 0 ? nonVideos.slice(0, 8) : communityItems.slice(2, 10);
+
+		root.querySelectorAll<HTMLElement>('.gdl-bp-community-video-card[data-gdl-comm-video-idx]').forEach(cardEl => {
+			const idx = Number(cardEl.dataset.gdlCommVideoIdx);
+			const item = displayedVideos[idx] || communityItems[idx];
+			if (item) {
+				cardEl.addEventListener('click', e => {
 					e.preventDefault();
 					e.stopPropagation();
-					wrap.innerHTML = `<iframe class="gdl-bp-inline-video" src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytId)}?autoplay=1&enablejsapi=1" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
-					cardEl.classList.add('is-playing');
-				}
-			});
+					openBigPictureCommunityModal(root.ownerDocument, item, state.data?.game?.name || state.shortcut.title);
+				});
+			}
+		});
+
+		root.querySelectorAll<HTMLElement>('.gdl-bp-community-guide-card[data-gdl-comm-guide-idx]').forEach(cardEl => {
+			const idx = Number(cardEl.dataset.gdlCommGuideIdx);
+			const item = displayedGuides[idx] || communityItems[idx + 2];
+			if (item) {
+				cardEl.addEventListener('click', e => {
+					e.preventDefault();
+					e.stopPropagation();
+					openBigPictureCommunityModal(root.ownerDocument, item, state.data?.game?.name || state.shortcut.title);
+				});
+			}
 		});
 	}
 	for (const link of Array.from(root.querySelectorAll<HTMLAnchorElement>('[data-gdl-bp-external="1"]'))) {
