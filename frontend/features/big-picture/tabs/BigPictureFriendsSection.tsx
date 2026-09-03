@@ -1,5 +1,5 @@
-﻿import React from 'react';
-import type { FriendCategories, FriendPlayInfo } from '../../../domain/types';
+import React from 'react';
+import type { FriendCategories } from '../../../domain/types';
 import { loc } from '../../../steam/localization';
 import { getCachedPersona } from '../../library/social/personas';
 
