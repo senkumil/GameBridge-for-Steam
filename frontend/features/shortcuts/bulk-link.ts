@@ -19,6 +19,9 @@ export interface BulkLinkGameOutcome { title: string; shortcutAppId: number; ste
 export interface BulkLinkAllResult { total: number; matched: number; linked: number; queued: number; skipped: number; failed: number; outcomes: BulkLinkGameOutcome[]; }
 export type BulkLinkProgressPhase = 'analyzing' | 'linking';
 
+import { isPriorityShortcut } from './link-job-priority';
+export { setPriorityShortcut as prioritizeBulkLinkShortcut } from './link-job-priority';
+
 function reliableBulkCandidate(context: ShortcutDetectionContext, candidates: ShortcutDetectionCandidate[], rememberedAppId = ''): ShortcutDetectionCandidate | null {
 	const top = candidates[0];
 	if (!top || (top.reasons || []).includes('non_game_result')) return null;
@@ -86,6 +89,10 @@ export async function linkAllShortcutsExperimental(
 			if (linked.ok) {
 				result.linked += 1; cancelPendingLinkJobs(item.record.id, item.context.title);
 				result.outcomes.push({ title: item.record.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid, status: 'linked', resourceRepairQueued: false });
+				const sid = resolvedShortcutId || item.record.id;
+				const title = item.candidate.name || item.record.title;
+				void spoofArtwork(sid, item.candidate.appid, title, false).catch(error => backendLog(`Bulk artwork failed for ${sid}: ${error}`));
+				void applyOfficialShortcutIcon(sid, item.candidate.appid, false).catch(error => backendLog(`Bulk icon failed for ${sid}: ${error}`));
 			} else if (!['invalid_appid', 'refusing_to_modify_native_steam_app'].includes(String(linked.error || ''))) {
 				enqueueBulkRetry(item, false, resolvedShortcutId); result.queued += 1;
 				result.outcomes.push({ title: item.record.title, shortcutAppId: item.record.id, steamAppId: item.candidate.appid, status: 'queued', reason: String(linked.error || 'setup_incomplete') });
@@ -143,19 +150,20 @@ export async function linkAllShortcutsExperimental(
 	if (Object.keys(optimisticSet).length > 0) {
 		void updateMappingsChecked({ set: optimisticSet });
 	}
-	await Promise.all(matchedItems.sort((left, right) => left.index - right.index).map(async item => {
+	matchedItems.sort((left, right) => {
+		const isLeftPriority = isPriorityShortcut(left.record.id, left.record.title) || isPriorityShortcut(Number(left.candidate.appid));
+		const isRightPriority = isPriorityShortcut(right.record.id, right.record.title) || isPriorityShortcut(Number(right.candidate.appid));
+		if (isLeftPriority && !isRightPriority) return -1;
+		if (!isLeftPriority && isRightPriority) return 1;
+		return left.index - right.index;
+	});
+	await Promise.all(matchedItems.map(async item => {
 		if (signal?.aborted) return;
 		await linkItem(item);
 	}));
-	// Resource traffic starts only after every mapping has committed, so slow
-	// artwork providers cannot delay detection or the remaining identity writes.
 	for (const item of matchedItems) {
 		const steamAppId = item.candidate.appid;
-		const shortcutId = item.record.id;
-		const title = item.candidate.name || item.record.title;
 		void warmShortcutLinkResources(steamAppId).catch(error => backendLog(`Bulk warm-up failed for ${steamAppId}: ${error}`));
-		void spoofArtwork(shortcutId, steamAppId, title, false).catch(error => backendLog(`Bulk artwork failed for ${shortcutId}: ${error}`));
-		void applyOfficialShortcutIcon(shortcutId, steamAppId, false).catch(error => backendLog(`Bulk icon failed for ${shortcutId}: ${error}`));
 	}
 	void syncMissingArtworkForMappedShortcuts();
 	const recordOrder = new Map(records.map((record, index) => [record.id, index]));

@@ -184,6 +184,23 @@ export function hasPendingLinkJob(shortcutAppId: number | null | undefined, titl
 			|| (!!normalizedTitle && job.title.trim().toLowerCase() === normalizedTitle)));
 }
 
+/** Fast-track a specific shortcut job to the front of the background link queue. */
+export function prioritizePendingLinkJob(shortcutAppId: number | null | undefined, title = ''): boolean {
+	const jobs = readJobs();
+	const normalizedTitle = String(title || '').trim().toLowerCase();
+	const targetIndex = jobs.findIndex(job =>
+		job.status !== 'failed'
+		&& ((shortcutAppId != null && job.shortcutAppId === shortcutAppId)
+			|| (!!normalizedTitle && job.title.trim().toLowerCase() === normalizedTitle)));
+	if (targetIndex < 0) return false;
+	const [job] = jobs.splice(targetIndex, 1);
+	job.nextAttemptAt = 0;
+	jobs.unshift(job);
+	writeJobs(jobs);
+	scheduleNextRetry(jobs);
+	void processPendingLinkJobs(shortcutRuntimeHost().getMainWindowDoc());
+	return true;
+}
 
 /** Cancel durable link work for a shortcut before an explicit unlink. */
 export function cancelPendingLinkJobs(shortcutAppId?: number | null, title = ''): number {

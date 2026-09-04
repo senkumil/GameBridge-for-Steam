@@ -21,6 +21,7 @@ import { getCachedFriendData, getFriendData } from '../library/social/friends';
 import { cachePersona, hasCachedPersona } from '../library/social/personas';
 import { fetchFriendPersonasBackend } from '../../api/backend';
 import { linkedShortcutPortrait } from '../library/artwork';
+import { prioritizeShortcutLinkingAndArtwork } from '../library/artwork-sync';
 import { openBigPictureCardModal, openBigPictureNewsModal, openBigPictureCommunityModal } from './news-modal';
 import {
 	renderActivity,
@@ -623,6 +624,7 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		return;
 	}
 	backendLog(`Big Picture details: mapped shortcut detected "${shortcut.title}" (id=${shortcut.id}, steamAppId=${shortcut.steamAppId})`);
+	prioritizeShortcutLinkingAndArtwork(shortcut.id, shortcut.steamAppId, shortcut.title);
 	const language = String(steamLanguageSync() || 'english').toLowerCase();
 	let state = detailStates.get(doc);
 	const changedShortcut = !state

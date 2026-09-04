@@ -30,16 +30,14 @@ import { beginLibraryRouteExit, finishLibraryRouteExit, hasOwnedLibraryChrome, i
 import { cancelLinkedShortcutLoading, completeLinkedShortcutLoading, LINKED_LOADING_SIDEBAR_ID, stageLinkedShortcutLoading } from './loading-stage';
 import { hydrateLinkedRouteResources } from './hydration';
 import { reprioritizeLinkedGame } from './prefetch';
+import { prioritizeShortcutLinkingAndArtwork } from './artwork-sync';
 import { tryRedirectUnownedMappedGame } from './sidebar-cleanup';
 export { findNonSteamNotice, hideNoticeQuick } from './notice';
 export interface LibraryRuntimeHost {
 	getMainWindowDoc: () => Document | null;
 }
-let configuredLibraryRuntimeHost: LibraryRuntimeHost | null = null;
-let currentInjectedDocument: Document | null = null;
-let currentInjectedAppId: string | null = null;
-let currentInjectedShortcutAppId: string | null = null;
-let injectionGeneration = 0;
+let configuredLibraryRuntimeHost: LibraryRuntimeHost | null = null, currentInjectedDocument: Document | null = null;
+let currentInjectedAppId: string | null = null, currentInjectedShortcutAppId: string | null = null, injectionGeneration = 0;
 let injectionInFlight: { doc: Document; steamAppId: string; generation: number } | null = null;
 const navigationController = new LibraryNavigationController();
 const linkedRenderRetryState = new WeakMap<Document, { generation: number; attempts: number }>();
@@ -310,6 +308,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 			for (let i = 0; i < gameTitle.length; i++) hash = (hash * 31 + gameTitle.charCodeAt(i)) >>> 0;
 			visibleShortcutId = 2147483648 + (hash % 1000000000);
 		}
+		prioritizeShortcutLinkingAndArtwork(Number(visibleShortcutId), '', gameTitle);
 		void injectPlaytimeFallbackStats(doc, visibleShortcutId, gameTitle, undefined,
 			() => isUsableLibraryDocument(doc) && !doc.getElementById(GDL_INJECTED) && (isShortcutDismissed(visibleShortcutId) || !findMappingForShortcut(String(visibleShortcutId), gameTitle)));
 		if (currentInjectedDocument === doc) clearCurrentInjection(doc);
@@ -318,6 +317,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		return;
 	}
 	reprioritizeLinkedGame(steamAppId);
+	if (activeShortcutAppId) prioritizeShortcutLinkingAndArtwork(Number(activeShortcutAppId), steamAppId, gameTitle);
 
 	stageLinkedShortcutLoading(doc, notice, navigationGeneration);
 
