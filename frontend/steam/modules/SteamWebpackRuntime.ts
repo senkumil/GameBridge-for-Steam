@@ -1,4 +1,5 @@
 import { backendLog } from '../../api/backend';
+import { modules as millenniumWebpackModules } from '@steambrew/client';
 
 export interface WebpackModuleEntry {
 	id: string | number;
@@ -13,7 +14,7 @@ class SteamWebpackRuntime {
 	private boundWindows = new WeakSet<Window>();
 
 	public captureRuntime(doc?: Document): boolean {
-		if (this.inspected && this.requireFn) return true;
+		if (this.inspected && (this.requireFn || this.moduleCache.size > 0)) return true;
 
 		const now = Date.now();
 		if (now - this.lastProbeTime < 500) {
@@ -54,6 +55,23 @@ class SteamWebpackRuntime {
 			} catch (error) {
 				backendLog(`[NGL][Webpack] Error during Webpack probe: ${error}`);
 			}
+		}
+
+		// Millennium's client bridge captures Steam's Webpack registry before the
+		// plugin starts. Big Picture popup windows do not always re-expose the
+		// webpackChunksteamui global, but the already-captured native exports are
+		// still valid and are the authoritative fallback for that window.
+		try {
+			for (const [id, exports] of millenniumWebpackModules) {
+				if (exports) this.moduleCache.set(id, exports);
+			}
+			if (this.moduleCache.size > 0) {
+				this.inspected = true;
+				backendLog(`[NGL][Webpack] Reused Millennium module registry with ${this.moduleCache.size} native modules`);
+				return true;
+			}
+		} catch (error) {
+			backendLog(`[NGL][Webpack] Millennium module registry unavailable: ${error}`);
 		}
 
 		return false;

@@ -5,6 +5,7 @@ import { ensureCloudStatus, removeCloudStatus } from './cloud-status';
 import { clearNativeInfoSessionState, ensureNativeInfoButton, ensureNativeInfoPanel, removeNativeInfoButton, removeNativeInfoPanel } from './info-panel';
 import { steamNativeGameInfo as buildSteamNativeGameInfo } from './native-game-model';
 import { ensureNativeGameInfoStyles } from './styles';
+import { restoreLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
 
 let currentNativeGameInfo: NativeGameInfo | null = null;
 
@@ -43,6 +44,7 @@ export function ensureNativeGameChrome(doc: Document, model: NativeGameInfo): vo
 }
 
 export function removeNativeGameChrome(doc: Document, clearModel = false): void {
+	restoreLinkedPlaybarVisibility(doc);
 	removeCloudStatus(doc);
 	removeNativeInfoButton(doc);
 	removeNativeInfoPanel(doc);

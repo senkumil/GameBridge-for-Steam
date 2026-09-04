@@ -1061,17 +1061,20 @@ try {
 	}
 
 	const completeNativeSections = [
-		'PanelSection', 'PanelSectionRow', 'Field', 'Focusable', 'DialogButton', 'ProgressBar',
+		'resolveNativeAppDetailsClasses', 'NativeCarousel', 'classes.ActivityEvent',
+		'classes.Achievement', 'classes.Community', 'classes.GameInfo',
+		'PartnerEventMediumImage_Container', 'AchievementCarouselItem', 'CommunityItem', 'AppGameInfoContainer',
 		'function ActivityTab(', 'function StuffTab(', 'function CommunityTab(', 'function InfoTab(',
-		'function FriendsSection(', 'function AchievementsSection(',
+		'function AchievementsSection(', 'function TradingCardsSection(', 'function MediaSection(',
 		"AppDetails_SectionTitle_TradingCards", "AppDetails_SectionTitle_Media", "AppDetails_SectionTitle_GameNotes",
 	].every(token => nativeDetailsSource.includes(token));
-	if (!completeNativeSections) {
+	const settingsPrimitives = ['PanelSection', 'PanelSectionRow', 'Field'].some(token => nativeDetailsSource.includes(token));
+	if (!completeNativeSections || settingsPrimitives) {
 		fail(bigPictureNativeDetails,
-			'linked Big Picture details must populate every native tab and subsection with Steam Webpack components');
+			'linked Big Picture details must use Steam AppDetails components, never settings-form rows');
 	}
 
-	const forbiddenCustomPresentation = /(?:createElement\(['"]style['"]|\bstyle\s*=\s*[{"']|cssText|className\s*=|\.innerHTML\s*=)/;
+	const forbiddenCustomPresentation = /(?:createElement\(['"]style['"]|\bstyle\s*=\s*[{"']|cssText|className\s*=\s*["']|\.innerHTML\s*=)/;
 	if (forbiddenCustomPresentation.test(nativeDetailsSource)
 		|| forbiddenCustomPresentation.test(panelMountSource)
 		|| detailsSource.includes("from './styles'")

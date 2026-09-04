@@ -39,6 +39,10 @@ const playtimeLua = read('backend/lib/playtime.lua');
 const detectionRules = read('backend/lib/shortcut_detection_rules.lua');
 const uiModeService = read('frontend/steam/ui/SteamUIModeService.ts');
 const gamepadNav = read('frontend/features/big-picture/gamepad-nav.ts');
+const playbarVisibility = read('frontend/steam/playbar-visibility.ts');
+const bigPictureDetails = read('frontend/features/big-picture/NativeBigPictureDetails.tsx');
+const bigPictureNativeResolver = read('frontend/steam/gamepad/components/AppDetailsNativeClasses.ts');
+const webpackRuntime = read('frontend/steam/modules/SteamWebpackRuntime.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -151,6 +155,19 @@ assert(uiModeService.includes('this.nativeModeListenerRegistered ? 5000 : 2500')
 assert(gamepadNav.includes('setTimeout(pollGamepads, 50)') && !gamepadNav.includes('requestAnimationFrame(pollGamepads)'), 'Big Picture controller navigation uses a bounded 20 Hz poll instead of a permanent display-rate loop');
 assert(prefetch.includes('MAX_PREFETCH_APP_IDS = 6'), 'background linked-game prefetch is bounded');
 assert(gameData.includes('MAX_GAME_DATA_CACHE_KEYS = 64'), 'in-memory game-data cache is bounded more tightly');
+
+// Steam's 884 logical-pixel NarrowRightPanel breakpoint can trigger early at
+// desktop scaling levels and hide linked cloud/achievement copy despite room.
+assert(playbarVisibility.includes('classes.HideWhenNarrow') && playbarVisibility.includes('classes.MiniAchievements'), 'linked play-bar preserves cloud and achievement copy across the middle splitter breakpoint');
+assert(playbarVisibility.includes("setProperty('display', 'flex', 'important')") && playbarVisibility.includes('restoreLinkedPlaybarVisibility'), 'linked-only visibility override outranks NarrowRightPanel and restores native display state on route exit');
+assert(bigPictureDetails.includes('docWindow?.SP_REACTDOM') && bigPictureDetails.includes('(window as any)?.SP_REACTDOM'), 'Big Picture mounts native sections through Millennium\'s canonical ReactDOM host');
+assert(webpackRuntime.includes('modules as millenniumWebpackModules') && webpackRuntime.includes('for (const [id, exports] of millenniumWebpackModules)'), 'Big Picture reuses the captured Millennium Webpack registry when its popup hides the chunk global');
+assert(!bigPictureDetails.includes('PanelSection') && !bigPictureDetails.includes('PanelSectionRow') && !bigPictureDetails.includes('Field as NativeComponent'), 'Big Picture no longer renders settings-form rows inside game details');
+assert(bigPictureNativeResolver.includes("ActivityEvent: ['Event'") && bigPictureNativeResolver.includes("Achievement: ['AchievementCarouselItem'") && bigPictureNativeResolver.includes("Community: ['CommunityContentContainer'"), 'Big Picture resolves Steam-owned AppDetails presentation families by semantic class signatures');
+assert(bigPictureDetails.includes('event?.PartnerEventMediumImage_Container') && bigPictureDetails.includes('native?.CommunityItem') && !bigPictureDetails.includes('components.ActivityFeed'), 'activity and community use provider-independent native Steam composition');
+assert(bigPictureNativeResolver.includes('prototype.ScrollToElement') && bigPictureNativeResolver.includes('prototype.UpdateScrollArrows') && bigPictureDetails.includes('resolveNativeSummaryCarousel()') && !bigPictureDetails.includes('import { Carousel,'), 'Big Picture uses Steam AppDetails BoxCarousel instead of the unrelated Millennium carousel');
+assert(bigPictureDetails.includes('event?.AppActivityDay') && bigPictureDetails.includes('event?.AppActivityDate') && bigPictureDetails.includes('event?.PartnerEventTextOnly_Icon'), 'Big Picture activity uses native dated groups and patch-event chrome');
+assert(bigPictureDetails.includes('width="100%"') && bigPictureDetails.includes('<NativeFeature') && bigPictureNativeResolver.includes("Feature: ['Container', 'Icon'"), 'Big Picture game information constrains box art and renders Steam-native feature rows');
 
 
 // Removed/delisted artwork must not pay for a long chain of speculative Steam

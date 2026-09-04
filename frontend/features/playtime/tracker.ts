@@ -14,6 +14,7 @@ import {
 	elementsWithCssModuleClass,
 	NATIVE_UI_BLUEPRINT_KEYS,
 } from '../../steam/native-dom';
+import { preserveLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
 import { getMappedShortcuts, getShortcutAppById } from '../../steam/shortcuts';
 import { clearPlaytimeStatsCache, fetchPlaytimeStats, getInstantPlaytimeStats, type PlaytimeStats } from './service';
 import { formatLastPlayedDate, formatPlaytimeMinutes } from './format';
@@ -247,6 +248,7 @@ function applyPlaytimeStatsToDom(
 		}
 		container.replaceChildren(...nativeStats);
 	}
+	preserveLinkedPlaybarVisibility(doc);
 	return true;
 }
 

@@ -10,6 +10,7 @@ import {
 	isRenderedElement,
 	NATIVE_UI_BLUEPRINT_KEYS,
 } from '../../steam/native-dom';
+import { preserveLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
 import { localAchievementPercent } from './format';
 import { openLocalAchievementsModal } from './modal';
 
@@ -137,5 +138,6 @@ export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData
 		stats.appendChild(wrapper);
 		lastStat = wrapper;
 	}
+	preserveLinkedPlaybarVisibility(doc);
 	return lastStat;
 }

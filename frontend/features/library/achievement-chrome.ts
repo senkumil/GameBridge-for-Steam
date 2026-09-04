@@ -10,6 +10,7 @@ import {
 	isRenderedElement,
 	NATIVE_UI_BLUEPRINT_KEYS,
 } from '../../steam/native-dom';
+import { preserveLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
 import {
 	ensureLocalPlaybarStat,
 	findVisibleTextElement,
@@ -59,6 +60,7 @@ async function injectPlayBarAchievements(doc: Document, context: LinkedAchieveme
 			|| null;
 		if (fill) fill.style.width = `${pct}%`;
 		applyNativePlaybarTypography(existing, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
+		preserveLinkedPlaybarVisibility(doc);
 		return;
 	}
 
@@ -102,6 +104,7 @@ async function injectPlayBarAchievements(doc: Document, context: LinkedAchieveme
 		if (achievementGraphic?.parentElement) achievementGraphic.parentElement.dataset.gdlUiIconHost = 'playbar-achievements';
 		applyNativePlaybarTypography(nativeBlueprint, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
 		statsRow.insertBefore(nativeBlueprint, statRoot.nextSibling);
+		preserveLinkedPlaybarVisibility(doc);
 		return;
 	}
 
@@ -122,6 +125,7 @@ async function injectPlayBarAchievements(doc: Document, context: LinkedAchieveme
 	stat.addEventListener('click', open);
 	applyNativePlaybarTypography(stat, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
 	statsRow.insertBefore(stat, statRoot.nextSibling);
+	preserveLinkedPlaybarVisibility(doc);
 }
 
 /** Resolves local read-only progress first, then the Steam client cache. */
