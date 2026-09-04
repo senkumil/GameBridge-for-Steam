@@ -75,14 +75,17 @@ local function candidates(body, slot)
     for _, item in ipairs(items) do
         if #result >= 10 then break end
         local url = type(item) == "table" and trusted_image_url(item.url) or ""
-        local width, height = tonumber(item.width), tonumber(item.height)
+        local width = tonumber(item.width)
+        local height = tonumber(item.height)
+        local ratio = width and height and height > 0 and (width / height) or nil
+        local orientation_ok = slot ~= "portrait" or not width or not height or height > width
         local spec = QUALITY[slot]
         local quality_ok = not spec or (width and height
             and (not spec.min_width or width >= spec.min_width)
             and (not spec.min_height or height >= spec.min_height)
             and (not spec.min_ratio or (ratio and ratio >= spec.min_ratio))
             and (not spec.max_ratio or (ratio and ratio <= spec.max_ratio)))
-        if url ~= "" and safe(item) and quality_ok then
+        if url ~= "" and safe(item) and orientation_ok and quality_ok then
             local thumb = trusted_image_url(item.thumb or item.thumbnail)
             table.insert(result, {
                 id = item.id, url = url, thumb = thumb ~= "" and thumb or url,

@@ -32,12 +32,9 @@ local library_assets_cache, LIBRARY_ASSETS_CACHE_LIMIT, LIBRARY_ASSETS_CACHE_SEC
 -- English/default asset. If none exists, return an empty value and let the
 -- frontend use its safe fallback instead of displaying the wrong language.
 local LIBRARY_LANGUAGE_ALIASES = {
-    spanish = { "latam" },
-    latam = { "spanish" },
-    portuguese = { "brazilian" },
-    brazilian = { "portuguese" },
-    schinese = { "tchinese" },
-    tchinese = { "schinese" },
+    spanish = { "latam" }, latam = { "spanish" },
+    portuguese = { "brazilian" }, brazilian = { "portuguese" },
+    schinese = { "tchinese" }, tchinese = { "schinese" },
 }
 local function localized_library_asset(bucket, language)
     if type(bucket) == "string" then
@@ -212,7 +209,7 @@ function M.fetch_library_assets(request_json)
             and tonumber(cached_value.install_size_algorithm) == 3
             and tonumber(cached_value.shortcut_icon_algorithm) == 3
             and tonumber(cached_value.library_asset_language_algorithm) == 2
-            and tonumber(cached_value.library_metadata_algorithm) == 1
+            and tonumber(cached_value.library_metadata_algorithm) == 2
             and tonumber(cached_value.historical_metadata_algorithm) == 1 then
             return cached_entry.value
         end
@@ -330,10 +327,29 @@ function M.fetch_library_assets(request_json)
         controller_support = tostring(common.controller_support or ""),
         category_ids = category_ids,
         release_date = release_date,
-        library_metadata_algorithm = 1,
-        logo_position = (type(assets) == "table" and type(assets.logo_position) == "table" and assets.logo_position)
-            or (type(common.library_assets) == "table" and type(common.library_assets.logo_position) == "table" and common.library_assets.logo_position)
-            or nil,
+        library_metadata_algorithm = 2, -- library_metadata_algorithm = 1
+        logo_position = (function()
+            if type(assets) == "table" and type(assets.library_logo) == "table"
+                and type(assets.library_logo.logo_position) == "table" then
+                return assets.library_logo.logo_position
+            elseif type(assets) == "table" and type(assets.logo_position) == "table" then
+                return assets.logo_position
+            elseif type(common.library_assets) == "table" and type(common.library_assets.logo_position) == "table" then
+                return common.library_assets.logo_position
+            end
+            return nil
+        end)(),
+        logo_position_source = (function()
+            if type(assets) == "table" and type(assets.library_logo) == "table"
+                and type(assets.library_logo.logo_position) == "table" then
+                return "library_assets_full.library_logo"
+            elseif type(assets) == "table" and type(assets.logo_position) == "table" then
+                return "library_assets_full"
+            elseif type(common.library_assets) == "table" and type(common.library_assets.logo_position) == "table" then
+                return "library_assets"
+            end
+            return "none"
+        end)(),
         install_size = official_install_size_bytes(type(body.data[appid]) == "table" and body.data[appid].depots or nil),
         install_size_algorithm = 3,
     }
@@ -421,14 +437,12 @@ local function steamgriddb_asset_is_safe(item)
             text = tostring(value or "")
         end
         text = text:lower()
-        if text:find("nsfw", 1, true) or text:find("meme", 1, true)
-            or text:find("humor", 1, true) or text:find("joke", 1, true)
-            or text:find("epilepsy", 1, true)
+        if text:find("nsfw", 1, true) or text:find("meme", 1, true) or text:find("humor", 1, true)
+            or text:find("joke", 1, true) or text:find("epilepsy", 1, true)
             or text:find("nintendo switch", 1, true) or text:find("switch banner", 1, true)
             or text:find("switch grid", 1, true) or text:find("switch cover", 1, true)
             or text:find("playstation banner", 1, true) or text:find("ps5 banner", 1, true)
-            or text:find("ps4 banner", 1, true) or text:find("xbox banner", 1, true)
-            or text:find("console banner", 1, true) then
+            or text:find("ps4 banner", 1, true) or text:find("xbox banner", 1, true) or text:find("console banner", 1, true) then
             return false
         end
     end
@@ -507,19 +521,8 @@ end
 -- Rank within SteamGridDB's score-ordered, safety-filtered candidates. This is
 -- deliberately small and data-only: automatic selection remains the default.
 local STEAMGRIDDB_CURATED_RANKS = {
-    ["221430"] = {
-        portrait_rank = 2,
-        portrait_id = 152317,
-        hero_id = 38076,
-        logo_id = 119351,
-        wide_rank = 1,
-    },
-    ["237110"] = {
-        portrait_id = 46421,
-        hero_id = 12459,
-        logo_id = 9592,
-        wide_id = 177942,
-    },
+    ["221430"] = { portrait_rank = 2, portrait_id = 152317, hero_id = 38076, logo_id = 119351, wide_rank = 1 },
+    ["237110"] = { portrait_id = 46421, hero_id = 12459, logo_id = 9592, wide_id = 177942 },
 }
 
 function M.fetch_community_artwork(request_json)
@@ -593,8 +596,20 @@ function M.fetch_community_artwork(request_json)
     })
     local wide = steamgriddb_first_asset(resource_request("grids/game/" .. id .. "?dimensions=920x430"), {
         ratio = 920 / 430, width = 920, height = 430,
-        min_width = 800, min_height = 350, min_ratio = 1.8, max_ratio = 2.65, rank = curated.wide_rank,
+        min_width = 800, min_height = 350, min_ratio = 1.8, max_ratio = 2.65,
+        id = curated.wide_id, rank = curated.wide_rank,
     })
+    if appid == "221430" or appid == "237110" then
+        logger:info(string.format(
+            "[NGL][SteamGridDB][Diag] appid=%s game_id=%s portrait=%s hero=%s logo=%s wide=%s curated_wide_id=%s",
+            appid, id,
+            portrait.id and tostring(portrait.id) or "none",
+            hero.id and tostring(hero.id) or "none",
+            logo.id and tostring(logo.id) or "none",
+            wide.id and tostring(wide.id) or "none",
+            tostring(curated.wide_id or "none")
+        ))
+    end
     local result = {
         found = true,
         source = "steamgriddb",
@@ -797,23 +812,16 @@ function M.save_shortcut_icon(request_json)
 end
 
 local function remove_grid_files(grid_dir, sid, suffixes)
-    local removed = 0
-    if not fs.exists(grid_dir) then return 0 end
-    local sid_str = tostring(sid or ""):match("(%d+)") or ""
-    if sid_str == "" then return 0 end
+    local removed, sid_str = 0, tostring(sid or ""):match("(%d+)") or ""
+    if not fs.exists(grid_dir) or sid_str == "" then return 0 end
     local sid_num = tonumber(sid_str)
     local signed_sid = (sid_num and sid_num >= 2147483648) and tostring(math.floor(sid_num - 4294967296)) or nil
-    local ids = { sid_str }
-    if signed_sid then table.insert(ids, signed_sid) end
-
+    local ids = signed_sid and { sid_str, signed_sid } or { sid_str }
     for _, id in ipairs(ids) do
         for _, suffix in ipairs(suffixes) do
             for _, ext in ipairs({ "jpg", "jpeg", "png", "tga", "ico" }) do
                 local filepath = fs.join(grid_dir, id .. suffix .. "." .. ext)
-                if fs.exists(filepath) then
-                    os.remove(filepath)
-                    removed = removed + 1
-                end
+                if fs.exists(filepath) then os.remove(filepath); removed = removed + 1 end
             end
         end
     end
@@ -824,18 +832,14 @@ function M.clear_artwork_except_icon(shortcut_app_id)
 	icon_files.invalidate(shortcut_app_id)
     local account_id = get_active_account_id()
     if not account_id then return cjson.encode({ error = "Could not determine active Steam user" }) end
-    local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
-    local removed = remove_grid_files(grid_dir, tostring(shortcut_app_id), { "p", "_hero", "_logo", "" })
-    return cjson.encode({ removed = removed, icon_preserved = true })
+    return cjson.encode({ removed = remove_grid_files(fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid"), tostring(shortcut_app_id), { "p", "_hero", "_logo", "" }), icon_preserved = true })
 end
 
 function M.clear_artwork(shortcut_app_id)
 	icon_files.invalidate(shortcut_app_id)
     local account_id = get_active_account_id()
     if not account_id then return cjson.encode({ error = "Could not determine active Steam user" }) end
-    local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
-    local removed = remove_grid_files(grid_dir, tostring(shortcut_app_id), { "p", "_hero", "_logo", "_icon", "" })
-    return cjson.encode({ removed = removed })
+    return cjson.encode({ removed = remove_grid_files(fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid"), tostring(shortcut_app_id), { "p", "_hero", "_logo", "_icon", "" }) })
 end
 
 function M.clear_all_linked_artworks()
@@ -843,13 +847,11 @@ function M.clear_all_linked_artworks()
     if not account_id then return cjson.encode({ error = "Could not determine active Steam user" }) end
     local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
     if not fs.exists(grid_dir) then return cjson.encode({ removed = 0, ok = true }) end
-    local mappings_path = config.mappings_file_path()
-    local removed = 0
+    local mappings_path, removed = config.mappings_file_path(), 0
     if fs.exists(mappings_path) then
         local f = io.open(mappings_path, "r")
         if f then
-            local raw = f:read("*a")
-            f:close()
+            local raw = f:read("*a"); f:close()
             local ok, parsed = pcall(cjson.decode, raw)
             if ok and type(parsed) == "table" then
                 for shortcut_id, _ in pairs(parsed) do
@@ -866,6 +868,30 @@ function M.clear_all_linked_artworks()
     end
     logger:info("Dismount cleanup: removed " .. tostring(removed) .. " grid files for linked shortcuts.")
     return cjson.encode({ ok = true, removed = removed })
+end
+
+function M.read_custom_logo_position(request_param)
+    local shortcut_app_id = nil
+    if type(request_param) == "table" then
+        shortcut_app_id = tostring(request_param.shortcut_app_id or request_param.appid or ""):match("(%d+)")
+    elseif type(request_param) == "string" then
+        local ok, parsed = pcall(cjson.decode, request_param)
+        shortcut_app_id = (ok and type(parsed) == "table" and tostring(parsed.shortcut_app_id or parsed.appid or "")) or request_param
+        shortcut_app_id = tostring(shortcut_app_id):match("(%d+)")
+    else
+        shortcut_app_id = tostring(request_param or ""):match("(%d+)")
+    end
+
+    local account_id = get_active_account_id()
+    if not shortcut_app_id or not account_id then return cjson.encode({ ok = false, error = not shortcut_app_id and "invalid_shortcut_app_id" or "active_user_not_found" }) end
+    local json_path = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid", shortcut_app_id .. ".json")
+    if not fs.exists(json_path) then return cjson.encode({ ok = true, exists = false }) end
+    local f = io.open(json_path, "r")
+    if not f then return cjson.encode({ ok = false, error = "open_failed" }) end
+    local raw = f:read("*a"); f:close()
+    local ok, parsed = pcall(cjson.decode, raw)
+    if not ok or type(parsed) ~= "table" then return cjson.encode({ ok = false, error = "parse_failed" }) end
+    return cjson.encode({ ok = true, exists = true, version = parsed.nVersion, logo_position = parsed.logoPosition })
 end
 
 return M

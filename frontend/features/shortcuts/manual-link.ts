@@ -164,7 +164,9 @@ export function showShortcutManualLinkModal(
 	for (const candidate of candidates) {
 		const option = targetDoc.createElement('option');
 		option.value = candidate.appid;
-		option.textContent = `${candidate.name} — AppID ${candidate.appid} (${Math.round(candidate.score)}%)`;
+		const confBadge = candidate.confidence === 'exact' || candidate.confidence === 'high' ? ' [HIGH]' : (candidate.confidence === 'medium' ? ' [MEDIUM]' : ' [LOW]');
+		const isCollision = candidate.identity_collision ? ' ⚠️' : '';
+		option.textContent = `${candidate.name} — AppID ${candidate.appid} (${Math.round(candidate.score)}%)${confBadge}${isCollision}`;
 		select.appendChild(option);
 	}
 	if (candidates.length) {
@@ -200,7 +202,8 @@ export function showShortcutManualLinkModal(
 			return;
 		}
 		name.textContent = candidate.name;
-		appId.textContent = `Steam AppID ${candidate.appid} · ${Math.round(candidate.score)}%`;
+		const confLabel = candidate.confidence === 'exact' || candidate.confidence === 'high' ? 'HIGH' : (candidate.confidence === 'medium' ? 'MEDIUM' : 'LOW');
+		appId.textContent = `Steam AppID ${candidate.appid} · ${Math.round(candidate.score)}% · [${confLabel}]`;
 		if (!candidate.direct && candidate.score < REVIEW_CONFIDENCE_THRESHOLD && candidate.executable_match) {
 			status.textContent = gdlText(
 				'auto_link_executable_verified_review',

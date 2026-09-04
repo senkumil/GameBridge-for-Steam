@@ -20,6 +20,25 @@ export type ResourceStatus =
 	| 'FAILED'
 	| 'UNAVAILABLE';
 
+export type SteamAppLifecycle =
+	| 'active'
+	| 'delisted'
+	| 'removed_historical'
+	| 'unknown';
+
+export type ResourceCapability = 'available' | 'probe_on_demand' | 'unavailable';
+
+export interface SteamAppCapabilities {
+	store: ResourceCapability;
+	portrait: ResourceCapability;
+	hero: ResourceCapability;
+	logo: ResourceCapability;
+	wide: ResourceCapability;
+	news: ResourceCapability;
+	community: ResourceCapability;
+	achievements: ResourceCapability;
+}
+
 export interface ResourceManifestItem {
 	slot: ResourceSlot;
 	status: ResourceStatus;

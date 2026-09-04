@@ -361,14 +361,9 @@ end
 
 local function detection_direct_result(appid, source, request, language, launcher, generic_launcher, fallback_name)
     local data = detection_fetch_appdetails(appid, language)
-    -- Local steam_appid.txt files are common in launchers and modified game
-    -- folders. They are a useful hint, not proof: only promote one to an
-    -- exact result after an official Steam source confirms that it is an app.
-    -- Retired titles have no appdetails response, but their signed appinfo
-    -- record and launch configuration remain available through Steam.
     local validation_source = "steam_store_appdetails"
+    local appinfo = detection_fetch_appinfo(appid)
     if not data or not data.name or data.name == "" then
-        local appinfo = detection_fetch_appinfo(appid)
         local common = type(appinfo) == "table" and type(appinfo.common) == "table" and appinfo.common or nil
         if common and common.name and tostring(common.name) ~= "" then
             local app_type = tostring(common.type or ""):lower()
@@ -397,16 +392,52 @@ local function detection_direct_result(appid, source, request, language, launche
     local name = data.name
     local image = data.header_image or data.tiny_image
         or ("https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/" .. tostring(appid) .. "/header.jpg")
+
+    local official_exes = {}
+    if type(appinfo) == "table" and type(appinfo.config) == "table" and type(appinfo.config.launch) == "table" then
+        detection_collect_launch_executables(appinfo.config.launch, official_exes, 0)
+    end
+    local target_exe = request.game_exe_path ~= "" and request.game_exe_path or request.exe_path
+    local actual_exe = detection_basename(target_exe):lower()
+    local exe_matched = actual_exe ~= "" and official_exes[actual_exe] == true
+
+    local comp = detection_text.compare_title_identities(request.title or fallback_name or "", name)
+    local title_matched = comp.base_matches and not comp.is_collision and not comp.year_mismatch and not comp.sequel_mismatch
+
+    local is_direct_proof = false
+    local score = 100
+    local confidence = "exact"
+    local evidence_tier = "proof"
+    local reasons = { source, validation_source }
+
+    if source == "launch_argument" or source == "steam_appmanifest" then
+        is_direct_proof = true
+        evidence_tier = "proof"
+    elseif exe_matched then
+        is_direct_proof = true
+        evidence_tier = "proof"
+        table.insert(reasons, "official_executable_match")
+    elseif title_matched then
+        is_direct_proof = true
+        evidence_tier = "strong"
+        table.insert(reasons, "official_title_exact")
+    end
+
+    if not is_direct_proof then
+        return nil
+    end
+
     return {
         candidates = {{
             appid = tostring(appid),
             name = tostring(name),
             image = tostring(image),
-            score = 100,
-            confidence = "exact",
-            reasons = { source, validation_source },
-            executable_match = true,
+            score = score,
+            confidence = confidence,
+            reasons = reasons,
+            executable_match = exe_matched,
             direct = true,
+            evidence_tier = evidence_tier,
         }},
         launcher_detected = launcher,
         generic_launcher = generic_launcher,
@@ -672,136 +703,121 @@ function M.detect_game_candidates(request_json)
 
     local candidates = {}
     for _, candidate in pairs(by_id) do
+        local comp = detection_text.compare_title_identities(request.title or title_cleaned, candidate.name)
         local title_similarity = math.max(
+            comp.base_similarity,
             detection_similarity(title_cleaned, candidate.name),
             detection_similarity(title_hint, candidate.name),
             detection_compact_similarity(title_cleaned, candidate.name),
-            detection_compact_similarity(title_hint, candidate.name),
             detection_acronym_similarity(title_cleaned, candidate.name)
         )
-        local folder_similarity = 0
-        local folder_exact = false
-        local normalized_candidate_name = detection_normalize(candidate.name)
+        local folder_similarity, folder_exact = 0, false
+        local norm_cand = detection_normalize(candidate.name)
         for _, folder in ipairs(folders) do
-            local normalized_folder = detection_normalize(folder)
-            if normalized_folder ~= "" and normalized_folder == normalized_candidate_name then
-                folder_exact = true
-            end
-            folder_similarity = math.max(
-                folder_similarity,
-                detection_similarity(folder, candidate.name),
-                detection_compact_similarity(folder, candidate.name),
-                detection_acronym_similarity(folder, candidate.name)
-            )
+            local norm_f = detection_normalize(folder)
+            if norm_f ~= "" and norm_f == norm_cand then folder_exact = true end
+            folder_similarity = math.max(folder_similarity, detection_similarity(folder, candidate.name), detection_compact_similarity(folder, candidate.name))
         end
         local exe_similarity = DETECTION_GENERIC_EXES[exe_normalized] and 0
-            or math.max(
-                detection_similarity(exe_stem, candidate.name),
-                detection_compact_similarity(exe_stem, candidate.name),
-                detection_acronym_similarity(exe_stem, candidate.name)
-            )
-        local normalized_title = detection_normalize(title_cleaned)
-        local normalized_name = detection_normalize(candidate.name)
-        local score = title_similarity * 58 + folder_similarity * 24 + exe_similarity * 10
-        score = score + math.max(0, 9 - math.min(candidate.query_rank, 9))
-        if candidate.alias_hint then
-            -- A maintained alias is a search hint only.  It must never suppress
-            -- stronger identity evidence such as an exact official title.
-            score = score + 7
-            detection_add_reason(candidate, "franchise_alias")
-        end
-        if normalized_title ~= "" and normalized_title == normalized_name then
-            if is_short_title then
-                if folder_exact or folder_similarity >= 0.7 or candidate.executable_match then
-                    score = math.max(score, 90)
-                    detection_add_reason(candidate, "title_exact")
-                else
-                    score = math.min(score, 60)
-                    detection_add_reason(candidate, "short_title_unverified")
-                end
+            or math.max(detection_similarity(exe_stem, candidate.name), detection_compact_similarity(exe_stem, candidate.name))
+
+        local norm_title = detection_normalize(title_cleaned)
+        local score = title_similarity * 55 + folder_similarity * 20 + exe_similarity * 15 + math.max(0, 8 - math.min(candidate.query_rank, 8))
+
+        if candidate.alias_hint then score = score + 5; detection_add_reason(candidate, "franchise_alias") end
+        if candidate.from_appid_file then score = score + 10; detection_add_reason(candidate, "steam_appid_file") end
+
+        if norm_title ~= "" and norm_title == norm_cand then
+            if is_short_title and not folder_exact and folder_similarity < 0.7 and not candidate.executable_match then
+                score = math.min(score, 60); detection_add_reason(candidate, "short_title_unverified")
             else
-                score = math.max(score, 90)
-                detection_add_reason(candidate, "title_exact")
+                score = math.max(score, 90); detection_add_reason(candidate, "title_exact")
             end
-        elseif title_similarity >= 0.65 then
-            detection_add_reason(candidate, "title_similar")
-        end
-        if folder_exact then
-            score = math.max(score, 95)
-            detection_add_reason(candidate, "folder_exact")
-        elseif folder_similarity >= 0.65 then
-            detection_add_reason(candidate, "folder_match")
-        end
+        elseif title_similarity >= 0.65 then detection_add_reason(candidate, "title_similar") end
+
+        if folder_exact then score = score + 18; detection_add_reason(candidate, "folder_exact")
+        elseif folder_similarity >= 0.65 then score = score + 8; detection_add_reason(candidate, "folder_match") end
+
         if clean_pe_product and candidate.name then
-            local pe_sim = math.max(
-                detection_similarity(clean_pe_product, candidate.name),
-                detection_compact_similarity(clean_pe_product, candidate.name)
-            )
+            local pe_sim = math.max(detection_similarity(clean_pe_product, candidate.name), detection_compact_similarity(clean_pe_product, candidate.name))
             if pe_sim >= 0.82 or detection_normalize(candidate.name) == detection_normalize(clean_pe_product) then
-                score = math.max(score, 96)
-                candidate.executable_match = true
-                detection_add_reason(candidate, "pe_product_exact")
-            elseif pe_sim >= 0.60 then
-                score = score + 18
-                detection_add_reason(candidate, "pe_product_match")
-            end
+                score = math.max(score, 94); detection_add_reason(candidate, "pe_product_exact")
+            elseif pe_sim >= 0.60 then score = score + 16; detection_add_reason(candidate, "pe_product_match") end
         end
+
+        if comp.year_match then score = score + 20; detection_add_reason(candidate, "year_match")
+        elseif comp.year_mismatch then score = score - 25; detection_add_reason(candidate, "year_mismatch") end
+        if comp.sequel_match then score = score + 15; detection_add_reason(candidate, "sequel_match")
+        elseif comp.sequel_mismatch then score = score - 35; detection_add_reason(candidate, "sequel_mismatch") end
+        if comp.remake_mismatch then score = score - 30; detection_add_reason(candidate, "remake_mismatch") end
+        if comp.is_collision then candidate.identity_collision = true; detection_add_reason(candidate, "identity_collision") end
+
         if exe_similarity >= 0.75 then detection_add_reason(candidate, "executable_name_match") end
-        if exe_stem ~= raw_exe_stem and exe_similarity >= 0.55 then
-            detection_add_reason(candidate, "shipping_executable_match")
-        end
+        if exe_stem ~= raw_exe_stem and exe_similarity >= 0.55 then detection_add_reason(candidate, "shipping_executable_match") end
         detection_add_reason(candidate, "steam_store_search")
         candidate.score = score
         table.insert(candidates, candidate)
     end
 
-    table.sort(candidates, function(a, b)
-        if a.score == b.score then return tonumber(a.appid) < tonumber(b.appid) end
-        return a.score > b.score
-    end)
+    table.sort(candidates, function(a, b) return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score end)
 
-    -- Validate the leading candidates even when a title appears strong. Store
-    -- search alone is not enough to distinguish editions or short aliases.
     local actual_exe = exe_basename:lower()
-    local validation_limit = math.min(#candidates, 3)
-    for index = 1, validation_limit do
-        local candidate = candidates[index]
-        if not candidate.direct then
-            local appinfo = detection_fetch_appinfo(candidate.appid)
-            if type(appinfo) == "table" then
-                local common = type(appinfo.common) == "table" and appinfo.common or {}
-                if common.name and tostring(common.name) ~= "" then
-                    candidate.name = tostring(common.name)
-                    if detection_normalize(candidate.name) == detection_normalize(title_cleaned) then
-                        candidate.score = math.max(candidate.score, 92)
-                        detection_add_reason(candidate, "official_title_exact")
-                    end
-                end
-                if (candidate.image == "" or candidate.image:find("header.jpg")) and common.header_image then
-                    candidate.image = tostring(common.header_image)
-                end
-                local app_type = tostring(common.type or candidate.item_type or ""):lower()
-                if app_type ~= "" and app_type ~= "game" and app_type ~= "app" then
-                    candidate.score = candidate.score - 30
-                    detection_add_reason(candidate, "non_game_result")
-                end
-                local official_exes = {}
-                if type(appinfo.config) == "table" and type(appinfo.config.launch) == "table" then
-                    detection_collect_launch_executables(appinfo.config.launch, official_exes, 0)
-                end
-                if actual_exe ~= "" and official_exes[actual_exe] then
-                    candidate.executable_match = true
-                    candidate.score = candidate.score + 28
-                    detection_add_reason(candidate, "official_executable_match")
-                end
+    local function validate_candidate(candidate)
+        if candidate.direct or candidate._validated then return end
+        candidate._validated = true
+        local appinfo = detection_fetch_appinfo(candidate.appid)
+        if type(appinfo) ~= "table" then return end
+        local common = type(appinfo.common) == "table" and appinfo.common or {}
+        if common.name and tostring(common.name) ~= "" then
+            candidate.name = tostring(common.name)
+            local norm_name = detection_normalize(candidate.name)
+            if norm_name == detection_normalize(title_cleaned) or norm_name == detection_normalize(request.title) then
+                candidate.score = math.max(candidate.score, 92); detection_add_reason(candidate, "official_title_exact")
             end
+            local comp = detection_text.compare_title_identities(request.title, candidate.name)
+            if comp.year_match and not (candidate._reason_set and candidate._reason_set["year_match"]) then
+                candidate.score = candidate.score + 18; detection_add_reason(candidate, "year_match")
+            elseif comp.year_mismatch and not (candidate._reason_set and candidate._reason_set["year_mismatch"]) then
+                candidate.score = candidate.score - 25; detection_add_reason(candidate, "year_mismatch")
+            end
+            if comp.sequel_mismatch and not (candidate._reason_set and candidate._reason_set["sequel_mismatch"]) then
+                candidate.score = candidate.score - 35; detection_add_reason(candidate, "sequel_mismatch")
+            end
+            if comp.remake_mismatch and not (candidate._reason_set and candidate._reason_set["remake_mismatch"]) then
+                candidate.score = candidate.score - 30; detection_add_reason(candidate, "remake_mismatch")
+            end
+            if comp.is_collision then candidate.identity_collision = true; detection_add_reason(candidate, "identity_collision") end
+        end
+        if (candidate.image == "" or candidate.image:find("header.jpg")) and common.header_image then
+            candidate.image = tostring(common.header_image)
+        end
+        local app_type = tostring(common.type or candidate.item_type or ""):lower()
+        if app_type ~= "" and app_type ~= "game" and app_type ~= "app" then
+            candidate.score = candidate.score - 40; detection_add_reason(candidate, "non_game_result")
+        end
+        local official_exes = {}
+        if type(appinfo.config) == "table" and type(appinfo.config.launch) == "table" then
+            detection_collect_launch_executables(appinfo.config.launch, official_exes, 0)
+        end
+        if actual_exe ~= "" and official_exes[actual_exe] then
+            candidate.executable_match = true; candidate.score = candidate.score + 28
+            detection_add_reason(candidate, "official_executable_match")
         end
     end
 
-    -- Clamp every result, not only the three that were validated.  Otherwise
-    -- an unvalidated fourth result can retain a score above 99 and jump ahead
-    -- during the second sort.  Alias-only candidates are deliberately capped
-    -- so ambiguous names such as re4 cannot tie a verified executable.
+    for i = 1, math.min(#candidates, 3) do validate_candidate(candidates[i]) end
+    table.sort(candidates, function(a, b)
+        if a.executable_match ~= b.executable_match then return a.executable_match end
+        return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score
+    end)
+
+    local top, second = candidates[1], candidates[2]
+    local top_gap = (top and second) and (top.score - second.score) or 100
+    local has_proof = top and (top.direct or top.executable_match)
+    if (not has_proof or top_gap < 15 or (top and top.identity_collision) or (top and top._reason_set and top._reason_set["non_game_result"])) and #candidates > 3 then
+        for i = 4, math.min(#candidates, 6) do validate_candidate(candidates[i]) end
+    end
+
     for _, candidate in ipairs(candidates) do
         local official_title_exact = candidate._reason_set and candidate._reason_set["official_title_exact"] == true
         if candidate.alias_hint and not candidate.executable_match and not official_title_exact then
@@ -813,32 +829,35 @@ function M.detect_game_candidates(request_json)
 
     table.sort(candidates, function(a, b)
         if a.executable_match ~= b.executable_match then return a.executable_match end
-        if a.score == b.score then return tonumber(a.appid) < tonumber(b.appid) end
-        return a.score > b.score
+        return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score
     end)
 
     local output = {}
     for index = 1, math.min(#candidates, 6) do
         local candidate = candidates[index]
-		-- Alias candidates begin with a generic header URL. Resolve the first
-		-- visible candidates through appdetails before exposing them to the
-		-- modal, because modern Store headers are versioned by hash.
-		if candidate.alias_hint or (candidate.image or ""):find("header.jpg") then
-			local official = detection_fetch_appdetails(candidate.appid, language)
-			if type(official) == "table" then
-				if official.name and tostring(official.name) ~= "" then
-					candidate.name = tostring(official.name)
-				end
-				local official_image = official.header_image or official.capsule_image or official.capsule_imagev5
-				if official_image and tostring(official_image) ~= "" then
-					candidate.image = tostring(official_image)
-				end
-			end
-		end
-        candidate._reason_set = nil
+        if candidate.alias_hint or (candidate.image or ""):find("header.jpg") then
+            local official = detection_fetch_appdetails(candidate.appid, language)
+            if type(official) == "table" then
+                if official.name and tostring(official.name) ~= "" then candidate.name = tostring(official.name) end
+                local off_img = official.header_image or official.capsule_image or official.capsule_imagev5
+                if off_img and tostring(off_img) ~= "" then candidate.image = tostring(off_img) end
+            end
+        end
+        local rset = candidate._reason_set or {}
+        candidate._reason_set = nil; candidate._validated = nil
         local runner_up = candidates[index == 1 and 2 or 1]
         candidate.score_gap = runner_up and math.max(0, candidate.score - runner_up.score) or candidate.score
-        candidate.ambiguous = index == 1 and runner_up ~= nil and candidate.score_gap < 12
+        candidate.ambiguous = (index == 1 and runner_up ~= nil and candidate.score_gap < 12) or candidate.identity_collision == true
+        if candidate.direct or candidate.executable_match then candidate.evidence_tier = "proof"
+        elseif candidate.score >= 88 or rset["pe_product_exact"] or rset["official_title_exact"] then candidate.evidence_tier = "strong"
+        elseif candidate.score >= 65 then candidate.evidence_tier = "supporting"
+        else candidate.evidence_tier = "hint" end
+
+        local neg = {}
+        for _, r in ipairs({ "year_mismatch", "sequel_mismatch", "remake_mismatch", "edition_mismatch", "non_game_result", "alias_requires_confirmation" }) do
+            if rset[r] then table.insert(neg, r) end
+        end
+        candidate.negative_reasons = neg
         if candidate.score >= 90 and not candidate.ambiguous then candidate.confidence = "high"
         elseif candidate.score >= 70 then candidate.confidence = "medium"
         else candidate.confidence = "low" end

@@ -293,10 +293,29 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			return;
 		}
 		candidatePreview.style.display = 'block';
+		const confLabel = selected.confidence === 'exact' || selected.confidence === 'high' ? 'HIGH' : (selected.confidence === 'medium' ? 'MEDIUM' : 'LOW');
+		const reasonsList = (selected.reasons || []).slice(0, 2).map(r => {
+			if (r === 'official_executable_match') return gdlText('reason_exe_match', 'Executable match');
+			if (r === 'pe_product_exact') return gdlText('reason_pe_match', 'PE metadata');
+			if (r === 'official_title_exact' || r === 'title_exact') return gdlText('reason_title_match', 'Exact title');
+			if (r === 'year_match') return gdlText('reason_year_match', 'Matching year');
+			return '';
+		}).filter(Boolean);
+		const warningList = (selected.negative_reasons || []).map(r => {
+			if (r === 'year_mismatch') return gdlText('warn_year', 'Different year');
+			if (r === 'sequel_mismatch') return gdlText('warn_sequel', 'Different sequel');
+			if (r === 'remake_mismatch') return gdlText('warn_remake', 'Different version');
+			return '';
+		}).filter(Boolean);
+		const metaSummary = [...reasonsList, ...warningList].join(' · ');
 		candidatePreview.innerHTML = `
 			<div class="gdl-candidate-primary">
 				<img class="gdl-auto-candidate-primary-image" alt="" />
-				<div style="min-width:0;"><div class="gdl-candidate-name">${escapeHtml(selected.name)}</div><div class="gdl-candidate-meta">Steam AppID ${escapeHtml(selected.appid)}${selected.score ? ` · ${Math.round(selected.score)}%` : ''}</div></div>
+				<div style="min-width:0;">
+					<div class="gdl-candidate-name">${escapeHtml(selected.name)}</div>
+					<div class="gdl-candidate-meta">Steam AppID ${escapeHtml(selected.appid)}${selected.score ? ` · ${Math.round(selected.score)}%` : ''} · <strong>[${escapeHtml(confLabel)}]</strong></div>
+					${metaSummary ? `<div style="font-size:11px;color:#8f98a0;margin-top:2px;">${escapeHtml(metaSummary)}</div>` : ''}
+				</div>
 			</div>
 			<div class="gdl-auto-candidate-strip"></div>`;
 		const bindImageFallback = (img: HTMLImageElement, appId: string) => {
@@ -568,20 +587,34 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				const option = doc.createElement('option');
 				option.value = candidate.appid;
 				const scoreText = candidate.score ? ` (${Math.round(candidate.score)}%)` : '';
-				option.textContent = `${candidate.name} — AppID ${candidate.appid}${scoreText}`;
+				const confBadge = candidate.confidence === 'exact' || candidate.confidence === 'high' ? ' [HIGH]' : (candidate.confidence === 'medium' ? ' [MEDIUM]' : ' [LOW]');
+				const isRemembered = candidate.appid === rememberedAppId ? ' • ' + gdlText('remembered_tag', 'Previously linked') : '';
+				const isCollision = candidate.identity_collision ? ' ⚠️' : '';
+				option.textContent = `${candidate.name} — AppID ${candidate.appid}${scoreText}${confBadge}${isRemembered}${isCollision}`;
 				options.push(option);
 			}
 			autoSelect.replaceChildren(...options);
 			autoTitle.style.display = 'none';
 			autoTitle.textContent = '';
-			if (!currentLinked && viable.length > 0 && !rememberedAppId) {
-				input.value = viable[0].appid;
-				autoSelect.value = viable[0].appid;
-			} else if (currentLinked || rememberedAppId) {
-				const preferredAppId = currentLinked || rememberedAppId;
-				input.value = preferredAppId;
-				autoSelect.value = preferredAppId;
+			let defaultSelected = viable[0].appid;
+			if (currentLinked) {
+				defaultSelected = currentLinked;
+			} else if (rememberedAppId) {
+				const remCand = viable.find(c => c.appid === rememberedAppId);
+				if (remCand) {
+					const topHasProof = viable[0].executable_match || (viable[0].reasons || []).includes('official_executable_match');
+					const remHasProof = remCand.executable_match || (remCand.reasons || []).includes('official_executable_match');
+					if (topHasProof && !remHasProof) {
+						defaultSelected = viable[0].appid;
+					} else if (viable[0].score - remCand.score >= 15 || remCand.score < 70) {
+						defaultSelected = viable[0].appid;
+					} else {
+						defaultSelected = remCand.appid;
+					}
+				}
 			}
+			input.value = defaultSelected;
+			autoSelect.value = defaultSelected;
 			renderCandidatePreview(viable, autoSelect.value || viable[0].appid);
 			updateButtonStates();
 			achievementBinding?.sync(autoSelect.value || viable[0]?.appid);

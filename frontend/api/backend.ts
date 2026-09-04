@@ -172,3 +172,5 @@ export const restoreSteamAppIdFileBackend = callable<[{ request_json: string }],
 export const suppressAdminPromptBackend = callable<[{ exe_path: string }], boolean>('suppress_admin_prompt');
 
 export const factoryResetBackend = callable<[{ request_json: string }], string>('factory_reset');
+
+export const readCustomLogoPositionBackend = callable<[{ shortcut_app_id: string }], string>('read_custom_logo_position');

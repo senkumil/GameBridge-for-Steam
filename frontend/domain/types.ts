@@ -107,8 +107,15 @@ export interface ShortcutDetectionCandidate {
 	score: number;
 	confidence: 'exact' | 'high' | 'medium' | 'low';
 	reasons?: string[];
+	negative_reasons?: string[];
+	warnings?: string[];
 	executable_match?: boolean;
 	direct?: boolean;
+	evidence_tier?: 'proof' | 'strong' | 'supporting' | 'hint';
+	score_gap?: number;
+	ambiguous?: boolean;
+	identity_collision?: boolean;
+	remembered?: boolean;
 }
 
 export interface ShortcutDetectionResult {

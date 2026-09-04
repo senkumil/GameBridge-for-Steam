@@ -9,7 +9,7 @@ import {
 	saveShortcutManifest,
 	type ResourceStatus,
 } from './transaction';
-import { spoofArtwork, applyOfficialShortcutIcon } from '../library/artwork';
+import { spoofArtwork, applyOfficialShortcutIcon, isLogoPositionVerified } from '../library/artwork';
 import { shortcutRuntimeHost } from './host';
 import { isLegacyGame } from '../library/legacy-games';
 import { getGameData } from '../../core/game-data';
@@ -57,7 +57,9 @@ export async function reconcileShortcut(
 	const manifest = readShortcutManifest(shortcutAppId, steamAppId)
 		|| createInitialManifest(shortcutAppId, steamAppId);
 
+	const logoUnverified = !isLogoPositionVerified(shortcutAppId, steamAppId);
 	const needsRepair =
+		logoUnverified ||
 		slotNeedsRepair(manifest.portrait.status) ||
 		slotNeedsRepair(manifest.hero.status) ||
 		slotNeedsRepair(manifest.logo.status) ||
@@ -74,7 +76,7 @@ export async function reconcileShortcut(
 		return hasUnavailable ? 'unavailable' : 'healthy';
 	}
 
-	backendLog(`[NGL][Reconciler] Healing shortcut ${shortcutAppId} -> ${steamAppId}`);
+	backendLog(`[NGL][Reconciler] Healing shortcut ${shortcutAppId} -> ${steamAppId} (logoUnverified=${logoUnverified})`);
 
 	try {
 		const data = await getGameData(steamAppId).catch((): null => null);
@@ -85,7 +87,7 @@ export async function reconcileShortcut(
 		}
 
 		const [artResult, iconResult] = await Promise.all([
-			spoofArtwork(shortcutAppId, steamAppId, data?.name || '', false, legacy).catch((): null => null),
+			spoofArtwork(shortcutAppId, steamAppId, data?.name || '', logoUnverified, legacy).catch((): null => null),
 			applyOfficialShortcutIcon(shortcutAppId, steamAppId, false).catch((): boolean => false),
 		]);
 

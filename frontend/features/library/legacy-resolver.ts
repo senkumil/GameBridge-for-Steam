@@ -72,7 +72,6 @@ export async function buildSlotResolvers(
 	// Hero (1): 1920x620 wide hero banners.
 	// REJECT header.jpg from candidateUrls!
 	const heroUrls: string[] = [
-		community?.hero || '',
 		modern?.hero || '',
 		`${sharedBase}/library_hero_2x.jpg`,
 		`${sharedBase}/library_hero.jpg`,
@@ -81,11 +80,11 @@ export async function buildSlotResolvers(
 		`${cfBase}/library_hero.jpg`,
 		`${cfCdnBase}/library_hero.jpg`,
 		`${cdnBase}/library_hero.jpg`,
+		community?.hero || '',
 	].filter(Boolean);
 
 	// Logo (2): Transparent game logos
 	const logoUrls: string[] = [
-		community?.logo || '',
 		modern?.logo || '',
 		modern?.legacy_logo || '',
 		`${sharedBase}/logo.png`,
@@ -93,11 +92,11 @@ export async function buildSlotResolvers(
 		`${cfBase}/logo.png`,
 		`${cfCdnBase}/logo.png`,
 		`${cdnBase}/logo.png`,
+		community?.logo || '',
 	].filter(Boolean);
 
 	// Wide Capsule (3): 460x215 or 920x430 horizontal header / capsule
 	const wideUrls: string[] = [
-		community?.wide || '',
 		modern?.wide || '',
 		modern?.legacy_header || '',
 		`${sharedBase}/header.jpg`,
@@ -107,6 +106,7 @@ export async function buildSlotResolvers(
 		`${cdnBase}/header.jpg`,
 		`${sharedBase}/capsule_616x353.jpg`,
 		`${fastlyBase}/capsule_616x353.jpg`,
+		community?.wide || '',
 	].filter(Boolean);
 
 	const slots: SlotResolution[] = [

@@ -16,6 +16,7 @@ export interface SteamLibraryAssets {
 	shortcut_icon_extension?: string;
 	shortcut_icons?: { url?: string; extension?: string }[];
 	logo_position?: unknown;
+	logo_position_source?: string;
 	install_size?: number;
 	franchise?: string;
 	developers?: string[];

@@ -68,7 +68,22 @@ end
 
 function M.clean_game_title(value)
     local text = tostring(value or "")
-    text = text:gsub("%b[]", " "):gsub("%b()", " ")
+    local function filter_enclosure(content)
+        local inner = content:sub(2, -2)
+        local year = inner:match("(%d%d%d%d)")
+        local y_num = tonumber(year)
+        if y_num and y_num >= 1980 and y_num <= 2040 then
+            return " " .. inner .. " "
+        end
+        local lower = inner:lower()
+        if lower:match("remake") or lower:match("remaster") or lower:match("edition")
+            or lower:match("goty") or lower:match("cut") or lower:match("part")
+            or lower:match("chapter") or lower:match("episode") then
+            return " " .. inner .. " "
+        end
+        return " "
+    end
+    text = text:gsub("%b[]", filter_enclosure):gsub("%b()", filter_enclosure)
     text = text:gsub("[vV]%d+%.%d+[%d%.]*", " ")
     text = text:gsub("[%s_%-]+[Bb][Uu][Ii][Ll][Dd][%s_%-]+%d+", " ")
     text = text:gsub("[%s_%-]+[Ww][Ii][Nn]%d%d[%s_%-]+[Ss][Hh][Ii][Pp][Pp][Ii][Nn][Gg]", " ")
@@ -77,6 +92,132 @@ function M.clean_game_title(value)
     text = text:gsub("[%s_%-]+[Xx]86$", ""):gsub("[%s_%-]+[Dd][Xx]11$", "")
     text = text:gsub("[%s_%-]+[Dd][Xx]12$", ""):gsub("[%s_%-]+[Rr][Ee][Pp][Aa][Cc][Kk]", " ")
     return M.trim(text)
+end
+
+function M.extract_year(value)
+    local text = tostring(value or "")
+    for year_str in text:gmatch("(%d%d%d%d)") do
+        local y = tonumber(year_str)
+        if y and y >= 1980 and y <= 2040 then return y end
+    end
+    return nil
+end
+
+local ROMAN_NUMERALS = {
+    viii = 8, vii = 7, vi = 6, iv = 4, v = 5, iii = 3, ii = 2, ix = 9, x = 10,
+    xi = 11, xii = 12, xiii = 13, xiv = 14, xv = 15, i = 1,
+}
+
+function M.extract_sequel_number(value)
+    local norm = " " .. M.normalize(value) .. " "
+    -- Look for explicit indicators like part/chapter/episode or roman/arabic numerals
+    local part_num = norm:match("%s+part%s+(%d+)%s+")
+        or norm:match("%s+chapter%s+(%d+)%s+")
+        or norm:match("%s+episode%s+(%d+)%s+")
+    if part_num then return tonumber(part_num) end
+    for roman, num in pairs({ viii = 8, vii = 7, vi = 6, iv = 4, v = 5, iii = 3, ii = 2, ix = 9, x = 10, xi = 11, xii = 12 }) do
+        if norm:match("%s+" .. roman .. "%s+") then return num end
+    end
+    -- Look for trailing or isolated single/double digit numbers (not 4-digit years)
+    for num_str in norm:gmatch("%s+(%d+)%s+") do
+        local n = tonumber(num_str)
+        if n and n >= 2 and n <= 25 then return n end
+    end
+    return nil
+end
+
+local QUALIFIER_PATTERNS = {
+    remake = { is_remake = true },
+    reimagined = { is_remake = true },
+    remaster = { is_remaster = true },
+    remastered = { is_remaster = true },
+    hd = { is_remaster = true },
+    enhanced = { is_remaster = true },
+    complete = { edition = "complete" },
+    definitive = { edition = "definitive" },
+    ultimate = { edition = "ultimate" },
+    deluxe = { edition = "deluxe" },
+    goty = { edition = "goty" },
+    directors = { edition = "directors_cut" },
+    anniversary = { edition = "anniversary" },
+}
+
+function M.extract_qualifiers(value)
+    local norm = " " .. M.normalize(value) .. " "
+    local res = { is_remake = false, is_remaster = false, edition = nil }
+    for token, props in pairs(QUALIFIER_PATTERNS) do
+        if norm:match("%s+" .. token .. "%s+") then
+            if props.is_remake then res.is_remake = true end
+            if props.is_remaster then res.is_remaster = true end
+            if props.edition and not res.edition then res.edition = props.edition end
+        end
+    end
+    if norm:match("game%s+of%s+the%s+year") then res.edition = "goty" end
+    if norm:match("director%s*s%s+cut") then res.edition = "directors_cut" end
+    return res
+end
+
+function M.parse_title_identity(value)
+    local raw = tostring(value or "")
+    local cleaned = M.clean_game_title(raw)
+    local year = M.extract_year(raw)
+    local sequel = M.extract_sequel_number(raw)
+    local quals = M.extract_qualifiers(raw)
+    local base = M.normalize(cleaned)
+    if year then base = base:gsub("%s+" .. tostring(year) .. "%s+", " ") end
+    for roman in pairs(ROMAN_NUMERALS) do
+        base = base:gsub("%s+" .. roman .. "%s+", " ")
+    end
+    base = base:gsub("%s+%d+%s+", " ")
+    for word in pairs(QUALIFIER_PATTERNS) do
+        base = base:gsub("%s+" .. word .. "%s+", " ")
+    end
+    base = base:gsub("%s+edition%s+", " ")
+        :gsub("%s+game%s+of%s+the%s+year%s+", " ")
+        :gsub("%s+cut%s+", " ")
+        :gsub("%s+part%s+", " ")
+    base = M.trim(base:gsub("%s+", " "))
+    return {
+        raw = raw,
+        cleaned = cleaned,
+        base_title = base,
+        year = year,
+        sequel = sequel,
+        is_remake = quals.is_remake,
+        is_remaster = quals.is_remaster,
+        edition = quals.edition,
+    }
+end
+
+function M.compare_title_identities(shortcut_title, candidate_title)
+    local a = M.parse_title_identity(shortcut_title)
+    local b = M.parse_title_identity(candidate_title)
+    local base_sim = (a.base_title ~= "" and b.base_title ~= "")
+        and math.max(M.similarity(a.base_title, b.base_title), M.compact_similarity(a.base_title, b.base_title))
+        or 0
+    local base_matches = (a.base_title ~= "" and a.base_title == b.base_title) or base_sim >= 0.82
+    local sequel_match = (a.sequel ~= nil and b.sequel ~= nil and a.sequel == b.sequel)
+    local sequel_mismatch = (a.sequel ~= nil and b.sequel ~= nil and a.sequel ~= b.sequel)
+    local year_match = (a.year ~= nil and b.year ~= nil and a.year == b.year)
+    local year_mismatch = (a.year ~= nil and b.year ~= nil and a.year ~= b.year)
+        or (a.year ~= nil and b.year == nil and (b.is_remake or a.year < 2015))
+    local remake_mismatch = (a.is_remake and not b.is_remake and b.year and b.year < 2015)
+        or (not a.is_remake and b.is_remake and a.year and a.year < 2015)
+    local edition_mismatch = (a.edition ~= nil and b.edition ~= nil and a.edition ~= b.edition)
+    local is_collision = base_matches and (sequel_mismatch or year_mismatch or remake_mismatch or edition_mismatch)
+    return {
+        shortcut_id = a,
+        candidate_id = b,
+        base_matches = base_matches,
+        base_similarity = base_sim,
+        sequel_match = sequel_match,
+        sequel_mismatch = sequel_mismatch,
+        year_match = year_match,
+        year_mismatch = year_mismatch,
+        remake_mismatch = remake_mismatch,
+        edition_mismatch = edition_mismatch,
+        is_collision = is_collision,
+    }
 end
 
 local function replace_roman(value)

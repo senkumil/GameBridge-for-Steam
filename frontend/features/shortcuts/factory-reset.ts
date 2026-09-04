@@ -8,6 +8,7 @@ import { cancelAllPendingLinkJobs, pausePendingLinkJobs, resumePendingLinkJobs }
 import { pauseLinkedGamePrefetch, resumeLinkedGamePrefetch } from '../library/prefetch';
 import { clearAllDismissedShortcuts } from './dismissed';
 import { clearAllLinkHistory } from './link-history';
+import { clearShortcutDetectionCache } from './detection';
 import {
 	bumpFactoryResetEpoch,
 	clearAllShortcutManifests,
@@ -55,8 +56,9 @@ export async function performFactoryReset(options: FactoryResetOptions): Promise
 		const manifestsCleared = clearAllShortcutManifests();
 		backendLog(`[NGL][FactoryReset] Cleared ${manifestsCleared} resource manifests`);
 
-		// 6. Clear library asset caches & managed artwork markers
+		// 6. Clear library asset caches, detection cache & managed artwork markers
 		clearLibraryAssetCaches();
+		clearShortcutDetectionCache();
 		const markersCleared = clearAllManagedArtworkMarkers();
 		backendLog(`[NGL][FactoryReset] Cleared ${markersCleared} managed artwork markers and caches`);
 

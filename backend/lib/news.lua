@@ -51,27 +51,41 @@ function M.fetch_news(steam_app_id, language)
         return cjson.encode({ items = {}, available = false, source = "steam_news_web_api" })
     end
 
+    local source = "steam_news_web_api"
+    local transient_error = false
     -- Older/retired apps often classify their only historical entries as
     -- steam_release (or another legacy feed). The filtered request therefore
     -- returns an empty array even though ISteamNews still has real records.
     -- Retry once without feeds before declaring the legacy news feed empty.
     if #news == 0 then
         local fallback_url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid="
-            .. steam_app_id .. "&count=50&maxlength=600&format=json"
+            .. appid .. "&count=50&maxlength=600&format=json"
         if lang ~= "" then fallback_url = fallback_url .. "&l=" .. lang end
         local fallback_ok_http, fallback_res = pcall(http.get, fallback_url, {
-            headers = { ["Accept"] = "application/json" },
+            headers = { ["Accept"] = "application/json", ["User-Agent"] = USER_AGENT },
             timeout = 15
         })
         if fallback_ok_http and fallback_res and fallback_res.status == 200 then
             local fallback_ok, fallback_body = pcall(cjson.decode, fallback_res.body)
             local fallback_news = fallback_ok and fallback_body and fallback_body.appnews
                 and fallback_body.appnews.newsitems
-            if type(fallback_news) == "table" and #fallback_news > 0 then news = fallback_news end
+            if type(fallback_news) == "table" and #fallback_news > 0 then
+                news = fallback_news
+                source = "steam_old_news"
+            end
+        elseif not fallback_ok_http or not fallback_res or fallback_res.status >= 500 then
+            transient_error = true
         end
     end
 
-    return cjson.encode({ items = news, available = #news > 0, source = "steam_news_web_api" })
+    local is_available = #news > 0
+    return cjson.encode({
+        items = news,
+        available = is_available,
+        unavailable = not is_available and not transient_error,
+        transient_error = transient_error,
+        source = source,
+    })
 end
 
 -- ── Partner events (the native news source: cover images, event types,

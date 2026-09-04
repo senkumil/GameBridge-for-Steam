@@ -1,8 +1,8 @@
 import type { ShortcutDetectionCandidate, ShortcutDetectionContext } from '../../domain/types';
 import { backendLog } from '../../api/backend';
-import { normalizeTitle } from '../../core/text';
 import { shortcutRuntimeHost } from './host';
 import { buildShortcutDetectionContext, detectShortcutCandidates } from './detection';
+import { evaluateBulkCandidate } from './bulk-policy';
 import { cancelPendingLinkJobs, enqueueLinkJob, pausePendingLinkJobs, resumePendingLinkJobs } from './link-job-queue';
 import { linkShortcutToSteam, warmShortcutLinkResources } from './linking';
 import { undismissShortcut } from './dismissed';
@@ -51,25 +51,13 @@ function reliableBulkCandidate(
 	candidates: ShortcutDetectionCandidate[],
 	rememberedAppId = '',
 ): ShortcutDetectionCandidate | null {
-	const top = candidates[0];
-	if (!top || (top.reasons || []).includes('non_game_result')) return null;
-	const remembered = rememberedAppId && candidates.find(candidate => candidate.appid === rememberedAppId
-		&& !(candidate.reasons || []).includes('non_game_result') && candidate.score >= 50);
-	if (remembered) return remembered;
-	const second = candidates[1];
-	const margin = top.score - (second?.score ?? 0);
-	const exactTitle = normalizeTitle(context.title) !== '' && normalizeTitle(context.title) === normalizeTitle(top.name);
-	const secondExactTitle = Boolean(second && normalizeTitle(context.title) !== '' && normalizeTitle(context.title) === normalizeTitle(second.name));
-	const reasons = new Set((top.reasons || []).map(String));
-	if (top.direct && top.score >= 70) return top;
-	if (top.confidence === 'exact' && top.score >= 75) return top;
-	if (exactTitle && !secondExactTitle && top.score >= 65) return top;
-	if (reasons.has('folder_exact') && top.score >= 75) return top;
-	if (top.executable_match && top.score >= 70) return top;
-	if (reasons.has('franchise_alias') && top.score >= 75) return top;
-	if (top.confidence === 'high' && top.score >= 80) return top;
-	if (top.score >= 84) return top;
-	return top.score >= 75 && margin >= 5 && !reasons.has('alias_requires_confirmation') ? top : null;
+	const evalResult = evaluateBulkCandidate(context, candidates, rememberedAppId);
+	if (evalResult.safe && evalResult.candidate) {
+		backendLog(`[NGL][Detection] Bulk decision for "${context.title}": SAFE -> AppID ${evalResult.candidate.appid} (${evalResult.reason})`);
+		return evalResult.candidate;
+	}
+	backendLog(`[NGL][Detection] Bulk decision for "${context.title}": SKIP (${evalResult.reason})`);
+	return null;
 }
 
 function enqueueBulkRetry(

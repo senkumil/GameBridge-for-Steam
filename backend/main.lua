@@ -112,6 +112,7 @@ function save_shortcut_artwork(request_json) return artwork.save_shortcut_artwor
 function clear_artwork(shortcut_app_id) return artwork.clear_artwork(shortcut_app_id) end
 function clear_artwork_except_icon(shortcut_app_id) return artwork.clear_artwork_except_icon(shortcut_app_id) end
 function clear_all_linked_artworks() return artwork.clear_all_linked_artworks() end
+function read_custom_logo_position(request_json) return artwork.read_custom_logo_position(request_json) end
 function get_achievement_base_path() return achievements.get_achievement_base_path() end
 function set_achievement_base_path(path) return achievements.set_achievement_base_path(path) end
 function get_game_achievement_path(request_json) return achievements.get_game_achievement_path(request_json) end

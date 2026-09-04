@@ -141,12 +141,14 @@ export async function buildShortcutDetectionContext(
 	};
 }
 
+export const DETECTION_MODEL_VERSION = 'v5';
+
 export async function detectShortcutCandidates(context: ShortcutDetectionContext): Promise<ShortcutDetectionResult | null> {
 	const language = await getSteamLanguage().catch((): string => 'english');
 	const titleHint = detectionTitleHint(context.title);
 	const matchingExePath = context.recommendedExePath || context.exePath;
 	const matchingStartDir = context.recommendedStartDir || context.startDir;
-	const cacheKey = [context.shortcutAppId, titleHint, context.exePath, context.startDir, matchingExePath, matchingStartDir, context.launchOptions, language].join('|');
+	const cacheKey = [DETECTION_MODEL_VERSION, context.shortcutAppId, titleHint, context.exePath, context.startDir, matchingExePath, matchingStartDir, context.launchOptions, language].join('|');
 	try {
 		return await detectionCache.get(cacheKey, async (): Promise<ShortcutDetectionResult | null> => {
 		try {
@@ -174,8 +176,14 @@ export async function detectShortcutCandidates(context: ShortcutDetectionContext
 						score: Math.max(0, Math.min(100, Number(candidate.score) || 0)),
 						confidence: ['exact', 'high', 'medium', 'low'].includes(candidate.confidence) ? candidate.confidence : 'low',
 						reasons: Array.isArray(candidate.reasons) ? candidate.reasons.map(String) : [],
+						negative_reasons: Array.isArray(candidate.negative_reasons) ? candidate.negative_reasons.map(String) : [],
+						warnings: Array.isArray(candidate.warnings) ? candidate.warnings.map(String) : [],
 						executable_match: !!candidate.executable_match,
 						direct: !!candidate.direct,
+						evidence_tier: ['proof', 'strong', 'supporting', 'hint'].includes(candidate.evidence_tier) ? candidate.evidence_tier : undefined,
+						score_gap: typeof candidate.score_gap === 'number' ? candidate.score_gap : undefined,
+						ambiguous: !!candidate.ambiguous,
+						identity_collision: !!candidate.identity_collision,
 					}))
 				: [];
 			const result: ShortcutDetectionResult = {

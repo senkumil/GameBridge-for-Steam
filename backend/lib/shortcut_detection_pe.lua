@@ -33,7 +33,9 @@ function M.is_generic_product_name(value)
         or norm:match("^redengine") or norm:match("^godot") or norm:match("^microsoft")
         or norm:match("^windows") or norm:match("^steam") or norm:match("^epic games")
         or norm:match("^game launcher") or norm:match("^crash handler")
-        or norm == "application" or norm == "shipping" or norm == "bootstrapper" then
+        or norm == "game" or norm == "launcher" or norm == "application"
+        or norm == "shipping" or norm == "executable" or norm == "bootstrapper"
+        or norm == "start" or norm == "unins000" or norm == "setup" or norm == "installer" then
         return true
     end
     return false
