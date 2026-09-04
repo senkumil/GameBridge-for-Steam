@@ -92,3 +92,16 @@ export function isShortcutDismissed(shortcutAppId: number): boolean {
 export function hasUnresolvedDismissedShortcutIdentities(): boolean {
 	return Object.values(dismissedShortcuts).some(identity => !identity);
 }
+
+export function clearAllDismissedShortcuts(): void {
+	for (const id of Object.keys(dismissedShortcuts)) {
+		delete dismissedShortcuts[id];
+	}
+	saveDismissedShortcuts({});
+	try {
+		localStorage.removeItem(DISMISSED_SHORTCUTS_KEY);
+		localStorage.removeItem(LEGACY_DISMISSED_SHORTCUTS_KEY);
+	} catch {}
+	backendLog('Cleared all dismissed shortcuts in memory and storage.');
+}
+

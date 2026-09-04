@@ -18,7 +18,8 @@ import { findMappingForShortcut, getAllShortcutRecords, refreshShortcutRecordsFr
 import { rememberOriginalShortcutTitle, rememberShortcutSteamAppId } from './link-history';
 import { getOptimalLauncherSkipArg, hasNoLauncherOption, removeIncompatibleLauncherBypass, shouldAutoApplyNoLauncher } from './launcher-bypass';
 import {
-	type LinkTransaction, type LinkResourceManifest, saveShortcutManifest, createLinkTransaction,
+	type LinkTransaction, type LinkResourceManifest, type ResourceStatus,
+	saveShortcutManifest, clearShortcutManifest, createLinkTransaction,
 } from './transaction';
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorCode: string): Promise<T> {
@@ -365,12 +366,23 @@ export class LinkOrchestrator {
 
 		// Update resource manifest
 		const manifest: LinkResourceManifest = tx.manifest;
+		manifest.steamAppId = tx.targetSteamAppId;
+		manifest.shortcutAppId = shortcutAppId;
 		const slotsApplied = new Set(artworkResult.slots || []);
-		manifest.portrait.status = slotsApplied.has(0) ? 'READY' : 'UNAVAILABLE';
-		manifest.hero.status = slotsApplied.has(1) ? 'READY' : 'UNAVAILABLE';
-		manifest.logo.status = slotsApplied.has(2) ? 'READY' : 'UNAVAILABLE';
-		manifest.wide.status = slotsApplied.has(3) ? 'READY' : 'UNAVAILABLE';
-		manifest.icon.status = iconResult ? 'READY' : 'UNAVAILABLE';
+		const missing = new Set(artworkResult.missing || []);
+		const isTimeout = missing.has('timeout');
+
+		const resolveSlotStatus = (slot: number): ResourceStatus => {
+			if (slotsApplied.has(slot)) return 'READY';
+			if (isTimeout) return 'FAILED';
+			return 'UNAVAILABLE';
+		};
+
+		manifest.portrait.status = resolveSlotStatus(0);
+		manifest.hero.status = resolveSlotStatus(1);
+		manifest.logo.status = resolveSlotStatus(2);
+		manifest.wide.status = resolveSlotStatus(3);
+		manifest.icon.status = iconResult ? 'READY' : (isTimeout ? 'FAILED' : 'UNAVAILABLE');
 		manifest.logoPosition.status = slotsApplied.has(2) ? 'READY' : 'UNAVAILABLE';
 		saveShortcutManifest(shortcutAppId, manifest);
 
@@ -420,8 +432,10 @@ export class LinkOrchestrator {
 			options.onPhase?.('identity');
 
 			if (options.clearStaleArtwork || appIdChanged) {
+				clearShortcutManifest(initialId);
 				await clearShortcutArtworkForAppIdChange(initialId);
 				if (resolvedShortcutId !== initialId) {
+					clearShortcutManifest(resolvedShortcutId);
 					await clearShortcutArtworkForAppIdChange(resolvedShortcutId);
 				}
 				invalidateLibraryAssetCaches([steamAppId]);

@@ -88,3 +88,13 @@ export function forgetOriginalShortcutTitle(shortcutAppId: string | number | nul
 	delete titles[key(shortcutAppId)];
 	writeOriginalTitles(titles);
 }
+
+export function clearAllLinkHistory(): void {
+	writeHistory({});
+	writeOriginalTitles({});
+	try {
+		storage()?.removeItem(STORAGE_KEY);
+		storage()?.removeItem(TITLE_STORAGE_KEY);
+	} catch {}
+}
+

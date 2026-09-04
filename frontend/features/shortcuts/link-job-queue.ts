@@ -3,6 +3,7 @@ import { backendLog } from '../../api/backend';
 import { linkShortcutToSteam } from './linking';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForShortcut } from './registry';
+import { getFactoryResetEpoch, isFactoryEpochCurrent, isFactoryResetInProgress } from './transaction';
 
 const STORAGE_KEY = 'gdl-pending-link-jobs-v1';
 const JOBS_CHANGED_EVENT = 'gdl:pending-link-jobs-changed';
@@ -223,23 +224,25 @@ export function cancelAllPendingLinkJobs(): number {
 }
 
 export async function processPendingLinkJobs(targetDoc?: Document | null): Promise<void> {
-	if (processingPauseDepth > 0) return;
+	const epoch = getFactoryResetEpoch();
+	if (processingPauseDepth > 0 || isFactoryResetInProgress() || !isFactoryEpochCurrent(epoch)) return;
 	if (processing) return processing;
 	processing = (async () => {
 		let jobs = readJobs();
 		for (const job of jobs) {
-			if (processingPauseDepth > 0) break;
-			if (job.status === 'failed') continue;
-			// A previous attempt may have committed the mapping before its UI
-			// request was interrupted. Retire that stale queue entry immediately
-			// instead of waiting for its exponential backoff to elapse.
-			if (findMappingForShortcut(job.shortcutAppId, job.title, job.shortcutExecutable) === job.steamAppId) {
-				if (job.attempts >= 1 || !job.repairResources) {
-					jobs = jobs.filter(candidate => candidate.id !== job.id);
-					writeJobs(jobs);
-					continue;
-				}
+			if (processingPauseDepth > 0 || isFactoryResetInProgress() || !isFactoryEpochCurrent(epoch)) {
+				backendLog('[NGL][Retry] Halting queue processing due to pause or reset barrier');
+				break;
 			}
+			if (job.status === 'failed') continue;
+
+			// If not repairing resources, a committed mapping means the job is satisfied
+			if (!job.repairResources && findMappingForShortcut(job.shortcutAppId, job.title, job.shortcutExecutable) === job.steamAppId) {
+				jobs = jobs.filter(candidate => candidate.id !== job.id);
+				writeJobs(jobs);
+				continue;
+			}
+
 			if ((job.nextAttemptAt || 0) > Date.now()) continue;
 			job.status = 'running';
 			writeJobs(jobs);
@@ -253,11 +256,17 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 					shortcutExecutable: job.shortcutExecutable,
 					repairResources: Boolean(job.repairResources),
 					assetTimeoutMs: 30_000,
-					onStatus: message => backendLog(`Background link ${job.steamAppId}: ${message}`),
+					onStatus: message => backendLog(`[NGL][Retry] ${job.steamAppId}: ${message}`),
 				});
 			} catch (error) {
 				result = { ok: false, error: String(error) };
 			}
+
+			if (!isFactoryEpochCurrent(epoch) || isFactoryResetInProgress()) {
+				backendLog('[NGL][Retry] Reset occurred during link attempt; discarding result');
+				break;
+			}
+
 			jobs = readJobs();
 			const current = jobs.find(candidate => candidate.id === job.id);
 			if (!current) continue;
@@ -266,25 +275,33 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 			}
 			const resourcesComplete = Boolean(result?.setup?.artworkComplete && result?.setup?.iconApplied);
 			const isMapped = findMappingForShortcut(current.shortcutAppId, current.title, current.shortcutExecutable) === current.steamAppId;
-			if (result?.ok || (isMapped && (current.attempts >= 1 || !current.repairResources || resourcesComplete))) {
+
+			// When repairResources is true, never retire before resources are verified complete
+			const success = current.repairResources
+				? (isMapped && resourcesComplete)
+				: (result?.ok || isMapped);
+
+			if (success) {
 				jobs = jobs.filter(candidate => candidate.id !== job.id);
 				writeJobs(jobs);
+				backendLog(`[NGL][Retry] Successfully settled job for ${current.title} (${current.steamAppId})`);
 				continue;
 			}
+
 			current.attempts += 1;
 			current.lastError = resourcesComplete ? String(result?.error || 'link_failed') : 'resource_sync_incomplete';
-			const hardFailure = current.attempts >= 2 || new Set(['invalid_appid', 'refusing_to_modify_native_steam_app']).has(current.lastError);
+			const isTerminalError = new Set(['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_not_found']).has(current.lastError);
+			const hardFailure = current.attempts >= 5 || isTerminalError;
 			if (hardFailure) {
 				current.status = 'failed';
 				current.nextAttemptAt = 0;
+				backendLog(`[NGL][Retry] Job permanently failed after ${current.attempts} attempts: ${current.title} (${current.lastError})`);
 			} else {
-				// Once the user explicitly confirms a link, transient Steam/client/network
-				// failures must not turn it into a permanently half-finished operation.
-				// Keep the job durable and retry with capped backoff until the final
-				// transaction can commit name + icon + all artwork + mapping together.
+				// Transient network or Steam client delay: allow up to 5 retries with capped backoff
 				current.status = 'queued';
 				const exponent = Math.min(Math.max(0, current.attempts - 1), 5);
 				current.nextAttemptAt = Date.now() + Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * (2 ** exponent));
+				backendLog(`[NGL][Retry] Queued retry attempt ${current.attempts + 1} in ${Math.round((current.nextAttemptAt - Date.now()) / 1000)}s for ${current.title}`);
 			}
 			writeJobs(jobs);
 		}

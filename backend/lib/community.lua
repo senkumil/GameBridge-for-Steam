@@ -464,7 +464,6 @@ function M.fetch_community_items_catalog(steam_app_id, language)
         return cjson.encode({ error = "invalid_appid", cards = {}, badges = {} })
     end
 
-    local safe_language = util.safe_language(requested_language)
     local cache_key = appid .. "|" .. safe_language
     if community_items_catalog_cache[cache_key] then
 		local cached = community_items_catalog_cache[cache_key]

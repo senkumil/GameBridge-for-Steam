@@ -73,6 +73,8 @@ function M.validate(body, ext)
         return body:byte(1) == 137 and body:byte(2) == 80 and body:byte(3) == 78 and body:byte(4) == 71
             and body:byte(5) == 13 and body:byte(6) == 10 and body:byte(7) == 26 and body:byte(8) == 10
     elseif ext == "jpg" then return body:byte(1) == 255 and body:byte(2) == 216
+    elseif ext == "webp" then
+        return body:sub(1, 4) == "RIFF" and body:sub(9, 12) == "WEBP"
     elseif ext == "ico" then
         return body:byte(1) == 0 and body:byte(2) == 0 and body:byte(3) == 1
             and body:byte(4) == 0 and (body:byte(5) or 0) > 0

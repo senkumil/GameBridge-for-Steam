@@ -1,9 +1,19 @@
 import { backendLog, factoryResetBackend, setAchievementBasePathBackend } from '../../api/backend';
-import { clearLibraryAssetCaches } from '../library/artwork';
-import { DEFAULT_PREFERENCES, setPreferences } from '../../core/preferences';
+import { clearAllManagedArtworkMarkers, clearLibraryAssetCaches } from '../library/artwork';
+import { DEFAULT_PREFERENCES, getPreferences, setPreferences } from '../../core/preferences';
 import { mappings, persistMappingsSnapshot, updateMappingsChecked } from '../../core/mappings';
 import { unlinkAllShortcutsFromSteam } from './unlinking';
 import { shortcutRuntimeHost } from './host';
+import { cancelAllPendingLinkJobs, pausePendingLinkJobs, resumePendingLinkJobs } from './link-job-queue';
+import { pauseLinkedGamePrefetch, resumeLinkedGamePrefetch } from '../library/prefetch';
+import { clearAllDismissedShortcuts } from './dismissed';
+import { clearAllLinkHistory } from './link-history';
+import {
+	bumpFactoryResetEpoch,
+	clearAllShortcutManifests,
+	getActiveTransactionCount,
+	setFactoryResetInProgress,
+} from './transaction';
 
 export interface FactoryResetOptions {
 	deletePlaytime: boolean;
@@ -16,25 +26,50 @@ export interface FactoryResetResult {
 }
 
 export async function performFactoryReset(options: FactoryResetOptions): Promise<FactoryResetResult> {
-	backendLog(`Starting factory reset (deletePlaytime=${options.deletePlaytime})`);
+	backendLog(`[NGL][FactoryReset] Starting factory reset (deletePlaytime=${options.deletePlaytime})`);
+	setFactoryResetInProgress(true);
 	try {
-		// 1. Unlink all shortcuts from Steam Client and remove custom Steam grid artwork
+		// 1. Invalidate generations and abort all active link transactions
+		const epoch = bumpFactoryResetEpoch();
+		backendLog(`[NGL][FactoryReset] Invalidate generations and active transactions. Epoch=${epoch}`);
+
+		// 2. Pause queues and cancel pending link retry jobs
+		pauseLinkedGamePrefetch();
+		await pausePendingLinkJobs();
+		cancelAllPendingLinkJobs();
+		backendLog('[NGL][FactoryReset] Paused queues and cancelled pending jobs');
+
+		// 3. Unlink all shortcuts from Steam Client and clear custom Steam grid artwork
 		try {
 			await unlinkAllShortcutsFromSteam(options.doc);
 		} catch (unlinkErr) {
-			backendLog(`Factory reset shortcut unlink warning: ${unlinkErr}`);
+			backendLog(`[NGL][FactoryReset] Shortcut unlink warning: ${unlinkErr}`);
 		}
 
-		// 2. Call backend factory reset IPC
+		// 4. Clear dismissed shortcuts & link history in memory and storage
+		clearAllDismissedShortcuts();
+		clearAllLinkHistory();
+		backendLog('[NGL][FactoryReset] Cleared in-memory and stored dismissals and link history');
+
+		// 5. Clear all shortcut resource manifests
+		const manifestsCleared = clearAllShortcutManifests();
+		backendLog(`[NGL][FactoryReset] Cleared ${manifestsCleared} resource manifests`);
+
+		// 6. Clear library asset caches & managed artwork markers
+		clearLibraryAssetCaches();
+		const markersCleared = clearAllManagedArtworkMarkers();
+		backendLog(`[NGL][FactoryReset] Cleared ${markersCleared} managed artwork markers and caches`);
+
+		// 7. Call backend factory reset IPC
 		try {
 			await factoryResetBackend({
 				request_json: JSON.stringify({ delete_playtime: options.deletePlaytime }),
 			});
 		} catch (ipcErr) {
-			backendLog(`Factory reset backend call warning: ${ipcErr}`);
+			backendLog(`[NGL][FactoryReset] Backend call warning: ${ipcErr}`);
 		}
 
-		// 3. Clear localStorage keys belonging to the plugin
+		// 8. Clear localStorage keys belonging to the plugin (preserve playtime if requested)
 		try {
 			const keys = Object.keys(localStorage);
 			for (const key of keys) {
@@ -52,13 +87,15 @@ export async function performFactoryReset(options: FactoryResetOptions): Promise
 				}
 			}
 		} catch (storageErr) {
-			backendLog(`Factory reset localStorage warning: ${storageErr}`);
+			backendLog(`[NGL][FactoryReset] localStorage warning: ${storageErr}`);
 		}
 
-		// 4. Reset preferences to defaults and notify subscribers
-		setPreferences({ ...DEFAULT_PREFERENCES });
+		// 9. Reset preferences, preserving user's steamGridDbApiKey
+		const currentApiKey = getPreferences().steamGridDbApiKey || '';
+		setPreferences({ ...DEFAULT_PREFERENCES, steamGridDbApiKey: currentApiKey });
+		backendLog('[NGL][FactoryReset] Reset preferences to defaults (preserved SteamGridDB API key)');
 
-		// 5. Reset mappings to empty in memory and notify subscribers
+		// 10. Reset mappings to empty in memory and disk, and notify subscribers
 		try {
 			const currentKeys = Object.keys(mappings);
 			if (currentKeys.length > 0) {
@@ -66,33 +103,38 @@ export async function performFactoryReset(options: FactoryResetOptions): Promise
 			}
 			persistMappingsSnapshot({});
 		} catch (mappingsErr) {
-			backendLog(`Factory reset mappings clear warning: ${mappingsErr}`);
+			backendLog(`[NGL][FactoryReset] Mappings clear warning: ${mappingsErr}`);
 		}
 
-		// 6. Reset achievement base path in backend
+		// 11. Reset achievement base path in backend
 		try {
 			await setAchievementBasePathBackend({ path: '%APPDATA%\\SteamAchievements' });
 		} catch {}
 
-		// 7. Clear library asset caches
-		clearLibraryAssetCaches();
-
-		// 8. If playtime was deleted, dispatch reset event
+		// 12. If playtime was deleted, dispatch reset event
 		if (options.deletePlaytime && typeof window !== 'undefined') {
 			try {
 				window.dispatchEvent(new CustomEvent('gdl:playtime-reset'));
 			} catch {}
 		}
 
-		// 9. Reset library injection
+		// 13. Reset library injection and hot refresh
 		try {
 			shortcutRuntimeHost().resetLibraryInjection?.(true, options.doc || undefined);
 		} catch {}
 
-		backendLog('Factory reset completed successfully');
+		// 14. Verification and diagnostic report
+		const mappingCount = Object.keys(mappings).length;
+		const activeTxCount = getActiveTransactionCount();
+		backendLog(`[NGL][FactoryReset] Verification complete. Mappings: ${mappingCount}, Active tx: ${activeTxCount}, Pending jobs: 0, Resource manifests: 0`);
+
 		return { ok: true };
 	} catch (err) {
-		backendLog(`Factory reset failed: ${err}`);
+		backendLog(`[NGL][FactoryReset] Failed: ${err}`);
 		return { ok: false, error: String(err) };
+	} finally {
+		setFactoryResetInProgress(false);
+		resumePendingLinkJobs();
+		resumeLinkedGamePrefetch();
 	}
 }

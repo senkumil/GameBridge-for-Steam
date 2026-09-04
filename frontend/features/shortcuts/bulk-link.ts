@@ -13,10 +13,20 @@ import { applyOfficialShortcutIcon, spoofArtwork } from '../library/artwork';
 import { syncMissingArtworkForMappedShortcuts } from '../library/artwork-sync';
 import { runDurableReconciliation } from './reconciler';
 import { isPriorityShortcut } from './link-job-priority';
+import { getFactoryResetEpoch, isFactoryEpochCurrent, isFactoryResetInProgress, readShortcutManifest } from './transaction';
 export { setPriorityShortcut as prioritizeBulkLinkShortcut } from './link-job-priority';
 
 const BULK_ANALYSIS_CONCURRENCY = 6;
-export type BulkLinkOutcomeStatus = 'linked' | 'queued' | 'skipped' | 'failed';
+export type BulkLinkOutcomeStatus =
+	| 'READY'
+	| 'READY_DEGRADED'
+	| 'RETRY_PENDING'
+	| 'SKIPPED'
+	| 'FAILED'
+	| 'linked'
+	| 'queued'
+	| 'skipped'
+	| 'failed';
 export interface BulkLinkGameOutcome {
 	title: string;
 	shortcutAppId: number;
@@ -87,6 +97,7 @@ export async function linkAllShortcutsExperimental(
 	pauseLinkedGamePrefetch();
 	await pausePendingLinkJobs();
 	try {
+		const epoch = getFactoryResetEpoch();
 		const records = getAllShortcutRecords().filter(record => !shortcutAlreadyLinked(record.id));
 		const result: BulkLinkAllResult = {
 			total: records.length,
@@ -97,7 +108,7 @@ export async function linkAllShortcutsExperimental(
 			failed: 0,
 			outcomes: [],
 		};
-		if (!records.length || signal?.aborted) return result;
+		if (!records.length || signal?.aborted || isFactoryResetInProgress() || !isFactoryEpochCurrent(epoch)) return result;
 
 		type Item = {
 			record: { id: number; title: string };
@@ -111,6 +122,7 @@ export async function linkAllShortcutsExperimental(
 
 		// Stage 1: Fast concurrent detection across all unlinked records
 		const analyzeRecord = async (record: { id: number; title: string }, index: number): Promise<void> => {
+			if (signal?.aborted || isFactoryResetInProgress() || !isFactoryEpochCurrent(epoch)) return;
 			let context: ShortcutDetectionContext | null = null;
 			let candidate: ShortcutDetectionCandidate | null = null;
 			let reason = 'ambiguous_or_low_confidence';
@@ -132,7 +144,7 @@ export async function linkAllShortcutsExperimental(
 							direct: true,
 						};
 					} else {
-						for (let attempt = 0; attempt < 3 && !signal?.aborted; attempt += 1) {
+						for (let attempt = 0; attempt < 3 && !signal?.aborted && !isFactoryResetInProgress() && isFactoryEpochCurrent(epoch); attempt += 1) {
 							const detected = await detectShortcutCandidates(context);
 							candidate = reliableBulkCandidate(context, detected?.candidates || [], rememberedShortcutSteamAppId(record.id));
 							if (candidate || (detected && detected.transient_error !== true)) break;
@@ -142,26 +154,26 @@ export async function linkAllShortcutsExperimental(
 				}
 			} catch (error) {
 				reason = 'detection_failed';
-				backendLog(`Bulk detection failed for ${record.title}: ${error}`);
+				backendLog(`[NGL][Bulk] Detection failed for ${record.title}: ${error}`);
 			} finally {
 				analyzed += 1;
 				if (!signal?.aborted) onProgress?.(analyzed, records.length, record.title, 'analyzing');
 			}
 
-			if (signal?.aborted) return;
+			if (signal?.aborted || isFactoryResetInProgress() || !isFactoryEpochCurrent(epoch)) return;
 			if (context && candidate) {
 				result.matched += 1;
 				matchedItems.push({ record, context, candidate, index });
 			} else {
-				const status: BulkLinkOutcomeStatus = reason === 'detection_failed' ? 'failed' : 'skipped';
-				if (status === 'failed') result.failed += 1;
+				const status: BulkLinkOutcomeStatus = reason === 'detection_failed' ? 'FAILED' : 'SKIPPED';
+				if (status === 'FAILED') result.failed += 1;
 				else result.skipped += 1;
 				result.outcomes.push({ title: record.title, shortcutAppId: record.id, status, reason });
 			}
 		};
 
 		const workers = Array.from({ length: Math.min(BULK_ANALYSIS_CONCURRENCY, records.length) }, async () => {
-			while (!signal?.aborted) {
+			while (!signal?.aborted && !isFactoryResetInProgress() && isFactoryEpochCurrent(epoch)) {
 				const index = nextRecord++;
 				const record = records[index];
 				if (!record) return;
@@ -184,12 +196,13 @@ export async function linkAllShortcutsExperimental(
 			steamAppId: string;
 			title: string;
 			recordId: number;
+			item: Item;
 		}
 		const successfullyLinked: SuccessfullyLinkedItem[] = [];
 		const remainingToLink = [...matchedItems];
 		let linkedCount = 0;
 
-		while (remainingToLink.length > 0 && !signal?.aborted) {
+		while (remainingToLink.length > 0 && !signal?.aborted && !isFactoryResetInProgress() && isFactoryEpochCurrent(epoch)) {
 			const priorityIdx = remainingToLink.findIndex(item =>
 				isPriorityShortcut(item.record.id, item.record.title) || isPriorityShortcut(Number(item.candidate.appid)));
 			const item = priorityIdx >= 0 ? remainingToLink.splice(priorityIdx, 1)[0] : remainingToLink.shift()!;
@@ -212,36 +225,30 @@ export async function linkAllShortcutsExperimental(
 					deferAssetSync: true,
 					metadataTimeoutMs: 1_200,
 					canonicalNameHint: item.candidate.name,
-					onStatus: message => backendLog(`Bulk link ${item.record.title}: ${message}`),
+					onStatus: message => backendLog(`[NGL][Bulk] ${item.record.title}: ${message}`),
 				});
 
 				const resolvedShortcutId = Number(linked.shortcutAppId || item.record.id);
 
 				if (linked.ok) {
-					result.linked += 1;
 					cancelPendingLinkJobs(item.record.id, item.context.title);
-					result.outcomes.push({
-						title: item.record.title,
-						shortcutAppId: resolvedShortcutId,
-						steamAppId: item.candidate.appid,
-						status: 'linked',
-						resourceRepairQueued: false,
-					});
 					successfullyLinked.push({
 						sid: resolvedShortcutId || item.record.id,
 						steamAppId: item.candidate.appid,
 						title: item.candidate.name || item.record.title,
 						recordId: item.record.id,
+						item,
 					});
 				} else if (!['invalid_appid', 'refusing_to_modify_native_steam_app'].includes(String(linked.error || ''))) {
 					enqueueBulkRetry(item, false, resolvedShortcutId);
 					result.queued += 1;
 					result.outcomes.push({
 						title: item.record.title,
-						shortcutAppId: item.record.id,
+						shortcutAppId: resolvedShortcutId,
 						steamAppId: item.candidate.appid,
-						status: 'queued',
+						status: 'RETRY_PENDING',
 						reason: String(linked.error || 'setup_incomplete'),
+						resourceRepairQueued: true,
 					});
 				} else {
 					result.failed += 1;
@@ -250,20 +257,21 @@ export async function linkAllShortcutsExperimental(
 						title: item.record.title,
 						shortcutAppId: item.record.id,
 						steamAppId: item.candidate.appid,
-						status: 'failed',
+						status: 'FAILED',
 						reason: String(linked.error || 'link_failed'),
 					});
 				}
 			} catch (error) {
-				backendLog(`Bulk link failed for ${item.record.title}: ${error}`);
+				backendLog(`[NGL][Bulk] Identity commit failed for ${item.record.title}: ${error}`);
 				enqueueBulkRetry(item, false);
 				result.queued += 1;
 				result.outcomes.push({
 					title: item.record.title,
 					shortcutAppId: item.record.id,
 					steamAppId: item.candidate.appid,
-					status: 'queued',
+					status: 'RETRY_PENDING',
 					reason: 'link_failed',
+					resourceRepairQueued: true,
 				});
 			} finally {
 				linkedCount += 1;
@@ -272,12 +280,12 @@ export async function linkAllShortcutsExperimental(
 		}
 
 		// Stage 3: Fast concurrent artwork and icon sync (Slot 0 Portrait applies first)
-		if (successfullyLinked.length > 0 && !signal?.aborted) {
+		if (successfullyLinked.length > 0 && !signal?.aborted && !isFactoryResetInProgress() && isFactoryEpochCurrent(epoch)) {
 			const BULK_ARTWORK_CONCURRENCY = 3;
 			const remainingArt = [...successfullyLinked];
 			let artDone = 0;
 			const artWorkers = Array.from({ length: Math.min(BULK_ARTWORK_CONCURRENCY, remainingArt.length) }, async () => {
-				while (!signal?.aborted && remainingArt.length > 0) {
+				while (!signal?.aborted && !isFactoryResetInProgress() && isFactoryEpochCurrent(epoch) && remainingArt.length > 0) {
 					const priorityIdx = remainingArt.findIndex(target =>
 						isPriorityShortcut(target.recordId, target.title) || isPriorityShortcut(Number(target.steamAppId)));
 					const target = priorityIdx >= 0 ? remainingArt.splice(priorityIdx, 1)[0] : remainingArt.shift();
@@ -286,9 +294,9 @@ export async function linkAllShortcutsExperimental(
 					onProgress?.(artDone, successfullyLinked.length, target.title, 'linking');
 
 					const artPromise = spoofArtwork(target.sid, target.steamAppId, target.title, false)
-						.catch(error => backendLog(`Bulk artwork failed for ${target.sid}: ${error}`));
+						.catch(error => backendLog(`[NGL][Bulk] Artwork failed for ${target.sid}: ${error}`));
 					const iconPromise = applyOfficialShortcutIcon(target.sid, target.steamAppId, false)
-						.catch(error => backendLog(`Bulk icon failed for ${target.sid}: ${error}`));
+						.catch(error => backendLog(`[NGL][Bulk] Icon failed for ${target.sid}: ${error}`));
 
 					// Bounded timeout per game (max 10s) so slow downloads never block the worker pool
 					await Promise.race([
@@ -305,13 +313,75 @@ export async function linkAllShortcutsExperimental(
 			await Promise.all(artWorkers);
 		}
 
+		// Stage 3.5: Accurately resolve outcomes for all successfully linked items
+		for (const target of successfullyLinked) {
+			const manifest = readShortcutManifest(target.sid, target.steamAppId);
+			const portraitReady = manifest?.portrait.status === 'READY';
+			const heroReady = manifest?.hero.status === 'READY';
+			const logoReady = manifest?.logo.status === 'READY';
+			const wideReady = manifest?.wide.status === 'READY';
+			const iconReady = manifest?.icon.status === 'READY';
+
+			const allReady = portraitReady && heroReady && logoReady && wideReady && iconReady;
+
+			if (allReady) {
+				result.linked += 1;
+				result.outcomes.push({
+					title: target.title,
+					shortcutAppId: target.sid,
+					steamAppId: target.steamAppId,
+					status: 'READY',
+					resourceRepairQueued: false,
+				});
+			} else if (portraitReady) {
+				const hasPendingOrFailed =
+					manifest?.hero.status === 'PENDING' || manifest?.hero.status === 'FAILED' ||
+					manifest?.wide.status === 'PENDING' || manifest?.wide.status === 'FAILED' ||
+					manifest?.icon.status === 'PENDING' || manifest?.icon.status === 'FAILED';
+
+				if (hasPendingOrFailed) {
+					enqueueBulkRetry(target.item, true, target.sid);
+					result.queued += 1;
+					result.outcomes.push({
+						title: target.title,
+						shortcutAppId: target.sid,
+						steamAppId: target.steamAppId,
+						status: 'RETRY_PENDING',
+						reason: 'assets_retrying_in_background',
+						resourceRepairQueued: true,
+					});
+				} else {
+					result.linked += 1;
+					result.outcomes.push({
+						title: target.title,
+						shortcutAppId: target.sid,
+						steamAppId: target.steamAppId,
+						status: 'READY_DEGRADED',
+						reason: 'non_critical_assets_unavailable',
+						resourceRepairQueued: false,
+					});
+				}
+			} else {
+				enqueueBulkRetry(target.item, true, target.sid);
+				result.queued += 1;
+				result.outcomes.push({
+					title: target.title,
+					shortcutAppId: target.sid,
+					steamAppId: target.steamAppId,
+					status: 'RETRY_PENDING',
+					reason: 'portrait_pending_in_background',
+					resourceRepairQueued: true,
+				});
+			}
+		}
+
 		// Stage 4: Background warmup, reconciliation and finalize
 		for (const item of matchedItems) {
 			const steamAppId = item.candidate.appid;
-			void warmShortcutLinkResources(steamAppId).catch(error => backendLog(`Bulk warm-up failed for ${steamAppId}: ${error}`));
+			void warmShortcutLinkResources(steamAppId).catch(error => backendLog(`[NGL][Bulk] Warm-up failed for ${steamAppId}: ${error}`));
 		}
 		void syncMissingArtworkForMappedShortcuts();
-		void runDurableReconciliation().catch(error => backendLog(`Bulk reconciler pass: ${error}`));
+		void runDurableReconciliation().catch(error => backendLog(`[NGL][Bulk] Reconciler pass: ${error}`));
 
 		const recordOrder = new Map(records.map((record, index) => [record.id, index]));
 		result.outcomes.sort((left, right) => (recordOrder.get(left.shortcutAppId) ?? Number.MAX_SAFE_INTEGER)

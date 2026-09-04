@@ -10,6 +10,7 @@ import { cancelAllPendingLinkJobs, cancelPendingLinkJobs, pausePendingLinkJobs, 
 import { findMappingForShortcut, getAllShortcutRecords, normalizedShortcutAppId } from './registry';
 import { forgetOriginalShortcutTitle, forgetShortcutSteamAppId, getOriginalShortcutTitle } from './link-history';
 import { runShortcutMutations, shortcutMutationKeys } from './operation-lock';
+import { clearShortcutManifest, clearAllShortcutManifests } from './transaction';
 
 export interface ShortcutUnlinkOptions {
 	doc?: Document | null;
@@ -63,6 +64,7 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 		return { ok: false, shortcutAppId, steamAppId, error: 'mapping_remove_failed' };
 	}
 
+	clearShortcutManifest(shortcutAppId);
 	if (options.clearIcon) {
 		await supersedeArtworkApplications(shortcutAppId, false);
 	} else {
@@ -179,6 +181,7 @@ export async function unlinkAllShortcutsFromSteam(doc?: Document | null): Promis
 	}));
 
 	void clearAllLinkedArtworksBackend().catch(() => {});
+	clearAllShortcutManifests();
 	const apps = (window as any).SteamClient?.Apps;
 	for (const { record } of targets) {
 		try { localStorage.removeItem(`gdl_shortcut_icon_${record.id}`); } catch {}

@@ -86,8 +86,10 @@ export const LinkManagementSection: React.FC<LinkManagementSectionProps> = ({ pr
 		}))
 		.sort((a, b) => a.title.localeCompare(b.title)), [shortcutRevision]);
 	const linkedShortcutCount = shortcutRows.filter(row => /^\d+$/.test(row.steamAppId)).length;
-	const bulkNotLinked = bulkLinkReport?.outcomes.filter(item => item.status === 'skipped' || item.status === 'failed') || [];
-	const bulkQueued = bulkLinkReport?.outcomes.filter(item => (item.status === 'queued' || item.resourceRepairQueued)
+	const bulkNotLinked = bulkLinkReport?.outcomes.filter(item =>
+		item.status === 'skipped' || item.status === 'failed' || item.status === 'SKIPPED' || item.status === 'FAILED') || [];
+	const bulkQueued = bulkLinkReport?.outcomes.filter(item =>
+		(item.status === 'queued' || item.status === 'RETRY_PENDING' || item.resourceRepairQueued)
 		&& hasPendingLinkJob(item.shortcutAppId, item.title)) || [];
 
 	const dynamicBulkLinkStatus = React.useMemo(() => {

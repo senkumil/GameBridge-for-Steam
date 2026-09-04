@@ -650,11 +650,16 @@ function M.save_shortcut_artwork(request_json)
         return cjson.encode({ ok = false, error = "empty_or_failed_image" })
     end
 
-    -- Automatically detect true extension from magic bytes
+    -- Automatically detect true extension and validate magic bytes
     if body:byte(1) == 137 and body:sub(2, 4) == "PNG" then
         ext = "png"
     elseif body:byte(1) == 255 and body:byte(2) == 216 then
         ext = "jpg"
+    elseif body:sub(1, 4) == "RIFF" and body:sub(9, 12) == "WEBP" then
+        ext = "webp"
+    else
+        logger:warn("Rejected non-image payload for artwork: unrecognized magic bytes")
+        return cjson.encode({ ok = false, error = "invalid_image_magic_bytes" })
     end
 
     local account_id = get_active_account_id()

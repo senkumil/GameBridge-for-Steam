@@ -326,7 +326,7 @@ export function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): 
 	const hasValidPortrait = isTrustedArtworkSourceUrl(marker.sourceUrls?.portrait
 		|| (marker.provenance?.portrait as { url?: unknown } | undefined)?.url);
 	const slots = new Set(marker.slots || []);
-	return slots.has(0) && slots.has(1) && slots.has(2) && hasValidPortrait;
+	return slots.has(0) && slots.has(1) && slots.has(2) && slots.has(3) && hasValidPortrait;
 }
 
 function markArtworkSaved(shortcutAppId: number, steamAppId: string, slots: number[], needsCommunityArtwork = false,
@@ -382,6 +382,34 @@ export function clearArtworkSaved(shortcutAppId: number | string, preserveIcon =
 			if (key.startsWith(`${id}:`)) shortcutIconInFlight.delete(key);
 		}
 	} catch {}
+}
+
+export function clearAllManagedArtworkMarkers(): number {
+	let cleared = 0;
+	try {
+		const keys = Object.keys(localStorage);
+		for (const key of keys) {
+			if (
+				key.startsWith(ART_STORAGE_PREFIX) ||
+				key.startsWith(LEGACY_ART_STORAGE_PREFIX) ||
+				key.startsWith(LOGO_POSITION_STORAGE_PREFIX) ||
+				key.startsWith(PREVIOUS_LOGO_POSITION_STORAGE_PREFIX) ||
+				key.startsWith('gdl_legacy_info_portrait1_') ||
+				key.startsWith(SHORTCUT_ICON_STORAGE_PREFIX) ||
+				key.startsWith('gdl_art_') ||
+				key.startsWith('gdl_artwork_') ||
+				key.startsWith('gdl-artwork-')
+			) {
+				localStorage.removeItem(key);
+				cleared += 1;
+			}
+		}
+		artworkSpoofed.clear();
+		artworkInFlight.clear();
+		artworkGenerations.clear();
+		shortcutIconInFlight.clear();
+	} catch {}
+	return cleared;
 }
 
 /** Cancel obsolete downloads, wait for the bounded active bridge call, then let
