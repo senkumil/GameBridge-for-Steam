@@ -66,6 +66,10 @@ local function localized_library_asset(bucket, language)
     return ""
 end
 
+local function pick_library_asset_variant(asset, language, bucket_key)
+    return type(asset) == "table" and localized_library_asset(asset[bucket_key], language) or ""
+end
+
 local function pick_library_asset(asset, language, prefer_2x)
     if type(asset) ~= "table" then return "" end
     local bucket_keys = prefer_2x and { "image2x", "image" } or { "image", "image2x" }
@@ -75,6 +79,7 @@ local function pick_library_asset(asset, language, prefer_2x)
     end
     return ""
 end
+
 
 local function library_asset_url(appid, relative)
     local value = tostring(relative or "")
@@ -209,7 +214,7 @@ function M.fetch_library_assets(request_json)
             and tonumber(cached_value.install_size_algorithm) == 3
             and tonumber(cached_value.shortcut_icon_algorithm) == 3
             and tonumber(cached_value.library_asset_language_algorithm) == 2
-            and tonumber(cached_value.library_metadata_algorithm) == 2
+            and tonumber(cached_value.library_metadata_algorithm) == 3
             and tonumber(cached_value.historical_metadata_algorithm) == 1 then
             return cached_entry.value
         end
@@ -310,7 +315,8 @@ function M.fetch_library_assets(request_json)
         appid = appid,
         source = "steamcmd_appinfo",
         portrait = library_asset_url(appid, pick_library_asset(assets.library_capsule, language, true)),
-        hero = library_asset_url(appid, pick_library_asset(assets.library_hero, language, true)),
+        hero = library_asset_url(appid, pick_library_asset_variant(assets.library_hero, language, "image")),
+        hero2x = library_asset_url(appid, pick_library_asset_variant(assets.library_hero, language, "image2x")),
         logo = library_asset_url(appid, pick_library_asset(assets.library_logo, language, true)),
         wide = library_asset_url(appid, pick_library_asset(assets.library_header, language, true)),
         legacy_header = legacy_header, legacy_logo = legacy_logo,
@@ -327,29 +333,13 @@ function M.fetch_library_assets(request_json)
         controller_support = tostring(common.controller_support or ""),
         category_ids = category_ids,
         release_date = release_date,
-        library_metadata_algorithm = 2, -- library_metadata_algorithm = 1
-        logo_position = (function()
-            if type(assets) == "table" and type(assets.library_logo) == "table"
-                and type(assets.library_logo.logo_position) == "table" then
-                return assets.library_logo.logo_position
-            elseif type(assets) == "table" and type(assets.logo_position) == "table" then
-                return assets.logo_position
-            elseif type(common.library_assets) == "table" and type(common.library_assets.logo_position) == "table" then
-                return common.library_assets.logo_position
-            end
-            return nil
-        end)(),
-        logo_position_source = (function()
-            if type(assets) == "table" and type(assets.library_logo) == "table"
-                and type(assets.library_logo.logo_position) == "table" then
-                return "library_assets_full.library_logo"
-            elseif type(assets) == "table" and type(assets.logo_position) == "table" then
-                return "library_assets_full"
-            elseif type(common.library_assets) == "table" and type(common.library_assets.logo_position) == "table" then
-                return "library_assets"
-            end
-            return "none"
-        end)(),
+        library_metadata_algorithm = 3,
+        logo_position = (type(assets) == "table" and type(assets.library_logo) == "table" and assets.library_logo.logo_position)
+            or (type(assets) == "table" and assets.logo_position)
+            or (type(common.library_assets) == "table" and common.library_assets.logo_position) or nil,
+        logo_position_source = (type(assets) == "table" and type(assets.library_logo) == "table" and type(assets.library_logo.logo_position) == "table" and "library_assets_full.library_logo")
+            or (type(assets) == "table" and type(assets.logo_position) == "table" and "library_assets_full")
+            or (type(common.library_assets) == "table" and type(common.library_assets.logo_position) == "table" and "library_assets") or "none",
         install_size = official_install_size_bytes(type(body.data[appid]) == "table" and body.data[appid].depots or nil),
         install_size_algorithm = 3,
     }

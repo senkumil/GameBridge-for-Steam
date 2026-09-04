@@ -123,8 +123,8 @@ function isTrustedArtworkSourceUrl(value: unknown): value is string {
 /** Increment only the reviewed title whose curated artwork changed. This
  * refreshes that shortcut without repainting artwork for every linked game. */
 function curatedArtworkProfileRevision(steamAppId: string): number {
-	if (steamAppId === '221430') return 3;
-	if (steamAppId === '237110') return 2;
+	if (steamAppId === '221430') return 4;
+	if (steamAppId === '237110') return 3;
 	return 0;
 }
 
@@ -543,6 +543,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			{
 				urls: [
 					userCommunity?.hero?.url || '',
+					preferredCommunity?.hero || '',
 					modern?.hero || '',
 					`${sharedBase}/library_hero_2x.jpg`,
 					`${sharedBase}/library_hero.jpg`,
@@ -551,7 +552,6 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 					`${cfBase}/library_hero.jpg`,
 					`${cfCdnBase}/library_hero.jpg`,
 					`${cdnBase}/library_hero.jpg`,
-					preferredCommunity?.hero || '',
 				],
 				imageType: 1,
 				label: 'Hero',
@@ -559,6 +559,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			{
 				urls: [
 					userCommunity?.logo?.url || '',
+					preferredCommunity?.logo || '',
 					modern?.logo || '',
 					modern?.legacy_logo || '',
 					`${sharedBase}/logo.png`,
@@ -566,7 +567,6 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 					`${cfBase}/logo.png`,
 					`${cfCdnBase}/logo.png`,
 					`${cdnBase}/logo.png`,
-					preferredCommunity?.logo || '',
 				],
 				imageType: 2,
 				label: 'Logo',
@@ -574,6 +574,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			{
 				urls: [
 					userCommunity?.wide?.url || '',
+					preferredCommunity?.wide || '',
 					modern?.wide || '',
 					modern?.legacy_header || '',
 					`${sharedBase}/header.jpg`,
@@ -583,7 +584,6 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 					`${cdnBase}/header.jpg`,
 					`${sharedBase}/capsule_616x353.jpg`,
 					`${fastlyBase}/capsule_616x353.jpg`,
-					preferredCommunity?.wide || '',
 				],
 				imageType: 3,
 				label: 'Wide Capsule',
@@ -594,7 +594,9 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		const pendingSources = sources.filter(source => !reusableSlots.has(source.imageType));
 
 		const downloads = await Promise.all(pendingSources.map(async ({ urls, imageType, label }) => {
-			for (const url of Array.from(new Set(urls.filter(Boolean)))) {
+			const candidateList = Array.from(new Set(urls.filter(Boolean)));
+			const fallbackCandidateUrl = candidateList.find(u => communityUrlSet.has(u)) || candidateList[0] || '';
+			for (const url of candidateList) {
 				if (!isCurrent()) break;
 				try {
 					const dataUrl = await imageUrlToBase64(url);
@@ -603,7 +605,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 					}
 				} catch {}
 			}
-			return { url: '', dataUrl: null as string | null, imageType, label, community: false };
+			return { url: fallbackCandidateUrl, dataUrl: null as string | null, imageType, label, community: communityUrlSet.has(fallbackCandidateUrl) };
 		}));
 		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
 		const communitySlots: string[] = [];
@@ -621,16 +623,17 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 					if (!needsCommunityArtwork(item)) continue;
 					const url = communityUrlByType[item.imageType];
 					if (!url) continue;
-					const dataUrl = await imageUrlToBase64(url);
-					if (!isCurrent()) break;
-					if (!dataUrl || !await automaticArtworkMeetsSlotQuality(dataUrl, item.imageType)) continue;
 					item.url = url;
-					item.dataUrl = dataUrl;
 					item.community = true;
 					const slotName = ARTWORK_SLOT_NAMES[item.imageType];
 					communitySlots.push(slotName);
 					const sourceName = item.imageType === 0 ? 'portrait' : item.imageType === 1 ? 'hero' : item.imageType === 2 ? 'logo' : 'wide';
 					if (community.provenance?.[sourceName]) communityProvenance[slotName] = community.provenance[sourceName];
+					const dataUrl = await imageUrlToBase64(url);
+					if (!isCurrent()) break;
+					if (dataUrl && await automaticArtworkMeetsSlotQuality(dataUrl, item.imageType)) {
+						item.dataUrl = dataUrl;
+					}
 				}
 			}
 		}

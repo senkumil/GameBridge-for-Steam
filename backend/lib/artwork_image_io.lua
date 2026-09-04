@@ -64,7 +64,7 @@ function M.fetch_remote(request_json)
     local response = nil
     for _ = 1, 4 do
         local ok_http, res = pcall(http.get, current_url, {
-            headers = { ["Accept"] = "image/avif,image/webp,image/png,image/jpeg,*/*", ["User-Agent"] = USER_AGENT },
+            headers = { ["Accept"] = "image/webp,image/png,image/jpeg,*/*", ["User-Agent"] = USER_AGENT },
             timeout = 15,
         })
         if not ok_http or not res then return cjson.encode({ ok = false, error = "network_error" }) end
