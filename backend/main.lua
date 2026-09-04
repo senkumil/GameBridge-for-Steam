@@ -53,9 +53,10 @@ local store = load_factory("store")(deps)
 local shortcut_detection = load_factory("shortcut_detection")(deps)
 local shortcut_registry = load_factory("shortcut_registry")(deps)
 deps.shortcut_registry = shortcut_registry
+local community = load_factory("community")(deps)
+deps.community = community
 local news = load_factory("news")(deps)
 local social = load_factory("social")(deps)
-local community = load_factory("community")(deps)
 local artwork_candidates = load_factory("artwork_candidates")(deps)
 deps.artwork_candidates = artwork_candidates
 local artwork = load_factory("artwork")(deps)
@@ -82,6 +83,7 @@ function list_shortcuts() return shortcut_registry.list() end
 function detect_game_candidates(request_json) return shortcut_detection.detect_game_candidates(request_json) end
 function detect_game_candidates_local(request_json) return shortcut_detection.detect_game_candidates_local(request_json) end
 function fetch_news(steam_app_id, language) return news.fetch_news(steam_app_id, language) end
+function fetch_news_historical(steam_app_id, language) return news.fetch_news_historical(steam_app_id, language) end
 function fetch_partner_events(steam_app_id, language) return news.fetch_partner_events(steam_app_id, language) end
 function fetch_published_file_previews(file_ids_csv) return social.fetch_published_file_previews(file_ids_csv) end
 function fetch_friend_review(steam_id64, steam_app_id) return social.fetch_friend_review(steam_id64, steam_app_id) end

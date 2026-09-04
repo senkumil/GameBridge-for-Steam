@@ -1,0 +1,137 @@
+[
+  {
+    "executable": "re9.exe",
+    "title": "re9",
+    "expect": {
+      "expectedAppId": "3764200",
+      "verifiedMaintainedAliasFastPath": true,
+      "requiresOfficialAppValidation": true
+    }
+  },
+  {
+    "executable": "tlou-i.exe",
+    "title": "tlou-i",
+    "expect": {
+      "aliasesAreHintsOnly": true,
+      "requireOfficialStoreCandidate": true,
+      "maintainedAliasCanOpenReviewModal": true
+    }
+  },
+  {
+    "executable": "tlou-i.exe",
+    "title": "The Last of Us™ Part I",
+    "startDir": "D:\\Juegos\\The Last of Us Part I",
+    "expect": {
+      "expectedAppId": "1888930",
+      "invalidUtf8CannotAbortDetection": true,
+      "bulkCanAcceptUniqueExactTitle": true
+    }
+  },
+  {
+    "executable": "MKKE.exe",
+    "title": "MKKE",
+    "expect": {
+      "expectedAppId": "237110",
+      "verifiedMaintainedAliasFastPath": true,
+      "requiresOfficialAppValidation": true
+    }
+  },
+  {
+    "executable": "pes2013.exe",
+    "title": "pes2013.exe - Acceso directo",
+    "expect": {
+      "expectedAppId": "221430",
+      "verifiedMaintainedAliasFastPath": true,
+      "appinfoCanValidateWithoutStorePage": true,
+      "bulkCanAcceptVerifiedAlias": true
+    }
+  },
+  {
+    "executable": "SparkingZERO-Win64-Shipping.exe",
+    "title": "DRAGON BALL: Sparking! ZERO",
+    "expect": {
+      "shippingExecutableIsSupportingEvidence": true
+    }
+  },
+  {
+    "executable": "launcher.exe",
+    "title": "Game Launcher",
+    "expect": {
+      "genericLauncherCannotProduceHighConfidence": true
+    }
+  },
+  {
+    "executable": "GTAIV.exe",
+    "title": "Grand Theft Auto IV: The Complete Edition",
+    "expect": {
+      "expectedAppId": "12210",
+      "verifiedMaintainedAliasFastPath": true,
+      "editionsMustBeRankedAndValidated": true
+    }
+  },
+  {
+    "executable": "re4.exe",
+    "title": "Resident Evil 4",
+    "expect": {
+      "ambiguousResultsRequireManualConfirmation": true,
+      "verifiedExecutableOutranksAlias": true,
+      "unverifiedAliasScoreIsCapped": true,
+      "maintainedAliasCanOpenReviewModal": true
+    }
+  },
+  {
+    "executable": "tlou-i.exe",
+    "title": "q",
+    "expect": {
+      "arbitraryTitleDoesNotDiscardExecutableAlias": true,
+      "maintainedAliasCanOpenReviewModal": true,
+      "requiresManualConfirmation": true
+    }
+  },
+  {
+    "executable": "b1-Win64-Shipping.exe",
+    "title": "Black Myth: Wukong",
+    "expect": {
+      "exactOfficialTitleOverridesAliasCaution": true,
+      "deepGameFolderIsEvidence": true,
+      "bulkCanAcceptUniqueExactTitle": true
+    }
+  },
+  {
+    "executable": "b1.exe",
+    "title": "b1",
+    "expect": {
+      "expectedAppId": "2358720",
+      "verifiedMaintainedAliasFastPath": true,
+      "requiresOfficialAppValidation": true
+    }
+  },
+  {
+    "executable": "RDR2.exe",
+    "title": "Red Dead Redemption 2",
+    "expect": {
+      "exactOfficialTitleOverridesAliasCaution": true,
+      "bulkCanAcceptUniqueExactTitle": true,
+      "persistentLauncherOverride": true,
+      "trackingExecutableAutoApply": true
+    }
+  },
+  {
+    "executable": "Launcher.exe",
+    "title": "Red Dead Redemption 2",
+    "expect": {
+      "persistentLauncherIsPreserved": true,
+      "launcherIsNotSilentlyReplaced": true
+    }
+  },
+  {
+    "executable": "gta-sa.exe",
+    "title": "Grand Theft Auto: San Andreas",
+    "expect": {
+      "expectedAppId": "12120",
+      "verifiedMaintainedAliasFastPath": true,
+      "multipleEditionAliasesRemainDistinguishable": true,
+      "requiresOfficialAppValidation": true
+    }
+  }
+]

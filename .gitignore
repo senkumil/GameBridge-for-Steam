@@ -1,0 +1,113 @@
+# NativeGameLink for Steam
+# Keep source, manifests, tests and documentation versioned; ignore only
+# machine-local state and generated tooling/build output.
+
+# Dependencies and package-manager caches
+node_modules/
+.pnpm-store/
+.npm/
+jspm_packages/
+web_modules/
+
+# Runtime data created on the user's Steam installation
+/mappings.json
+/mappings.json.tmp
+/mappings.json.bak
+/mappings.backup.json
+/achievement_base_path.txt
+/achievement_paths.json
+/achievement_options.json
+/playtime_sessions.json
+/sessions.json
+/steam_appid.txt
+
+# Generated manifests and local deployment metadata
+# CI force-adds plugin.json on main so published commits stay installable.
+/plugin.json
+*.manifest.tmp
+
+# Logs, diagnostics and temporary files
+logs/
+*.log
+log.txt
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Build output and tool caches
+coverage/
+.nyc_output/
+.cache/
+.parcel-cache/
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+*.tgz
+/dist/
+build/
+out/
+backend/obj/
+backend/bin/
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+*.ilk
+
+# Scratch files and local exports
+scratch/
+scratch_*.cjs
+test_*.cjs
+copy_def.cjs
+export_schema.cjs
+_*.py
+_*.ps1
+capturas*/
+*DESCONTINUADO*/
+*descontinuado*/
+
+# Archives and local backups
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Environment files and credentials
+.env
+.env.*
+!.env.example
+
+# Editors and operating-system files
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.user
+*.userosv
+*.sln.docstates
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# The production bundle is intentionally kept versioned because this plugin
+# can be installed directly from a clone and the README documents that flow.
+# .millennium/Dist/
+
+# CI/release staging output
+/release/

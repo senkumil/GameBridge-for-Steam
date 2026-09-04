@@ -252,6 +252,8 @@ function M.discover_local_candidates(request)
                     name = c_title, alias_name = alias.name,
                     primary = primary_identity == true or (type(existing) == "table" and existing.primary == true),
                     unique = #(alias.appids or {}) == 1 or (type(existing) == "table" and existing.unique == true),
+                    automatic = tostring(alias.auto_appid or "") == tostring(direct_id)
+                        or (type(existing) == "table" and existing.automatic == true),
                 }
             end
         end
@@ -304,6 +306,7 @@ function M.discover_local_candidates(request)
                 alias_hint = true,
                 alias_primary = info.primary == true,
                 alias_unique = info.unique == true,
+                alias_automatic = info.automatic == true,
                 validation_state = "pending",
             }
         end
@@ -371,9 +374,10 @@ function M.discover_local_candidates(request)
             if exe_stem ~= raw_exe_stem and exe_similarity >= 0.55 then detection_add_reason(candidate, "shipping_executable_match") end
 
             if candidate.alias_hint and candidate.alias_primary and not candidate.identity_collision then
-                score = math.max(score, 72)
+                score = math.max(score, candidate.alias_automatic and 78 or 72)
                 detection_add_reason(candidate, "maintained_alias_exact")
                 if candidate.alias_unique then detection_add_reason(candidate, "maintained_alias_unique") end
+                if candidate.alias_automatic then detection_add_reason(candidate, "maintained_alias_auto") end
             end
             if candidate.alias_hint and not candidate.executable_match and (score < 90 or candidate.identity_collision) then
                 score = math.min(score, DETECTION_UNVERIFIED_ALIAS_MAX_SCORE)

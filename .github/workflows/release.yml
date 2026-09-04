@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to package (example: v3.0.2)"
+        required: true
+        type: string
+
+concurrency:
+  group: nativegamelink-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish clean release
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify and compile from source
+        run: npm run verify
+
+      - name: Prepare release staging
+        run: npm run package:prepare -- --tag=${RELEASE_TAG}
+
+      - name: Create deterministic release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v zip >/dev/null || { sudo apt-get update && sudo apt-get install -y zip; }
+          VERSION="${RELEASE_TAG#v}"
+          mkdir -p release/assets
+          (
+            cd release/staging/clean
+            zip -X -r "../../assets/NativeGameLinkForSteam-v${VERSION}-CLEAN-INSTALL.zip" NativeGameLinkForSteam >/dev/null
+          )
+          (
+            cd release/staging/source
+            zip -X -r "../../assets/NativeGameLinkForSteam-v${VERSION}-SOURCE.zip" NativeGameLinkForSteam >/dev/null
+          )
+          (
+            cd release/assets
+            sha256sum *.zip > SHA256SUMS.txt
+          )
+          ls -lh release/assets
+          cat release/assets/SHA256SUMS.txt
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NativeGameLinkForSteam-${{ env.RELEASE_TAG }}
+          path: release/assets/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Ensure GitHub CLI is available
+        shell: bash
+        run: |
+          if ! command -v gh >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y gh
+          fi
+          gh --version
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" release/assets/* --clobber
+          else
+            gh release create "${RELEASE_TAG}" release/assets/* \
+              --title "NativeGameLink for Steam ${RELEASE_TAG}" \
+              --generate-notes \
+              --verify-tag
+          fi

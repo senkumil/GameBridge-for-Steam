@@ -22,7 +22,7 @@ local detection_store_cache, detection_appdetails_cache, detection_appinfo_cache
 -- never look like near-certain identification unless the candidate's official
 -- Steam launch configuration also contains the executable we are inspecting.
 local DETECTION_UNVERIFIED_ALIAS_MAX_SCORE = 84
-local DETECTION_MODEL_VERSION = "v7"
+local DETECTION_MODEL_VERSION = "v8"
 -- Pure text matching and the maintained alias catalogue live in focused
 -- modules; this detector remains responsible for filesystem/network evidence.
 local detection_text = deps.shortcut_detection_text
@@ -246,20 +246,28 @@ local function detection_find_appmanifest(exe_path)
     end
     return nil, nil
 end
-local function detection_store_search(query, language)
+local function detection_store_search(query, language, recovery_mode)
     local cleaned = detection_trim(query)
-    if #cleaned < 2 then return {} end
+    if #cleaned < 2 then return {}, false end
     local lang = language or "english"
     local cache_key = cleaned:lower() .. "\31" .. lang
     local cached = detection_cache_get(detection_store_cache, cache_key, 600)
     if cached then return cached.items, cached.confirmed == true end
-    local url = "https://store.steampowered.com/api/storesearch/?term="
-        .. detection_url_encode(cleaned)
-        .. "&l=" .. detection_url_encode(lang)
-        .. "&cc=US"
-    local body = detection_http_json(url, 2.5)
-    if type(body) ~= "table" then return {}, false end
-    local items = type(body) == "table" and type(body.items) == "table" and body.items or {}
+    local function fetch_for_language(target_lang, timeout)
+        local url = "https://store.steampowered.com/api/storesearch/?term="
+            .. detection_url_encode(cleaned)
+            .. "&l=" .. detection_url_encode(target_lang)
+            .. "&cc=US"
+        local body = detection_http_json(url, timeout)
+        if type(body) ~= "table" then return nil end
+        return type(body.items) == "table" and body.items or {}
+    end
+    local timeout = recovery_mode and 4.0 or 2.5
+    local items = fetch_for_language(lang, timeout)
+    if recovery_mode and (type(items) ~= "table" or #items == 0) and lang:lower() ~= "english" then
+        items = fetch_for_language("english", timeout)
+    end
+    if type(items) ~= "table" then return {}, false end
     detection_cache_set(detection_store_cache, cache_key, { items = items, confirmed = true, ttl = 600 })
     return items, true
 end
@@ -413,6 +421,7 @@ function M.detect_game_candidates(request_json)
     request.shortcut_app_id = detection_trim(request.shortcut_app_id)
     local language = detection_trim(request.language)
     if language == "" then language = "english" end
+    local recovery_mode = request.recovery_mode == true
     if (request.shortcut_app_id:match("^%d+$") or request.title ~= "") and (request.exe_path == "" or request.start_dir == "") then
         local shortcut = detection_find_shortcut_record(request.shortcut_app_id, request.title)
         if shortcut then
@@ -434,7 +443,6 @@ function M.detect_game_candidates(request_json)
     if detection_trim(title_hint) == "" then title_hint = request.title end
     local title_cleaned = detection_clean_game_title(title_hint)
     if title_cleaned == "" then title_cleaned = title_hint end
-
     local pe_product_name, pe_file_desc = nil, nil
     if detection_pe and detection_pe.read_pe_metadata then
         pe_product_name, pe_file_desc = detection_pe.read_pe_metadata(identity_exe_path)
@@ -447,7 +455,6 @@ function M.detect_game_candidates(request_json)
         and detection_clean_game_title(pe_product_name) or nil
     local clean_pe_desc = (pe_file_desc and not is_generic_pe(pe_file_desc))
         and detection_clean_game_title(pe_file_desc) or nil
-
     local exe_normalized = detection_normalize(exe_stem)
     local launcher_exe_stem = detection_game_exe_hint(detection_basename(request.exe_path))
     local launcher_exe_normalized = detection_normalize(launcher_exe_stem)
@@ -455,7 +462,6 @@ function M.detect_game_candidates(request_json)
         or launcher_exe_normalized == "start protected game"
         or launcher_exe_normalized:find("bootstrapper", 1, true) ~= nil
     local generic_launcher = DETECTION_GENERIC_EXES[launcher_exe_normalized] == true
-
     local cache_key = table.concat({
         DETECTION_MODEL_VERSION, request.title, request.exe_path, request.start_dir,
         request.game_exe_path, request.game_start_dir,
@@ -463,7 +469,6 @@ function M.detect_game_candidates(request_json)
     }, "\31")
     local cached = detection_cache_get(detection_candidate_cache, cache_key, 600)
     if cached then return cached.json end
-
     local direct_appid = detection_appid_from_arguments(request.launch_options)
     local direct_source = direct_appid and "launch_argument" or nil
     if not direct_appid and identity_exe_path ~= "" then
@@ -478,7 +483,6 @@ function M.detect_game_candidates(request_json)
             return encoded
         end
     end
-
     -- Curated aliases may declare one automatic AppID when the executable/title
     -- itself is an exact maintained identity (for example gta_sa or re9).  This
     -- bypasses several Store searches, but still goes through appdetails/appinfo
@@ -504,7 +508,6 @@ function M.detect_game_candidates(request_json)
             end
         end
     end
-
     local folders = detection_folder_hints(identity_exe_path, identity_start_dir)
     local queries, query_seen = {}, {}
     local function add_query(value)
@@ -522,7 +525,6 @@ function M.detect_game_candidates(request_json)
             table.insert(queries, searchable)
         end
     end
-
     local alias_candidates = {}
     local function check_alias(key, primary_identity)
         if not key or key == "" then return end
@@ -537,11 +539,12 @@ function M.detect_game_candidates(request_json)
                     name = alias.name,
                     primary = primary_identity == true or (type(existing) == "table" and existing.primary == true),
                     unique = #(alias.appids or {}) == 1 or (type(existing) == "table" and existing.unique == true),
+                    automatic = tostring(alias.auto_appid or "") == tostring(direct_id)
+                        or (type(existing) == "table" and existing.automatic == true),
                 }
             end
         end
     end
-
     -- Title/executable/PE aliases are primary identity hints. Folder/segment aliases
     -- only help discovery and must not make a short token authoritative.
     check_alias(title_hint, true)
@@ -551,7 +554,6 @@ function M.detect_game_candidates(request_json)
     if clean_pe_product then check_alias(clean_pe_product, true) end
     if clean_pe_desc then check_alias(clean_pe_desc, true) end
     for _, folder in ipairs(folders) do check_alias(folder, false) end
-
     -- Sub-segment query decomposition for long titles
     for segment in tostring(title_cleaned):gmatch("[^–—:|%-]+") do
         local seg_trimmed = detection_trim(segment)
@@ -560,10 +562,8 @@ function M.detect_game_candidates(request_json)
             check_alias(seg_trimmed, false)
         end
     end
-
     if clean_pe_product then add_query(clean_pe_product) end
     if clean_pe_desc and clean_pe_desc ~= clean_pe_product then add_query(clean_pe_desc) end
-
     local is_short_title = #detection_normalize(title_cleaned) <= 3
     if is_short_title or DETECTION_GENERIC_WORDS[detection_normalize(title_cleaned)] then
         for _, folder in ipairs(folders) do
@@ -573,10 +573,8 @@ function M.detect_game_candidates(request_json)
             end
         end
     end
-
     add_query(title_cleaned)
     if title_cleaned ~= title_hint then add_query(title_hint) end
-
     if not DETECTION_GENERIC_EXES[exe_normalized] then
         local exe_tokens = detection_tokens(exe_stem, true)
         local rebuilt = {}
@@ -585,7 +583,6 @@ function M.detect_game_candidates(request_json)
         if #rebuilt > 0 then add_query(table.concat(rebuilt, " ")) end
     end
     for _, folder in ipairs(folders) do add_query(folder) end
-
     local by_id = {}
     if type(request.local_candidates) == "table" then
         for _, cand in ipairs(request.local_candidates) do
@@ -607,7 +604,6 @@ function M.detect_game_candidates(request_json)
             end
         end
     end
-
     for direct_id, info in pairs(alias_candidates) do
         local candidate = by_id[direct_id]
         if not candidate then
@@ -628,17 +624,17 @@ function M.detect_game_candidates(request_json)
         candidate.alias_hint = true
         candidate.alias_primary = info.primary == true
         candidate.alias_unique = info.unique == true
+        candidate.alias_automatic = info.automatic == true
     end
-
     local has_local_candidates = false
     for _ in pairs(by_id) do has_local_candidates = true; break end
-    local max_queries = has_local_candidates and math.min(#queries, 2) or math.min(#queries, 4)
+    local max_queries = recovery_mode and math.min(#queries, 6) or (has_local_candidates and math.min(#queries, 2) or math.min(#queries, 4))
 	local store_search_confirmed = true
     for query_index = 1, max_queries do
         local query_text = queries[query_index]
         local query_norm = detection_normalize(query_text)
         local is_short_query = #query_norm <= 3
-        local items, search_confirmed = detection_store_search(query_text, language)
+        local items, search_confirmed = detection_store_search(query_text, language, recovery_mode)
 		if not search_confirmed then store_search_confirmed = false end
         local found_exact_match = false
         for rank = 1, math.min(#items, 15) do
@@ -664,7 +660,6 @@ function M.detect_game_candidates(request_json)
                     candidate.query_rank = math.min(candidate.query_rank, rank)
                     candidate.query_index = math.min(candidate.query_index, query_index)
                 end
-
                 local sim = math.max(
                     detection_similarity(title_cleaned, name),
                     detection_compact_similarity(title_cleaned, name)
@@ -679,7 +674,6 @@ function M.detect_game_candidates(request_json)
             break
         end
     end
-
     local candidates = {}
     for _, candidate in pairs(by_id) do
         local comp = detection_text.compare_title_identities(request.title or title_cleaned, candidate.name)
@@ -699,13 +693,10 @@ function M.detect_game_candidates(request_json)
         end
         local exe_similarity = DETECTION_GENERIC_EXES[exe_normalized] and 0
             or math.max(detection_similarity(exe_stem, candidate.name), detection_compact_similarity(exe_stem, candidate.name))
-
         local norm_title = detection_normalize(title_cleaned)
         local score = title_similarity * 55 + folder_similarity * 20 + exe_similarity * 15 + math.max(0, 8 - math.min(candidate.query_rank, 8))
-
         if candidate.alias_hint then score = score + 5; detection_add_reason(candidate, "franchise_alias") end
         if candidate.from_appid_file then score = score + 10; detection_add_reason(candidate, "steam_appid_file") end
-
         if norm_title ~= "" and norm_title == norm_cand then
             if is_short_title and not folder_exact and folder_similarity < 0.7 and not candidate.executable_match then
                 score = math.min(score, 60); detection_add_reason(candidate, "short_title_unverified")
@@ -713,33 +704,27 @@ function M.detect_game_candidates(request_json)
                 score = math.max(score, 90); detection_add_reason(candidate, "title_exact")
             end
         elseif title_similarity >= 0.65 then detection_add_reason(candidate, "title_similar") end
-
         if folder_exact then score = score + 18; detection_add_reason(candidate, "folder_exact")
         elseif folder_similarity >= 0.65 then score = score + 8; detection_add_reason(candidate, "folder_match") end
-
         if clean_pe_product and candidate.name then
             local pe_sim = math.max(detection_similarity(clean_pe_product, candidate.name), detection_compact_similarity(clean_pe_product, candidate.name))
             if pe_sim >= 0.82 or detection_normalize(candidate.name) == detection_normalize(clean_pe_product) then
                 score = math.max(score, 94); detection_add_reason(candidate, "pe_product_exact")
             elseif pe_sim >= 0.60 then score = score + 16; detection_add_reason(candidate, "pe_product_match") end
         end
-
         if comp.year_match then score = score + 20; detection_add_reason(candidate, "year_match")
         elseif comp.year_mismatch then score = score - 25; detection_add_reason(candidate, "year_mismatch") end
         if comp.sequel_match then score = score + 15; detection_add_reason(candidate, "sequel_match")
         elseif comp.sequel_mismatch then score = score - 35; detection_add_reason(candidate, "sequel_mismatch") end
         if comp.remake_mismatch then score = score - 30; detection_add_reason(candidate, "remake_mismatch") end
         if comp.is_collision then candidate.identity_collision = true; detection_add_reason(candidate, "identity_collision") end
-
         if exe_similarity >= 0.75 then detection_add_reason(candidate, "executable_name_match") end
         if exe_stem ~= raw_exe_stem and exe_similarity >= 0.55 then detection_add_reason(candidate, "shipping_executable_match") end
         detection_add_reason(candidate, "steam_store_search")
         candidate.score = score
         table.insert(candidates, candidate)
     end
-
     table.sort(candidates, function(a, b) return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score end)
-
     local actual_exe = exe_basename:lower()
     local function validate_candidate(candidate)
         if candidate.direct or candidate._validated then return end
@@ -804,25 +789,23 @@ function M.detect_game_candidates(request_json)
             end
         end
     end
-
     for i = 1, math.min(#candidates, 3) do validate_candidate(candidates[i]) end
     table.sort(candidates, function(a, b)
         if a.executable_match ~= b.executable_match then return a.executable_match end
         return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score
     end)
-
     local top, second = candidates[1], candidates[2]
     local top_gap = (top and second) and (top.score - second.score) or 100
     local has_proof = top and (top.direct or top.executable_match)
     if (not has_proof or top_gap < 15 or (top and top.identity_collision) or (top and top._reason_set and top._reason_set["non_game_result"])) and #candidates > 3 then
         for i = 4, math.min(#candidates, 6) do validate_candidate(candidates[i]) end
     end
-
     for _, candidate in ipairs(candidates) do
         if candidate.alias_hint and candidate.alias_primary and not candidate.identity_collision then
-            candidate.score = math.max(candidate.score, 72)
+            candidate.score = math.max(candidate.score, candidate.alias_automatic and 78 or 72)
             detection_add_reason(candidate, "maintained_alias_exact")
             if candidate.alias_unique then detection_add_reason(candidate, "maintained_alias_unique") end
+            if candidate.alias_automatic then detection_add_reason(candidate, "maintained_alias_auto") end
         end
         local official_title_exact = candidate._reason_set and candidate._reason_set["official_title_exact"] == true
         if candidate.alias_hint and not candidate.executable_match and not official_title_exact then
@@ -831,12 +814,10 @@ function M.detect_game_candidates(request_json)
         end
         candidate.score = math.max(0, math.min(99, math.floor(candidate.score + 0.5)))
     end
-
     table.sort(candidates, function(a, b)
         if a.executable_match ~= b.executable_match then return a.executable_match end
         return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score
     end)
-
     local output = {}
     for index = 1, math.min(#candidates, 6) do
         local candidate = candidates[index]
@@ -857,7 +838,6 @@ function M.detect_game_candidates(request_json)
         elseif candidate.score >= 88 or rset["pe_product_exact"] or rset["official_title_exact"] then candidate.evidence_tier = "strong"
         elseif candidate.score >= 65 then candidate.evidence_tier = "supporting"
         else candidate.evidence_tier = "hint" end
-
         local neg = {}
         for _, r in ipairs({ "year_mismatch", "sequel_mismatch", "remake_mismatch", "edition_mismatch", "non_game_result", "alias_requires_confirmation" }) do
             if rset[r] then table.insert(neg, r) end
@@ -866,7 +846,6 @@ function M.detect_game_candidates(request_json)
         candidate.confidence = (candidate.score >= 90 and not candidate.ambiguous) and "high" or (candidate.score >= 70 and "medium" or "low")
         table.insert(output, candidate)
     end
-
     if (not store_search_confirmed or #output == 0) and deps.shortcut_detection_local and deps.shortcut_detection_local.discover_local_candidates then
         local local_res = deps.shortcut_detection_local.discover_local_candidates(request)
         if local_res and type(local_res.candidates) == "table" then
@@ -880,7 +859,6 @@ function M.detect_game_candidates(request_json)
             end
         end
     end
-
     local result = {
         candidates = output, launcher_detected = launcher, generic_launcher = generic_launcher,
         executable = exe_basename, queries = queries, source = "steam_store_search",
@@ -893,6 +871,5 @@ function M.detect_game_candidates(request_json)
     end
     return encoded
 end
-
 return M
 end

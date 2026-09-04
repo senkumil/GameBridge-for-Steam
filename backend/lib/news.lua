@@ -7,6 +7,7 @@ local fs = deps.fs
 local util = deps.util
 local config = deps.config
 local lru = deps.lru_cache
+local community = deps.community
 local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
 local M = {}
 local html_unescape = util.html_unescape
@@ -343,6 +344,162 @@ local function mark_related_items(items, related_appid)
     return items
 end
 
+
+-- Community history is used only when Steam's official chronology is sparse.
+-- These cards are never fabricated: every entry points to a real Steam
+-- Community guide/discussion and its date is read from the source page.
+local COMMUNITY_HISTORY_TERMS = {
+    "update", "patch", "hotfix", "dlc", "data pack", "datapack", "content pack",
+    "server", "online", "maintenance", "fix", "troubleshoot", "solution", "version",
+    "removed", "delisted", "shutdown", "support", "steamworks", "multiplayer",
+    "actualizacion", "actualización", "parche", "contenido", "servidor", "solucion", "solución",
+    "mantenimiento", "eliminado", "retirado", "cierre", "soporte",
+}
+
+local function community_history_relevant(title, description)
+    local text = (tostring(title or "") .. " " .. tostring(description or "")):lower()
+    for _, term in ipairs(COMMUNITY_HISTORY_TERMS) do
+        if text:find(term, 1, true) then return true end
+    end
+    return false
+end
+
+local function absolute_steamcommunity_url(value)
+    local url = html_unescape(tostring(value or ""))
+    if url:match("^https://steamcommunity%.com/") then return url end
+    if url:match("^/app/") or url:match("^/sharedfiles/") then return "https://steamcommunity.com" .. url end
+    return ""
+end
+
+local function source_page_metadata(url)
+    if url == "" then return nil end
+    local ok_http, res = pcall(http.get, url, {
+        headers = { ["Accept"] = "text/html,*/*", ["User-Agent"] = USER_AGENT },
+        timeout = 6,
+    })
+    if not ok_http or not res or res.status ~= 200 or not res.body then return nil end
+    local body = tostring(res.body)
+    local function meta(property)
+        return clean_markup(body:match('<meta[^>]-property=["\']' .. property .. '["\'][^>]-content=["\']([^"\']+)["\']')
+            or body:match('<meta[^>]-content=["\']([^"\']+)["\'][^>]-property=["\']' .. property .. '["\']') or "")
+    end
+    local description = clean_markup(body:match('<meta[^>]-name=["\']description["\'][^>]-content=["\']([^"\']+)["\']')
+        or body:match('<meta[^>]-content=["\']([^"\']+)["\'][^>]-name=["\']description["\']') or "")
+    local title = meta("og:title")
+    local image = meta("og:image")
+    local lines = oldnews_lines(body)
+    local date = 0
+    for index, line in ipairs(lines) do
+        local lower = tostring(line):lower()
+        local inline = line:match("[Dd]ate [Pp]osted:%s*(.+)$") or line:match("[Pp]osted:%s*(.+)$")
+        if inline then date = parse_english_date(inline) end
+        if date <= 0 and (lower == "posted" or lower == "date posted") and lines[index + 1] then
+            date = parse_english_date(lines[index + 1])
+        end
+        if date > 0 then break end
+    end
+    -- Steam Workshop guide pages expose Posted/Updated in adjacent stat cells.
+    if date <= 0 then
+        local posted = body:match('detailsStatLeft[^>]*>%s*[Pp]osted%s*</div>%s*<div[^>]-detailsStatRight[^>]*>(.-)</div>')
+            or body:match('detailsStatLeft[^>]*>%s*[Uu]pdated%s*</div>%s*<div[^>]-detailsStatRight[^>]*>(.-)</div>')
+        date = parse_english_date(clean_markup(posted or ""))
+    end
+    return { title = title, description = description, image = image, date = date }
+end
+
+local function fetch_relevant_discussion_candidates(appid, max_items)
+    local result, seen = {}, {}
+    local urls = {
+        "https://steamcommunity.com/app/" .. appid .. "/discussions/?l=english",
+        "https://steamcommunity.com/app/" .. appid .. "/discussions/search/?q=update&l=english",
+        "https://steamcommunity.com/app/" .. appid .. "/discussions/search/?q=patch&l=english",
+        "https://steamcommunity.com/app/" .. appid .. "/discussions/search/?q=dlc&l=english",
+        "https://steamcommunity.com/app/" .. appid .. "/discussions/search/?q=fix&l=english",
+    }
+    for _, page_url in ipairs(urls) do
+        if #result >= (max_items or 6) then break end
+        local ok_http, res = pcall(http.get, page_url, {
+            headers = { ["Accept"] = "text/html,*/*", ["User-Agent"] = USER_AGENT },
+            timeout = 5,
+        })
+        if ok_http and res and res.status == 200 and res.body then
+            local body = tostring(res.body)
+            for href, raw_title in body:gmatch('<a[^>]-href=["\']([^"\']-/app/' .. appid .. '/discussions/[^"\']+)["\'][^>]*>(.-)</a>') do
+                local title = clean_markup(raw_title)
+                local clean_url = absolute_steamcommunity_url(href):gsub("%?.*$", "")
+                if clean_url ~= "" and title ~= "" and community_history_relevant(title, "") and not seen[clean_url] then
+                    seen[clean_url] = true
+                    result[#result + 1] = { url = clean_url, title = title, type = "discussion" }
+                    if #result >= (max_items or 6) then break end
+                end
+            end
+        end
+    end
+    return result
+end
+
+local function fetch_relevant_community_history(appid, lang, max_items)
+    local candidates, seen = {}, {}
+    local function add_candidate(item_type, title, description, link, image)
+        local url = absolute_steamcommunity_url(link)
+        if url == "" or seen[url] or not community_history_relevant(title, description) then return end
+        seen[url] = true
+        candidates[#candidates + 1] = {
+            type = item_type, title = tostring(title or ""), description = tostring(description or ""),
+            url = url, image = tostring(image or ""),
+        }
+    end
+
+    -- Reuse the app-hub parser already used by the Community section. It is
+    -- much more resilient to Steam markup changes than maintaining a second
+    -- guide parser in the news subsystem.
+    if community and type(community.fetch_community_content) == "function" then
+        local ok, raw = pcall(community.fetch_community_content, appid, lang ~= "" and lang or "english")
+        local decoded_ok, payload = pcall(cjson.decode, ok and tostring(raw or "") or "{}")
+        if decoded_ok and type(payload) == "table" and type(payload.items) == "table" then
+            for _, item in ipairs(payload.items) do
+                local item_type = tostring(item.type or "")
+                if item_type == "guide" or item_type == "screenshot" or item_type == "artwork" then
+                    add_candidate(item_type == "guide" and "guide" or "community", item.title, item.description, item.link, item.image)
+                end
+                if #candidates >= 8 then break end
+            end
+        end
+    end
+
+    for _, item in ipairs(fetch_relevant_discussion_candidates(appid, 8)) do
+        add_candidate("discussion", item.title, "", item.url, "")
+        if #candidates >= 10 then break end
+    end
+
+    local result = {}
+    for _, candidate in ipairs(candidates) do
+        if #result >= (max_items or 4) then break end
+        local meta = source_page_metadata(candidate.url)
+        local date = meta and tonumber(meta.date or 0) or 0
+        if date > 0 then
+            local title = (meta and meta.title ~= "" and meta.title or candidate.title)
+                :gsub("%s*::%s*Steam Community.*$", "")
+            local description = meta and meta.description ~= "" and meta.description or candidate.description
+            result[#result + 1] = {
+                gid = "community:" .. candidate.url,
+                title = title,
+                url = candidate.url,
+                contents = description,
+                date = date,
+                event_type = 0,
+                image = meta and meta.image ~= "" and meta.image or candidate.image,
+                feedlabel = candidate.type == "guide" and "Steam Community · Guide"
+                    or (candidate.type == "discussion" and "Steam Community · Discussion" or "Steam Community"),
+                feedname = "steam_community_history",
+                appid = tonumber(appid) or 0,
+                historical_community = true,
+            }
+        end
+    end
+    return result
+end
+
 local function event_to_news_item(ev)
     if type(ev) ~= "table" then return nil end
     local ann = type(ev.announcement_body) == "table" and ev.announcement_body or {}
@@ -417,7 +574,43 @@ local function fetch_relevant_partner_events(appid, lang, max_items)
     return all_items, transient or all_transient
 end
 
+-- Standard Steam news path for active Store games. Keep this intentionally
+-- conservative: NativeGameLink must not alter the normal Steam chronology for
+-- games that still have a regular Store presence. Historical/community
+-- enrichment lives exclusively in fetch_news_historical().
 function M.fetch_news(steam_app_id, language)
+    local appid, safe_language = util.normalize_appid_and_language(steam_app_id, language)
+    if not appid:match("^%d+$") then
+        return cjson.encode({ error = "invalid_appid", appnews = { newsitems = {} } })
+    end
+    local lang = safe_language:gsub("[^%w_]", "")
+    local announcements, transient_a = fetch_news_json(appid, lang, true)
+    local news = announcements
+    local source = "steam_news_web_api"
+    local transient_error = transient_a
+
+    -- Preserve the pre-enrichment behavior: only broaden when the official
+    -- announcements feed is completely empty. Do not pad a sparse active-game
+    -- feed with archives, related apps, or Community cards.
+    if #news == 0 then
+        local all_feeds, transient_b = fetch_news_json(appid, lang, false)
+        news = merge_news_lists(news, all_feeds)
+        transient_error = transient_error or transient_b
+        if #all_feeds > 0 then source = "steam_old_news" end
+    end
+
+    local is_available = #news > 0
+    return cjson.encode({
+        items = news,
+        available = is_available,
+        unavailable = not is_available and not transient_error,
+        transient_error = transient_error and not is_available,
+        source = source,
+        historical_enrichment = false,
+    })
+end
+
+function M.fetch_news_historical(steam_app_id, language)
     local appid, safe_language = util.normalize_appid_and_language(steam_app_id, language)
     if not appid:match("^%d+$") then
         return cjson.encode({ error = "invalid_appid", appnews = { newsitems = {} } })
@@ -539,6 +732,17 @@ function M.fetch_news(steam_app_id, language)
         if #historical_items > 0 then source = "steam_news_plus_community_archive" end
     end
 
+    -- A retired title can legitimately have only one surviving official news
+    -- post. Fill the chronology with real, source-linked Steam Community
+    -- history (guides/discussions about patches, DLC, fixes, servers, removal,
+    -- etc.) instead of fabricating announcements. This path is generic for
+    -- every AppID and runs only while the official feed remains sparse.
+    if lang == "english" and #news < TARGET_NEWS_ITEMS then
+        local community_history = fetch_relevant_community_history(appid, "english", TARGET_NEWS_ITEMS - #news)
+        news = merge_news_lists(news, community_history)
+        if #community_history > 0 then source = "steam_hybrid_historical_activity" end
+    end
+
     local is_available = #news > 0
     if logger and logger.info then
         logger:info(string.format("[NGL][News] appid=%s lang=%s items=%d source=%s related=%d",
@@ -551,6 +755,7 @@ function M.fetch_news(steam_app_id, language)
         transient_error = transient_error and not is_available,
         source = source,
         target_count = TARGET_NEWS_ITEMS,
+        historical_enrichment = true,
     })
 end
 
@@ -628,17 +833,14 @@ function M.fetch_partner_events(steam_app_id, language)
     end
     local lang = safe_language:gsub("[^%w_]", "")
     if lang == "" then lang = "english" end
-    local adjacent, adjacent_transient = fetch_relevant_partner_events(appid, lang, 50)
-    local scraped, unavailable, scrape_transient = scrape_partner_events(appid, lang, 50)
-    local items = merge_news_lists(adjacent, scraped)
+    local items, unavailable, transient_error = scrape_partner_events(appid, lang, 50)
     return cjson.encode({
         items = items,
         available = #items > 0,
-        unavailable = unavailable == true and #items == 0,
-		transient_error = (adjacent_transient or scrape_transient) == true and #items == 0,
-        source = #adjacent > 0 and "steam_adjacent_partner_events" or "steam_store_partner_events",
+        unavailable = unavailable == true,
+        transient_error = transient_error == true,
+        source = "steam_store_partner_events",
     })
 end
-
 return M
 end
