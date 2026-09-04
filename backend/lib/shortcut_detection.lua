@@ -12,7 +12,6 @@ local detection_url_encode = util.url_encode
 local function detection_encode(value)
     return cjson.encode(util.sanitize_utf8_tree(value))
 end
-
 -- Bounded LRU caches. TTL alone does not release entries that are never read
 -- again, which matters during long-running Steam sessions with many games.
 local detection_cache = deps.ttl_cache
@@ -23,7 +22,7 @@ local detection_store_cache, detection_appdetails_cache, detection_appinfo_cache
 -- never look like near-certain identification unless the candidate's official
 -- Steam launch configuration also contains the executable we are inspecting.
 local DETECTION_UNVERIFIED_ALIAS_MAX_SCORE = 84
-
+local DETECTION_MODEL_VERSION = "v7"
 -- Pure text matching and the maintained alias catalogue live in focused
 -- modules; this detector remains responsible for filesystem/network evidence.
 local detection_text = deps.shortcut_detection_text
@@ -43,7 +42,6 @@ local function detection_read_small_file(path, max_bytes)
     local content = handle:read(max_bytes or 8192); handle:close()
     return content
 end
-
 local function detection_read_binary_file(path, max_bytes)
     if not path or path == "" or not fs.exists(path) then return nil end
     local handle = io.open(path, "rb")
@@ -51,26 +49,21 @@ local function detection_read_binary_file(path, max_bytes)
     local content = handle:read("*a"); handle:close()
     return (content and content ~= "" and #content <= (max_bytes or 8 * 1024 * 1024)) and content or nil
 end
-
 local detection_binary_cstring = util.binary_cstring
 local detection_binary_i32 = util.binary_i32
 local detection_parse_binary_vdf_object = util.parse_binary_vdf_object
-
 local function detection_shortcut_appid(value)
     local id = tonumber(value)
     return id and math.floor(id < 0 and id + 4294967296 or id) or nil
 end
-
 local detection_tracking = deps.shortcut_detection_tracking
 local detection_find_tracking_executable = detection_tracking.find_tracking_executable
-
 local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
     local target = detection_shortcut_appid(shortcut_app_id)
     local target_title_norm = detection_normalize(shortcut_title or "")
     if not target and target_title_norm == "" then return nil end
     local userdata_root = fs.join(millennium.steam_path(), "userdata")
     if not fs.exists(userdata_root) then return nil end
-
     local files = {}
     local ok_list, entries = pcall(fs.list, userdata_root)
     if ok_list and type(entries) == "table" then
@@ -102,7 +95,6 @@ local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
         if #active_files > 0 then files = active_files end
     end
     table.sort(files, function(a, b) return a.modified > b.modified end)
-
     for _, file in ipairs(files) do
         local shortcuts = nil
         local cached_vdf = detection_cache_get(detection_vdf_cache, file.path)
@@ -118,7 +110,6 @@ local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
                 end
             end
         end
-
         if type(shortcuts) == "table" then
             for _, record in pairs(shortcuts) do
                 if type(record) == "table" then
@@ -163,7 +154,6 @@ local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
     end
     return nil
 end
-
 function M.get_shortcut_details(shortcut_app_id, shortcut_title)
     local target_id = shortcut_app_id
     local target_title = shortcut_title
@@ -181,7 +171,6 @@ function M.get_shortcut_details(shortcut_app_id, shortcut_title)
     logger:info("Resolved shortcut details from shortcuts.vdf for " .. tostring(target_id or target_title))
     return detection_encode(record)
 end
-
 local function detection_http_json(url, timeout)
     local ok_http, res, err = pcall(http.get, url, {
         headers = {
@@ -197,7 +186,6 @@ local function detection_http_json(url, timeout)
     if not ok_json or type(body) ~= "table" then return nil, "JSON parse failed" end
     return body, nil
 end
-
 local function detection_fetch_appdetails(appid, language)
     local id = tostring(appid or "")
     if not id:match("^%d+$") then return nil end
@@ -205,7 +193,6 @@ local function detection_fetch_appdetails(appid, language)
     local cache_key = id .. "\31" .. lang
     local cached = detection_cache_get(detection_appdetails_cache, cache_key, 1800)
     if cached then return cached.data end
-
     local url = "https://store.steampowered.com/api/appdetails?appids=" .. id
         .. "&l=" .. detection_url_encode(lang)
     local body = detection_http_json(url, 2.5)
@@ -216,14 +203,12 @@ local function detection_fetch_appdetails(appid, language)
     end
     return nil
 end
-
 local function detection_appid_from_arguments(arguments)
     local args = tostring(arguments or "")
     return args:match("steam://rungameid/(%d+)")
         or args:match("[%-%/]appid[%s=]+(%d+)")
         or args:match("[%-%/]app_id[%s=]+(%d+)")
 end
-
 local function detection_find_steam_appid_file(exe_path)
     local dir = fs.parent_path(detection_clean_path(exe_path))
     for _ = 1, 4 do
@@ -237,7 +222,6 @@ local function detection_find_steam_appid_file(exe_path)
     end
     return nil, nil
 end
-
 local function detection_find_appmanifest(exe_path)
     local path = detection_clean_path(exe_path)
     local marker_start = path:lower():find("\\steamapps\\common\\", 1, true)
@@ -262,7 +246,6 @@ local function detection_find_appmanifest(exe_path)
     end
     return nil, nil
 end
-
 local function detection_store_search(query, language)
     local cleaned = detection_trim(query)
     if #cleaned < 2 then return {} end
@@ -270,7 +253,6 @@ local function detection_store_search(query, language)
     local cache_key = cleaned:lower() .. "\31" .. lang
     local cached = detection_cache_get(detection_store_cache, cache_key, 600)
     if cached then return cached.items, cached.confirmed == true end
-
     local url = "https://store.steampowered.com/api/storesearch/?term="
         .. detection_url_encode(cleaned)
         .. "&l=" .. detection_url_encode(lang)
@@ -281,19 +263,16 @@ local function detection_store_search(query, language)
     detection_cache_set(detection_store_cache, cache_key, { items = items, confirmed = true, ttl = 600 })
     return items, true
 end
-
 local function detection_fetch_appinfo(appid)
     local id = tostring(appid or "")
     if not id:match("^%d+$") then return nil end
     local cached = detection_cache_get(detection_appinfo_cache, id, 1800)
     if cached then return cached.data end
-
     local body = detection_http_json("https://api.steamcmd.net/v1/info/" .. id, 1.5)
     local data = type(body) == "table" and type(body.data) == "table" and body.data[id] or nil
     if data then detection_cache_set(detection_appinfo_cache, id, { data = data, ttl = 1800 }) end
     return data
 end
-
 local function detection_collect_launch_executables(node, result, depth)
     if type(node) ~= "table" or depth > 8 then return end
     for key, value in pairs(node) do
@@ -306,7 +285,6 @@ local function detection_collect_launch_executables(node, result, depth)
         end
     end
 end
-
 local function detection_folder_hints(exe_path, start_dir)
     local hints, seen = {}, {}
     local dir = detection_clean_path(start_dir ~= "" and start_dir or fs.parent_path(detection_clean_path(exe_path)))
@@ -321,7 +299,6 @@ local function detection_folder_hints(exe_path, start_dir)
     end
     return hints
 end
-
 local function detection_add_reason(candidate, reason)
     candidate._reason_set = candidate._reason_set or {}
     if not candidate._reason_set[reason] then
@@ -329,7 +306,6 @@ local function detection_add_reason(candidate, reason)
         table.insert(candidate.reasons, reason)
     end
 end
-
 local function detection_direct_result(appid, source, request, language, launcher, generic_launcher, fallback_name)
     local data = detection_fetch_appdetails(appid, language)
     local validation_source = "steam_store_appdetails"
@@ -363,7 +339,6 @@ local function detection_direct_result(appid, source, request, language, launche
     local name = data.name
     local image = data.header_image or data.tiny_image
         or ("https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/" .. tostring(appid) .. "/header.jpg")
-
     local official_exes = {}
     if type(appinfo) == "table" and type(appinfo.config) == "table" and type(appinfo.config.launch) == "table" then
         detection_collect_launch_executables(appinfo.config.launch, official_exes, 0)
@@ -371,16 +346,13 @@ local function detection_direct_result(appid, source, request, language, launche
     local target_exe = request.game_exe_path ~= "" and request.game_exe_path or request.exe_path
     local actual_exe = detection_basename(target_exe):lower()
     local exe_matched = actual_exe ~= "" and official_exes[actual_exe] == true
-
     local comp = detection_text.compare_title_identities(request.title or fallback_name or "", name)
     local title_matched = comp.base_matches and not comp.is_collision and not comp.year_mismatch and not comp.sequel_mismatch
-
     local is_direct_proof = false
     local score = 100
     local confidence = "exact"
     local evidence_tier = "proof"
     local reasons = { source, validation_source }
-
     if source == "launch_argument" or source == "steam_appmanifest" then
         is_direct_proof = true
         evidence_tier = "proof"
@@ -393,11 +365,9 @@ local function detection_direct_result(appid, source, request, language, launche
         evidence_tier = "strong"
         table.insert(reasons, "official_title_exact")
     end
-
     if not is_direct_proof then
         return nil
     end
-
     return {
         candidates = {{
             appid = tostring(appid),
@@ -416,7 +386,6 @@ local function detection_direct_result(appid, source, request, language, launche
         source = source,
     }
 end
-
 function M.detect_game_candidates_local(request_json)
     local ok_request, request = pcall(cjson.decode, tostring(request_json or "{}"))
     if not ok_request or type(request) ~= "table" then
@@ -427,7 +396,6 @@ function M.detect_game_candidates_local(request_json)
     end
     return detection_encode({ candidates = {}, error = "local_engine_unavailable" })
 end
-
 function M.detect_game_candidates(request_json)
     local ok_request, request = pcall(cjson.decode, tostring(request_json or "{}"))
     if not ok_request or type(request) ~= "table" then
@@ -436,7 +404,6 @@ function M.detect_game_candidates(request_json)
     if request.phase == "local" then
         return M.detect_game_candidates_local(request_json)
     end
-
     request.title = detection_trim(request.title):sub(1, 240)
     request.exe_path = detection_clean_path(request.exe_path):sub(1, 4096)
     request.start_dir = detection_clean_path(request.start_dir):sub(1, 4096)
@@ -446,7 +413,6 @@ function M.detect_game_candidates(request_json)
     request.shortcut_app_id = detection_trim(request.shortcut_app_id)
     local language = detection_trim(request.language)
     if language == "" then language = "english" end
-
     if (request.shortcut_app_id:match("^%d+$") or request.title ~= "") and (request.exe_path == "" or request.start_dir == "") then
         local shortcut = detection_find_shortcut_record(request.shortcut_app_id, request.title)
         if shortcut then
@@ -456,7 +422,6 @@ function M.detect_game_candidates(request_json)
             if request.launch_options == "" then request.launch_options = shortcut.launch_options end
         end
     end
-
     -- A shortcut may launch a bootstrapper while Steam details already found
     -- the real game executable. Keep the original path for launcher detection,
     -- but use the real executable for identity matching and appinfo validation.
@@ -492,7 +457,7 @@ function M.detect_game_candidates(request_json)
     local generic_launcher = DETECTION_GENERIC_EXES[launcher_exe_normalized] == true
 
     local cache_key = table.concat({
-        request.title, request.exe_path, request.start_dir,
+        DETECTION_MODEL_VERSION, request.title, request.exe_path, request.start_dir,
         request.game_exe_path, request.game_start_dir,
         request.launch_options, language
     }, "\31")
@@ -559,7 +524,7 @@ function M.detect_game_candidates(request_json)
     end
 
     local alias_candidates = {}
-    local function check_alias(key)
+    local function check_alias(key, primary_identity)
         if not key or key == "" then return end
         local raw_norm = detection_normalize(key)
         local compact = raw_norm:gsub("%s+", "")
@@ -567,25 +532,32 @@ function M.detect_game_candidates(request_json)
         if alias then
             add_query(alias.name)
             for _, direct_id in ipairs(alias.appids) do
-                alias_candidates[direct_id] = alias.name
+                local existing = alias_candidates[direct_id]
+                alias_candidates[direct_id] = {
+                    name = alias.name,
+                    primary = primary_identity == true or (type(existing) == "table" and existing.primary == true),
+                    unique = #(alias.appids or {}) == 1 or (type(existing) == "table" and existing.unique == true),
+                }
             end
         end
     end
 
-    check_alias(title_hint)
-    check_alias(title_cleaned)
-    check_alias(exe_stem)
-    check_alias(raw_exe_stem)
-    if clean_pe_product then check_alias(clean_pe_product) end
-    if clean_pe_desc then check_alias(clean_pe_desc) end
-    for _, folder in ipairs(folders) do check_alias(folder) end
+    -- Title/executable/PE aliases are primary identity hints. Folder/segment aliases
+    -- only help discovery and must not make a short token authoritative.
+    check_alias(title_hint, true)
+    check_alias(title_cleaned, true)
+    check_alias(exe_stem, true)
+    check_alias(raw_exe_stem, true)
+    if clean_pe_product then check_alias(clean_pe_product, true) end
+    if clean_pe_desc then check_alias(clean_pe_desc, true) end
+    for _, folder in ipairs(folders) do check_alias(folder, false) end
 
     -- Sub-segment query decomposition for long titles
     for segment in tostring(title_cleaned):gmatch("[^–—:|%-]+") do
         local seg_trimmed = detection_trim(segment)
         if #seg_trimmed >= 3 and seg_trimmed ~= title_cleaned then
             add_query(seg_trimmed)
-            check_alias(seg_trimmed)
+            check_alias(seg_trimmed, false)
         end
     end
 
@@ -636,12 +608,13 @@ function M.detect_game_candidates(request_json)
         end
     end
 
-    for direct_id, default_name in pairs(alias_candidates) do
-        if not by_id[direct_id] then
+    for direct_id, info in pairs(alias_candidates) do
+        local candidate = by_id[direct_id]
+        if not candidate then
             local image = "https://cdn.cloudflare.steamstatic.com/steam/apps/" .. direct_id .. "/header.jpg"
-            by_id[direct_id] = {
+            candidate = {
                 appid = direct_id,
-                name = default_name,
+                name = info.name,
                 image = image,
                 item_type = "game",
                 reasons = { "franchise_alias" },
@@ -649,9 +622,12 @@ function M.detect_game_candidates(request_json)
                 query_index = 1,
                 executable_match = false,
                 direct = false,
-                alias_hint = true,
             }
+            by_id[direct_id] = candidate
         end
+        candidate.alias_hint = true
+        candidate.alias_primary = info.primary == true
+        candidate.alias_unique = info.unique == true
     end
 
     local has_local_candidates = false
@@ -775,7 +751,15 @@ function M.detect_game_candidates(request_json)
             candidate.name = tostring(common.name)
             local norm_name = detection_normalize(candidate.name)
             if norm_name == detection_normalize(title_cleaned) or norm_name == detection_normalize(request.title) then
-                candidate.score = math.max(candidate.score, 92); detection_add_reason(candidate, "official_title_exact")
+                if is_short_title then
+                    -- An exact 1-3 character Store title (e.g. "B1") is not independent
+                    -- identity evidence. Keep it provisional until another signal corroborates it.
+                    candidate.score = math.min(candidate.score, 60)
+                    detection_add_reason(candidate, "short_title_unverified")
+                else
+                    candidate.score = math.max(candidate.score, 92)
+                    detection_add_reason(candidate, "official_title_exact")
+                end
             end
             local comp = detection_text.compare_title_identities(request.title, candidate.name)
             if comp.year_match and not (candidate._reason_set and candidate._reason_set["year_match"]) then
@@ -803,8 +787,21 @@ function M.detect_game_candidates(request_json)
             detection_collect_launch_executables(appinfo.config.launch, official_exes, 0)
         end
         if actual_exe ~= "" and official_exes[actual_exe] then
-            candidate.executable_match = true; candidate.score = candidate.score + 28
-            detection_add_reason(candidate, "official_executable_match")
+            local actual_stem = detection_normalize(detection_stem(actual_exe))
+            local request_short_token = detection_normalize(title_cleaned)
+            local rset = candidate._reason_set or {}
+            local independent_corroboration = candidate.alias_primary == true
+                or rset["pe_product_exact"] or rset["folder_exact"]
+                or rset["year_match"] or rset["sequel_match"]
+            if is_short_title and actual_stem == request_short_token and not independent_corroboration then
+                -- Matching an official executable named exactly like the same tiny token
+                -- is circular evidence (B1 -> B1.exe). It must not become proof alone.
+                candidate.score = math.min(68, candidate.score + 8)
+                detection_add_reason(candidate, "short_executable_unverified")
+            else
+                candidate.executable_match = true; candidate.score = candidate.score + 28
+                detection_add_reason(candidate, "official_executable_match")
+            end
         end
     end
 
@@ -822,6 +819,11 @@ function M.detect_game_candidates(request_json)
     end
 
     for _, candidate in ipairs(candidates) do
+        if candidate.alias_hint and candidate.alias_primary and not candidate.identity_collision then
+            candidate.score = math.max(candidate.score, 72)
+            detection_add_reason(candidate, "maintained_alias_exact")
+            if candidate.alias_unique then detection_add_reason(candidate, "maintained_alias_unique") end
+        end
         local official_title_exact = candidate._reason_set and candidate._reason_set["official_title_exact"] == true
         if candidate.alias_hint and not candidate.executable_match and not official_title_exact then
             candidate.score = math.min(candidate.score, DETECTION_UNVERIFIED_ALIAS_MAX_SCORE)

@@ -491,14 +491,14 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         simulate = allow_simulated,
         simulate_count = nil,
         simulate_online_count = nil,
-        simulate_percent = 25,
+        simulate_percent = 0,
         simulate_online_percent = 0,
         unlock_online = unlock_online,
     })
     allow_simulated = effective.simulate == true
     local simulate_count = tonumber(effective.simulate_count)
     local simulate_online_count = tonumber(effective.simulate_online_count)
-    local simulate_percent = tonumber(effective.simulate_percent) or 25
+    local simulate_percent = tonumber(effective.simulate_percent) or 0
     local simulate_online_percent = tonumber(effective.simulate_online_percent) or 0
     local unlocked_names = type(effective.unlocked_names) == "table" and effective.unlocked_names or nil
     unlock_online = effective.unlock_online == true
@@ -661,7 +661,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
 
         local total = #meta_list
         local appid_num = tonumber(metadata_appid) or 0
-        local pct_num = math.max(0, math.min(100, tonumber(simulate_percent) or 25))
+        local pct_num = math.max(0, math.min(100, tonumber(simulate_percent) or 0))
         local pct_target = pct_num / 100.0
         local offline_unlocked_target = 0
         if simulate_count ~= nil and simulate_count >= 0 then

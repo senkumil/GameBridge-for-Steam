@@ -118,7 +118,7 @@ local function read_options()
                 simulate = value.simulate == true or (count and count > 0) or (online_count and online_count > 0) or has_unlocked_names,
                 simulate_count = count,
                 simulate_online_count = online_count,
-                simulate_percent = tonumber(value.simulate_percent) or 25,
+                simulate_percent = tonumber(value.simulate_percent) or 0,
                 simulate_online_percent = online_pct,
                 unlock_online = (online_count and online_count > 0) or online_pct > 0 or value.unlock_online == true,
                 unlocked_names = unlocked_names,
@@ -205,7 +205,7 @@ function M.set_game_path(request_json)
     end
     if path ~= "" then
         local options = read_options()
-        local record = { simulate = false, simulate_percent = 25, unlock_online = request.unlock_online == true }
+        local record = { simulate = false, simulate_percent = 0, unlock_online = request.unlock_online == true }
         for _, key in ipairs(keys) do options[key] = record end
         if not write_json("achievement_options.json", options, "per-game achievement options") then
             return cjson.encode({ ok = false, error = "write_failed" })
@@ -226,7 +226,7 @@ function M.resolve_options(request, defaults)
         resolved.simulate = record.simulate == true
         resolved.simulate_count = tonumber(record.simulate_count)
         resolved.simulate_online_count = tonumber(record.simulate_online_count)
-        resolved.simulate_percent = tonumber(record.simulate_percent) or 25
+        resolved.simulate_percent = tonumber(record.simulate_percent) or 0
         resolved.simulate_online_percent = tonumber(record.simulate_online_percent) or (record.unlock_online == true and 100 or 0)
         resolved.unlock_online = record.unlock_online == true
         resolved.unlocked_names = record.unlocked_names
@@ -234,7 +234,7 @@ function M.resolve_options(request, defaults)
         resolved.simulate = defaults.simulate == true
         resolved.simulate_count = tonumber(defaults.simulate_count)
         resolved.simulate_online_count = tonumber(defaults.simulate_online_count)
-        resolved.simulate_percent = tonumber(defaults.simulate_percent) or 25
+        resolved.simulate_percent = tonumber(defaults.simulate_percent) or 0
         resolved.simulate_online_percent = tonumber(defaults.simulate_online_percent) or (defaults.unlock_online == true and 100 or 0)
         resolved.unlock_online = defaults.unlock_online == true
         resolved.unlocked_names = defaults.unlocked_names
@@ -252,7 +252,7 @@ function M.get_game_options(request_json)
         simulate = request.global_simulate == true,
         simulate_count = tonumber(request.global_simulate_count),
         simulate_online_count = tonumber(request.global_simulate_online_count),
-        simulate_percent = tonumber(request.global_simulate_percent) or 25,
+        simulate_percent = tonumber(request.global_simulate_percent) or 0,
         simulate_online_percent = tonumber(request.global_simulate_online_percent) or (request.global_unlock_online == true and 100 or 0),
         unlock_online = request.global_unlock_online == true,
     })
@@ -312,7 +312,7 @@ function M.set_game_options(request_json)
         simulate = request.global_simulate == true,
         simulate_count = tonumber(request.global_simulate_count),
         simulate_online_count = tonumber(request.global_simulate_online_count),
-        simulate_percent = tonumber(request.global_simulate_percent) or 25,
+        simulate_percent = tonumber(request.global_simulate_percent) or 0,
         simulate_online_percent = tonumber(request.global_simulate_online_percent) or (request.global_unlock_online == true and 100 or 0),
         unlock_online = request.global_unlock_online == true,
     })

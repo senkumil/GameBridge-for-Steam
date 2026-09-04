@@ -239,7 +239,7 @@ function M.discover_local_candidates(request)
 
     -- Fast alias matching across title, exe stem, PE product, and folder hierarchy
     local alias_candidates = {}
-    local function check_alias(key)
+    local function check_alias(key, primary_identity)
         if not key or key == "" then return end
         local raw_norm = detection_normalize(key)
         local compact = raw_norm:gsub("%s+", "")
@@ -247,24 +247,29 @@ function M.discover_local_candidates(request)
         if alias then
             for _, direct_id in ipairs(alias.appids or {}) do
                 local c_title = KNOWN_APPID_TITLES[direct_id] or alias.name
-                alias_candidates[direct_id] = { name = c_title, alias_name = alias.name }
+                local existing = alias_candidates[direct_id]
+                alias_candidates[direct_id] = {
+                    name = c_title, alias_name = alias.name,
+                    primary = primary_identity == true or (type(existing) == "table" and existing.primary == true),
+                    unique = #(alias.appids or {}) == 1 or (type(existing) == "table" and existing.unique == true),
+                }
             end
         end
     end
 
-    check_alias(title_hint)
-    check_alias(title_cleaned)
-    check_alias(exe_stem)
-    check_alias(raw_exe_stem)
-    if clean_pe_product then check_alias(clean_pe_product) end
-    if clean_pe_desc then check_alias(clean_pe_desc) end
-    for _, folder in ipairs(folders) do check_alias(folder) end
+    check_alias(title_hint, true)
+    check_alias(title_cleaned, true)
+    check_alias(exe_stem, true)
+    check_alias(raw_exe_stem, true)
+    if clean_pe_product then check_alias(clean_pe_product, true) end
+    if clean_pe_desc then check_alias(clean_pe_desc, true) end
+    for _, folder in ipairs(folders) do check_alias(folder, false) end
 
     -- Sub-segment query decomposition for compound titles
     for segment in tostring(title_cleaned):gmatch("[^–—:|%-]+") do
         local seg_trimmed = detection_trim(segment)
         if #seg_trimmed >= 3 and seg_trimmed ~= title_cleaned then
-            check_alias(seg_trimmed)
+            check_alias(seg_trimmed, false)
         end
     end
 
@@ -297,6 +302,8 @@ function M.discover_local_candidates(request)
                 image = image,
                 reasons = { "franchise_alias" },
                 alias_hint = true,
+                alias_primary = info.primary == true,
+                alias_unique = info.unique == true,
                 validation_state = "pending",
             }
         end
@@ -363,6 +370,11 @@ function M.discover_local_candidates(request)
             if exe_similarity >= 0.75 then detection_add_reason(candidate, "executable_name_match") end
             if exe_stem ~= raw_exe_stem and exe_similarity >= 0.55 then detection_add_reason(candidate, "shipping_executable_match") end
 
+            if candidate.alias_hint and candidate.alias_primary and not candidate.identity_collision then
+                score = math.max(score, 72)
+                detection_add_reason(candidate, "maintained_alias_exact")
+                if candidate.alias_unique then detection_add_reason(candidate, "maintained_alias_unique") end
+            end
             if candidate.alias_hint and not candidate.executable_match and (score < 90 or candidate.identity_collision) then
                 score = math.min(score, DETECTION_UNVERIFIED_ALIAS_MAX_SCORE)
                 detection_add_reason(candidate, "alias_requires_confirmation")
