@@ -190,7 +190,7 @@ const infoPanel = path.join(frontendRoot, 'features', 'library', 'info-panel.ts'
 const libraryArtwork = path.join(frontendRoot, 'features', 'library', 'artwork.ts');
 const bigPictureRuntime = path.join(frontendRoot, 'features', 'big-picture', 'runtime.ts');
 const bigPictureDetails = path.join(frontendRoot, 'features', 'big-picture', 'details.ts');
-const bigPictureAchievementCards = path.join(frontendRoot, 'features', 'big-picture', 'achievement-cards.ts');
+const bigPictureNativeDetails = path.join(frontendRoot, 'features', 'big-picture', 'NativeBigPictureDetails.tsx');
 const bigPicturePanelMount = path.join(frontendRoot, 'features', 'big-picture', 'panel-mount.ts');
 const playtimeService = path.join(frontendRoot, 'features', 'playtime', 'service.ts');
 const desktopLibraryPlaytime = path.join(frontendRoot, 'features', 'playtime', 'library-home.ts');
@@ -976,16 +976,15 @@ try {
 }
 
 // Big Picture details use the same durable resource caches as desktop Library,
-// but keep a route-local render session. The owned root augments Steam's active
-// tabpanel without moving its React-owned tablist; independent resources may
-// patch only the exact document/game/language generation. Portrait-card progress
-// is likewise shortcut-scoped and must never rewrite native Steam cards.
+// but mount a real React tree made from Steam Webpack primitives. There must be
+// no plugin stylesheet, inline layout or HTML-string renderer on this surface.
 try {
-	const [detailsSource, runtimeSource, achievementCardsSource, panelMountSource] = await Promise.all([
+	const [detailsSource, nativeDetailsSource, runtimeSource, panelMountSource, contextSource] = await Promise.all([
 		fs.readFile(bigPictureDetails, 'utf8'),
+		fs.readFile(bigPictureNativeDetails, 'utf8'),
 		fs.readFile(bigPictureRuntime, 'utf8'),
-		fs.readFile(bigPictureAchievementCards, 'utf8'),
 		fs.readFile(bigPicturePanelMount, 'utf8'),
+		fs.readFile(path.join(frontendRoot, 'steam', 'gamepad', 'GamepadContext.ts'), 'utf8'),
 	]);
 	const exactStateGuards = [
 		'const detailStates = new WeakMap<Document, BigPictureDetailState>()',
@@ -1014,9 +1013,9 @@ try {
 		fail(bigPictureDetails,
 			'Big Picture details must seed revisits from the shared persistent, exact-language resource snapshots');
 	}
-	if (!detailsSource.includes('data: cached')
+	if (!detailsSource.includes('data: cachedBigPictureDetailData(shortcut, language)')
 		|| !detailsSource.includes('scheduleDetailRetry(doc)')
-		|| detailsSource.includes('if (!state && !coldCached?.game)')) {
+		|| !detailsSource.includes('renderNativeRoot(doc, state)')) {
 		fail(bigPictureDetails,
 			'a cold Big Picture visit must mount a cached/loading panel immediately and retry transient native-panel gaps');
 	}
@@ -1036,12 +1035,12 @@ try {
 			'Big Picture game, achievements, news, community and cards must hydrate independently without a slow aggregate gate');
 	}
 
-	if (!detailsSource.includes('function markupSignature(')
-		|| !detailsSource.includes('state.renderedRoot === root && state.renderSignature === signature')
-		|| detailsSource.indexOf('state.renderedRoot === root && state.renderSignature === signature')
-			> detailsSource.indexOf('root.innerHTML = markup')) {
+	if (!detailsSource.includes('mountNativeBigPictureDetails(state.root, {')
+		|| !detailsSource.includes('unmountNativeBigPictureDetails(state.root)')
+		|| detailsSource.includes('innerHTML')
+		|| detailsSource.includes('renderJsxToHtml')) {
 		fail(bigPictureDetails,
-			'Big Picture rendering must compare a content signature before replacing identical root innerHTML');
+			'Big Picture must mount and update one native React root instead of replacing HTML strings');
 	}
 
 	const nativePanelMount = [
@@ -1062,35 +1061,36 @@ try {
 	}
 
 	const completeNativeSections = [
-		"case 'activity': markup = renderActivity(",
-		"case 'stuff': markup = renderStuff(",
-		"case 'community': markup = renderCommunity(",
-		"case 'info': markup = renderInfo(",
-		'renderAchievements(data.achievements)',
-		'renderCards(data.cards)',
-		'renderMediaAndNotes()',
-	].every(token => detailsSource.includes(token));
+		'PanelSection', 'PanelSectionRow', 'Field', 'Focusable', 'DialogButton', 'ProgressBar',
+		'function ActivityTab(', 'function StuffTab(', 'function CommunityTab(', 'function InfoTab(',
+		'function FriendsSection(', 'function AchievementsSection(',
+		"AppDetails_SectionTitle_TradingCards", "AppDetails_SectionTitle_Media", "AppDetails_SectionTitle_GameNotes",
+	].every(token => nativeDetailsSource.includes(token));
 	if (!completeNativeSections) {
-		fail(bigPictureDetails,
-			'linked Big Picture details must populate Activity, Your Stuff, Community and Game Information without removing native tabs');
+		fail(bigPictureNativeDetails,
+			'linked Big Picture details must populate every native tab and subsection with Steam Webpack components');
 	}
 
-	const protectedAchievementCards = [
-		'const MAX_ACHIEVEMENT_REQUESTS = 4',
-		'getCachedLocalAchievementsForGame(target.shortcut.steamAppId, String(target.shortcut.id))',
-		'explicitIds.some(id => id > 0 && id < 2147483648)',
-		'nativeTitles.has(label)',
-		"host.dataset.gdlBpAchievementIdentity = identity",
-		'subscribeLocalAchievementData(update =>',
-		'live.generation !== generation',
-		"footer.setAttribute('role', 'progressbar')",
-		'class="gdl-bp-card-ach-track"',
-	].every(token => achievementCardsSource.includes(token));
-	if (!protectedAchievementCards
-		|| !runtimeSource.includes('refreshBigPictureAchievementCards(doc)')
-		|| !runtimeSource.includes('disposeBigPictureAchievementCards(gdlBigPictureDoc)')) {
-		fail(bigPictureAchievementCards,
-			'Big Picture achievement footers must be bounded, hot-updating, exact-identity scoped and isolated from native games');
+	const forbiddenCustomPresentation = /(?:createElement\(['"]style['"]|\bstyle\s*=\s*[{"']|cssText|className\s*=|\.innerHTML\s*=)/;
+	if (forbiddenCustomPresentation.test(nativeDetailsSource)
+		|| forbiddenCustomPresentation.test(panelMountSource)
+		|| detailsSource.includes("from './styles'")
+		|| detailsSource.includes("from './gamepad-nav'")
+		|| detailsSource.includes("from './playbar'")) {
+		fail(bigPictureNativeDetails,
+			'Big Picture native content must not inject CSS, inline presentation, serialized HTML or a parallel controller-navigation system');
+	}
+
+	const activeIdentitySignals = [
+		"'g_Router.history.location.pathname'",
+		"'SteamUIStore.m_currentPath'",
+		'activeAppIdsFromStores(doc)',
+		'appIdsFromReactOwners(doc)',
+		'/routes\\/library\\/app\\/',
+	].every(token => contextSource.includes(token));
+	if (!activeIdentitySignals || contextSource.includes("a[href*='/app/']")) {
+		fail(path.join(frontendRoot, 'steam', 'gamepad', 'GamepadContext.ts'),
+			'Big Picture identity must come from its active route/store/React owner, never an unrelated store link');
 	}
 
 	const refreshBlock = runtimeSource.match(

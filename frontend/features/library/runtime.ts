@@ -401,7 +401,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 
 	const language = String(steamLanguageSync() || 'english').toLowerCase();
 	const cachedData = getCachedGameData(steamAppId, language)?.data || null;
-	const cachedNews = getCachedNews(steamAppId, language)?.data || [];
+	let cachedNews = getCachedNews(steamAppId, language, cachedData)?.data || [];
 	const cachedFriends = getCachedFriendData(steamAppId)?.data || null;
 	const cachedCommunity = getCachedCommunityContent(steamAppId, language)?.data || [];
 	let renderedFromCache = false;
@@ -449,7 +449,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		}
 		return;
 	}
-
+	cachedNews = getCachedNews(steamAppId, language, data)?.data || cachedNews;
 	void syncLinkedGameNote(gameTitle || data.name, data, steamAppId);
 
 	if (!renderedFromCache) {

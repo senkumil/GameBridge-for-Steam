@@ -284,9 +284,11 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	bulk_link_experimental_description: 'Vincula en segundo plano las coincidencias de alta confianza sin abrir un modal por juego. Los casos ambiguos permanecen desvinculados para revisión manual.',
 	bulk_link_running: 'Analizando y vinculando coincidencias de alta confianza...',
 	bulk_link_progress: 'Vinculando {done}/{total}: {game}',
+	bulk_link_resources_progress: 'Aplicando recursos {done}/{total}: {game}',
 	bulk_link_analyzing_progress: 'Analizando {done}/{total}: {game}',
 	bulk_link_analyzing_game: 'Analizando: {game}',
 	bulk_link_linking_game: 'Vinculando: {game}',
+	bulk_link_resources_game: 'Aplicando recursos: {game}',
 	bulk_link_not_linked_title: 'No se pudieron vincular ({count})',
 	bulk_link_retrying_games: 'Aún completándose en segundo plano ({count}): {games}',
 	bulk_link_reason_ambiguous: 'No se encontró una coincidencia suficientemente confiable.',
@@ -384,6 +386,10 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	achievement_unlocked_toast: 'Logro desbloqueado',
 	community_guide: 'Guía de la comunidad',
 	feed_game_launch: 'Inicio del juego',
+	feed_release_title: '{name} se publicó en Steam',
+	feed_metadata_title: '{name} está vinculado con su información de Steam',
+	feed_metadata_description: 'La información oficial de Steam está disponible para este juego.',
+	feed_metadata_label: 'Información del juego en Steam',
 	feed_game_update: 'Actualización del juego',
 	feed_major_update: 'Actualización importante',
 	feed_dlc: 'DLC',
@@ -769,4 +775,3 @@ export function gdlText(key: string, fallbackEnglish: string, values: Record<str
 export function steamIntlLocale(): string {
 	return STEAM_LANGUAGE_TO_LOCALE[String(steamLanguageSync() || 'english').toLowerCase()] || 'en-US';
 }
-

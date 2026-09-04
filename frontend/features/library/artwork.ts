@@ -80,6 +80,8 @@ function artworkGenerationIsCurrent(shortcutAppId: number, generation: number): 
  * Identical callers share the same bridge operation so a timed-out foreground
  * link and its durable repair cannot write the shortcut icon concurrently. */
 export function applyOfficialShortcutIcon(shortcutAppId: number, steamAppId: string, force = false): Promise<boolean> {
+	const reservedTarget = artworkTargetReservations.get(shortcutAppId);
+	if (reservedTarget && reservedTarget !== steamAppId) return Promise.resolve(false);
 	const key = `${shortcutAppId}:${steamAppId}`;
 	const active = shortcutIconInFlight.get(key);
 	if (active) return active;
@@ -291,6 +293,7 @@ export function clearAllManagedArtworkMarkers(): number {
 		}
 		artworkSpoofed.clear();
 		artworkInFlight.clear();
+		artworkTargetReservations.clear();
 		artworkGenerations.clear();
 		shortcutIconInFlight.clear();
 	} catch {}
@@ -329,11 +332,23 @@ async function applyOfficialLogoPosition(
  *  breaks Steam's IPC proxy and produces "Unknown method" errors. */
 const artworkSpoofed = new Set<string>();
 const artworkInFlight = new Map<string, Promise<ArtworkApplyResult>>();
+const artworkTargetReservations = new Map<number, string>();
 export interface ArtworkApplyResult {
 	complete: boolean;
 	slots: number[];
 	missing: string[];
 	communitySlots: string[];
+}
+
+/** Hold one shortcut on the AppID currently being linked. Route observers can
+ * still see the previous mapping until commit, but their repair requests must
+ * not overwrite the replacement artwork in that window. */
+export function reserveShortcutArtworkTarget(shortcutAppId: number, steamAppId: string): () => void {
+	if (!Number.isInteger(shortcutAppId) || shortcutAppId < 2147483648 || !/^\d+$/.test(steamAppId)) return (): void => {};
+	artworkTargetReservations.set(shortcutAppId, steamAppId);
+	return (): void => {
+		if (artworkTargetReservations.get(shortcutAppId) === steamAppId) artworkTargetReservations.delete(shortcutAppId);
+	};
 }
 const ARTWORK_SLOT_NAMES: Record<number, string> = {
 	0: 'portrait', 1: 'hero', 2: 'logo', 3: 'header',
@@ -401,6 +416,15 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		const preferredCommunityPromise = legacy
 			? getCommunityArtwork(steamAppId)
 			: retiredCommunityArtworkPreferred(steamAppId).then(preferred => preferred ? getCommunityArtwork(steamAppId) : null);
+		const communityDeadline = Date.now() + (legacy ? 6_500 : 9_000);
+		const communityWithinBudget = async (): Promise<CommunityArtworkAssets | null> => {
+			const remaining = communityDeadline - Date.now();
+			if (remaining <= 0) return null;
+			return await Promise.race<CommunityArtworkAssets | null>([
+				preferredCommunityPromise,
+				new Promise<null>(resolve => setTimeout(() => resolve(null), remaining)),
+			]);
+		};
 		// Removed/delisted AppIDs are slower because their modern Steam CDN/AppInfo
 		// paths often time out or 404. Resolve Steam metadata and SteamGridDB in
 		// parallel, and give known legacy titles only a short metadata wait budget.
@@ -409,15 +433,9 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 				modernPromise,
 				new Promise<null>(resolve => setTimeout(() => resolve(null), legacy ? 2500 : 12000)),
 			]),
-			Promise.race<CommunityArtworkAssets | null>([
-				preferredCommunityPromise,
-				new Promise<null>(resolve => setTimeout(() => resolve(null), legacy ? 8500 : 12000)),
-			]),
+			communityWithinBudget(),
 		]);
 		let preferredCommunity = initialCommunity;
-		if (!preferredCommunity && (!modern?.hero || legacy)) {
-			preferredCommunity = await getCommunityArtwork(steamAppId).catch((): null => null);
-		}
 		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
 		const communityUrlSet = new Set([
 			userCommunity?.portrait?.url, userCommunity?.hero?.url,
@@ -550,8 +568,9 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		};
 		const enrichWithCommunity = async (items: ArtworkDownloadCandidate[]): Promise<void> => {
 			if (!items.some(needsCommunityArtwork)) return;
-			const community = preferredCommunity || await getCommunityArtwork(steamAppId);
+			const community = preferredCommunity || await communityWithinBudget();
 			if (!community) return;
+			preferredCommunity = community;
 			const communityUrlByType: Record<number, string> = {
 				0: community.portrait || '', 1: community.hero || '',
 				2: community.logo || '', 3: community.wide || '',
@@ -607,87 +626,95 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		const successfulSlots: number[] = Array.from(reusableSlots);
 		const appliedSlots: number[] = [];
 		const allDownloads: ArtworkDownloadCandidate[] = [];
-		const applyResolvedDownloads = async (items: ArtworkDownloadCandidate[]): Promise<void> => {
-			for (const download of items) {
-				if (!isCurrent()) return;
-				const { dataUrl, imageType, label, fallbackUrls } = download;
-				let { community, url } = download;
-				let slotApplied = false;
-				let preparedDataUrl: string | null = dataUrl;
-				if (dataUrl && community) {
-					try { preparedDataUrl = await normalizeCommunityArtworkDataUrl(dataUrl, imageType) || dataUrl; }
-					catch (e) { preparedDataUrl = dataUrl; backendLog('Artwork normalization fallback (' + label + '): ' + e); }
-				}
-				if (preparedDataUrl && canUseSteamArtworkApi) {
+		const applyResolvedDownload = async (download: ArtworkDownloadCandidate): Promise<void> => {
+			if (!isCurrent()) return;
+			const { dataUrl, imageType, label, fallbackUrls } = download;
+			let { community, url } = download;
+			let slotApplied = false;
+			let preparedDataUrl: string | null = dataUrl;
+			if (dataUrl && community) {
+				try { preparedDataUrl = await normalizeCommunityArtworkDataUrl(dataUrl, imageType) || dataUrl; }
+				catch (e) { preparedDataUrl = dataUrl; backendLog('Artwork normalization fallback (' + label + '): ' + e); }
+			}
+
+			// Write the grid file first. Unlike four sequential Steam bridge calls,
+			// these local atomic writes do not make the visible Hero/Logo component
+			// tear down and rebuild once per slot. The bridge remains a fallback for
+			// environments where the backend grid directory is unavailable.
+			if (preparedDataUrl) {
+				try {
+					const commaIdx = preparedDataUrl.indexOf(',');
+					const base64Data = commaIdx >= 0 ? preparedDataUrl.substring(commaIdx + 1) : preparedDataUrl;
+					const mime = preparedDataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
+					const ext = mime === 'png' ? 'png' : 'jpg';
+					const raw = await saveShortcutArtworkBackend({ request_json: JSON.stringify({
+						shortcut_app_id: shortcutAppId, steam_app_id: steamAppId, image_type: imageType,
+						data_base64: base64Data, extension: ext,
+					}) });
+					let response: any = raw;
+					for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
+					if (response?.ok === true || response?.saved === true) slotApplied = true;
+				} catch (e) { backendLog('Backend grid save error (prepared base64) (' + label + '): ' + e); }
+			}
+			if (!slotApplied && preparedDataUrl && canUseSteamArtworkApi) {
+				try {
+					const commaIdx = preparedDataUrl.indexOf(',');
+					const base64Data = commaIdx >= 0 ? preparedDataUrl.substring(commaIdx + 1) : preparedDataUrl;
+					const mime = preparedDataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
+					const ext = mime === 'png' ? 'png' : 'jpg';
+					const result = await waitForSteamBridge(sc.Apps.SetCustomArtworkForApp(shortcutAppId, base64Data, ext, imageType), 5000);
+					if (result) { slotApplied = true; backendLog('Artwork set through Steam fallback: ' + label + ' (type ' + imageType + ') for ' + shortcutAppId); }
+				} catch (e) { backendLog('Artwork Steam fallback error (' + label + '): ' + e); }
+			}
+			if (!slotApplied && url) {
+				const backendCandidates = Array.from(new Set([url, ...fallbackUrls].filter(Boolean)));
+				for (const backendUrl of backendCandidates) {
+					if (!isCurrent() || slotApplied) break;
 					try {
-						const commaIdx = preparedDataUrl.indexOf(',');
-						const base64Data = commaIdx >= 0 ? preparedDataUrl.substring(commaIdx + 1) : preparedDataUrl;
-						const mime = preparedDataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
-						const ext = mime === 'png' ? 'png' : 'jpg';
-						const result = await waitForSteamBridge(sc.Apps.SetCustomArtworkForApp(shortcutAppId, base64Data, ext, imageType), 5000);
-						if (result) { slotApplied = true; backendLog('Artwork set: ' + label + ' (type ' + imageType + ') for ' + shortcutAppId); }
-					} catch (e) { backendLog('Artwork error (' + label + '): ' + e); }
-				}
-				if (!slotApplied && preparedDataUrl) {
-					try {
-						const commaIdx = preparedDataUrl.indexOf(',');
-						const base64Data = commaIdx >= 0 ? preparedDataUrl.substring(commaIdx + 1) : preparedDataUrl;
-						const mime = preparedDataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
-						const ext = mime === 'png' ? 'png' : 'jpg';
 						const raw = await saveShortcutArtworkBackend({ request_json: JSON.stringify({
-							shortcut_app_id: shortcutAppId, steam_app_id: steamAppId, image_type: imageType,
-							data_base64: base64Data, extension: ext,
+							shortcut_app_id: shortcutAppId, steam_app_id: steamAppId, image_type: imageType, url: backendUrl,
 						}) });
 						let response: any = raw;
 						for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
-						if (response?.ok === true || response?.saved === true) slotApplied = true;
-					} catch (e) { backendLog('Backend grid save error (prepared base64) (' + label + '): ' + e); }
+						if (response?.ok === true || response?.saved === true) {
+							slotApplied = true;
+							url = backendUrl;
+							community = communityUrlSet.has(backendUrl);
+						}
+					} catch (e) { backendLog('Backend grid save error (' + label + '): ' + e); }
 				}
-				if (!slotApplied && url) {
-					const backendCandidates = Array.from(new Set([url, ...fallbackUrls].filter(Boolean)));
-					for (const backendUrl of backendCandidates) {
-						if (!isCurrent() || slotApplied) break;
-						try {
-							const raw = await saveShortcutArtworkBackend({ request_json: JSON.stringify({
-								shortcut_app_id: shortcutAppId, steam_app_id: steamAppId, image_type: imageType, url: backendUrl,
-							}) });
-							let response: any = raw;
-							for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
-							if (response?.ok === true || response?.saved === true) {
-								slotApplied = true;
-								url = backendUrl;
-								community = communityUrlSet.has(backendUrl);
-							}
-						} catch (e) { backendLog('Backend grid save error (' + label + '): ' + e); }
-					}
-				}
-				if (slotApplied) {
-					download.url = url;
-					download.community = community;
-					const appliedSlotName = ARTWORK_SLOT_NAMES[imageType];
-					if (appliedSlotName && url) {
-						if (imageType === 1) {
-							const isUser = explicitUserUrlSet.has(url);
-							const variant = classifyHeroVariant(url, modern, isUser);
-							communityProvenance[appliedSlotName] = {
-								url,
-								provider: isUser ? 'user' : community ? 'steamgriddb' : variant === 'legacy' ? 'steam-legacy' : 'steam',
-								variant,
-								selectionReason: determineHeroSelectionReason(variant),
-								heroPolicyVersion: 2,
-							};
-						} else if (community) {
-							const sourceName = imageType === 0 ? 'portrait' : imageType === 2 ? 'logo' : 'wide';
-							communityProvenance[appliedSlotName] = explicitUserUrlSet.has(url)
-								? { url, provider: 'user', selection: 'user_choice' }
-								: preferredCommunity?.provenance?.[sourceName] || { url, provider: 'steamgriddb', selection: 'automatic_recommended' };
-						} else communityProvenance[appliedSlotName] = { url, provider: 'steam' };
-					}
-					successfulSlots.push(imageType);
-					appliedSlots.push(imageType);
-					if (imageType === 2) void applyOfficialLogoPosition(shortcutAppId, steamAppId, modern?.logo_position, force, defaultLogoPin, modern?.logo_position_source || 'none');
-				} else if (!dataUrl && !url) backendLog('Artwork not available: ' + label + ' for ' + steamAppId);
 			}
+			if (slotApplied) {
+				download.url = url;
+				download.community = community;
+				const appliedSlotName = ARTWORK_SLOT_NAMES[imageType];
+				if (appliedSlotName && url) {
+					if (imageType === 1) {
+						const isUser = explicitUserUrlSet.has(url);
+						const variant = classifyHeroVariant(url, modern, isUser);
+						communityProvenance[appliedSlotName] = {
+							url,
+							provider: isUser ? 'user' : community ? 'steamgriddb' : variant === 'legacy' ? 'steam-legacy' : 'steam',
+							variant,
+							selectionReason: determineHeroSelectionReason(variant),
+							heroPolicyVersion: 2,
+						};
+					} else if (community) {
+						const sourceName = imageType === 0 ? 'portrait' : imageType === 2 ? 'logo' : 'wide';
+						communityProvenance[appliedSlotName] = explicitUserUrlSet.has(url)
+							? { url, provider: 'user', selection: 'user_choice' }
+							: preferredCommunity?.provenance?.[sourceName] || { url, provider: 'steamgriddb', selection: 'automatic_recommended' };
+					} else communityProvenance[appliedSlotName] = { url, provider: 'steam' };
+				}
+				successfulSlots.push(imageType);
+				appliedSlots.push(imageType);
+			} else if (!dataUrl && !url) backendLog('Artwork not available: ' + label + ' for ' + steamAppId);
+		};
+		const applyResolvedDownloads = async (items: ArtworkDownloadCandidate[]): Promise<void> => {
+			// Each slot has an independent target file. Launch the writes together so
+			// Steam observes one compact artwork transaction instead of a visible
+			// Hero -> Logo -> Portrait sequence.
+			await Promise.all(items.map(applyResolvedDownload));
 		};
 
 		const prioritySources = pendingSources.filter(source => source.imageType === 1 || source.imageType === 2 || source.imageType === 0);
@@ -699,9 +726,6 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		allDownloads.push(...priorityDownloads);
 		await applyResolvedDownloads(priorityDownloads);
 		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
-		if (priorityDownloads.some(item => appliedSlots.includes(item.imageType))) {
-			try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId, automatic: true, priority_ready: true } })); } catch {}
-		}
 
 		// Only now resolve secondary artwork (currently the wide capsule). This is
 		// deliberately sequenced after Hero/Logo/Portrait to avoid making the user
@@ -751,7 +775,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		if (appliedSlots.length) {
 			setTimeout(() => {
 				if (!isCurrent()) return;
-				try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId, automatic: true } })); } catch {}
+				try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId, steamAppId, automatic: true, batch_complete: true } })); } catch {}
 			}, 0);
 		}
 		backendLog('Applied ' + successfulSlotSet.size + '/4 artwork images for ' + steamAppId
@@ -762,6 +786,10 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 
 export function spoofArtwork(shortcutAppId: number, steamAppId: string, gameTitle: string, force = false,
 	legacyPortraitOnly = false): Promise<ArtworkApplyResult> {
+	const reservedTarget = artworkTargetReservations.get(shortcutAppId);
+	if (reservedTarget && reservedTarget !== steamAppId) {
+		return Promise.resolve({ complete: false, slots: [], missing: ['superseded'], communitySlots: [] });
+	}
 	const key = shortcutAppId + ':' + steamAppId;
 	const active = artworkInFlight.get(key);
 	if (active) return active;

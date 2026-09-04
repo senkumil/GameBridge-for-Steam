@@ -34,7 +34,7 @@ local function request(path, api_key)
             ["Authorization"] = "Bearer " .. api_key,
             ["User-Agent"] = USER_AGENT,
         },
-        timeout = 12,
+        timeout = 6,
     })
     if not ok or not response or response.status ~= 200 or not response.body then return nil end
     local parsed, body = pcall(cjson.decode, response.body)
@@ -175,7 +175,7 @@ local function extract_api_keys(input)
     return api_keys
 end
 
-local function resolve_steamgriddb_assets(appid, api_keys, profile)
+local function resolve_steamgriddb_assets(appid, api_keys, profile, include_icon)
     local api_key, game_id = nil, nil
     for _, candidate_key in ipairs(api_keys) do
         local game = request("games/steam/" .. appid, candidate_key)
@@ -191,7 +191,7 @@ local function resolve_steamgriddb_assets(appid, api_keys, profile)
     local hero = candidates(request("heroes/game/" .. id, api_key), "hero")
     local logo = candidates(request("logos/game/" .. id, api_key), "logo")
     local wide = candidates(request("grids/game/" .. id .. "?dimensions=920x430", api_key), "wide")
-    local icons = candidates(request("icons/game/" .. id, api_key), "icon")
+    local icons = include_icon and candidates(request("icons/game/" .. id, api_key), "icon") or {}
 
     local defaults = {
         portrait = default_id(portrait, profile and profile.portrait_id, profile and profile.portrait_rank),
@@ -222,7 +222,7 @@ function M.fetch(request_json)
         if #api_keys == 0 then
             return cjson.encode({ eligible = true, title = profile.title, error = "api_key_missing" })
         end
-        local resolution, err = resolve_steamgriddb_assets(appid, api_keys, profile)
+        local resolution, err = resolve_steamgriddb_assets(appid, api_keys, profile, true)
         if not resolution then
             return cjson.encode({ eligible = true, title = profile.title, error = err or "game_not_found" })
         end
@@ -251,7 +251,10 @@ function M.fetch_community_artwork(request_json)
         if #api_keys == 0 then
             return cjson.encode({ error = "api_key_missing" })
         end
-        local resolution, err = resolve_steamgriddb_assets(appid, api_keys, profile)
+        -- Automatic library artwork has a separate official shortcut-icon path.
+        -- Do not make every link wait for a fifth SteamGridDB asset request that
+        -- cannot affect portrait/hero/logo/wide completion.
+        local resolution, err = resolve_steamgriddb_assets(appid, api_keys, profile, false)
         if not resolution then
             return cjson.encode({ found = false, source = "steamgriddb", error = err or "game_not_found" })
         end

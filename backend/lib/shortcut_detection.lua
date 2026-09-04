@@ -22,7 +22,7 @@ local detection_store_cache, detection_appdetails_cache, detection_appinfo_cache
 -- never look like near-certain identification unless the candidate's official
 -- Steam launch configuration also contains the executable we are inspecting.
 local DETECTION_UNVERIFIED_ALIAS_MAX_SCORE = 84
-local DETECTION_MODEL_VERSION = "v8"
+local DETECTION_MODEL_VERSION = "v10"
 -- Pure text matching and the maintained alias catalogue live in focused
 -- modules; this detector remains responsible for filesystem/network evidence.
 local detection_text = deps.shortcut_detection_text
@@ -598,8 +598,12 @@ function M.detect_game_candidates(request_json)
                     query_index = 1,
                     executable_match = cand.executable_match == true,
                     direct = cand.direct == true,
-                    alias_hint = cand.evidence_tier == "hint",
+                    alias_hint = cand.alias_hint == true or cand.evidence_tier == "hint",
+                    alias_primary = cand.alias_primary == true,
+                    alias_unique = cand.alias_unique == true,
+                    alias_automatic = cand.alias_automatic == true,
                     from_appid_file = cand.from_appid_file == true,
+                    local_score = tonumber(cand.score) or 0,
                 }
             end
         end
@@ -627,8 +631,19 @@ function M.detect_game_candidates(request_json)
         candidate.alias_automatic = info.automatic == true
     end
     local has_local_candidates = false
-    for _ in pairs(by_id) do has_local_candidates = true; break end
-    local max_queries = recovery_mode and math.min(#queries, 6) or (has_local_candidates and math.min(#queries, 2) or math.min(#queries, 4))
+    local strong_local_candidate = false
+    for _, candidate in pairs(by_id) do
+        has_local_candidates = true
+        if (tonumber(candidate.local_score) or 0) >= 90 and candidate.identity_collision ~= true then
+            strong_local_candidate = true
+        end
+    end
+    -- A strong local identity already gives the UI a useful answer. Avoid serial
+    -- Store Search calls in the common exact-title/maintained-alias case; remote
+    -- enrichment can validate the top local candidate directly through AppInfo.
+    local max_queries = recovery_mode and math.min(#queries, 6)
+        or (strong_local_candidate and 0)
+        or (has_local_candidates and math.min(#queries, 1) or math.min(#queries, 3))
 	local store_search_confirmed = true
     for query_index = 1, max_queries do
         local query_text = queries[query_index]
@@ -695,6 +710,7 @@ function M.detect_game_candidates(request_json)
             or math.max(detection_similarity(exe_stem, candidate.name), detection_compact_similarity(exe_stem, candidate.name))
         local norm_title = detection_normalize(title_cleaned)
         local score = title_similarity * 55 + folder_similarity * 20 + exe_similarity * 15 + math.max(0, 8 - math.min(candidate.query_rank, 8))
+        if candidate.local_score and candidate.local_score > score then score = candidate.local_score end
         if candidate.alias_hint then score = score + 5; detection_add_reason(candidate, "franchise_alias") end
         if candidate.from_appid_file then score = score + 10; detection_add_reason(candidate, "steam_appid_file") end
         if norm_title ~= "" and norm_title == norm_cand then
@@ -789,7 +805,8 @@ function M.detect_game_candidates(request_json)
             end
         end
     end
-    for i = 1, math.min(#candidates, 3) do validate_candidate(candidates[i]) end
+    local initial_validation_count = strong_local_candidate and 1 or math.min(#candidates, 3)
+    for i = 1, initial_validation_count do validate_candidate(candidates[i]) end
     table.sort(candidates, function(a, b)
         if a.executable_match ~= b.executable_match then return a.executable_match end
         return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score
@@ -833,7 +850,10 @@ function M.detect_game_candidates(request_json)
         candidate._reason_set = nil; candidate._validated = nil
         local runner_up = candidates[index == 1 and 2 or 1]
         candidate.score_gap = runner_up and math.max(0, candidate.score - runner_up.score) or candidate.score
-        candidate.ambiguous = (index == 1 and runner_up ~= nil and candidate.score_gap < 12) or candidate.identity_collision == true
+        local exact_identity = rset["official_title_exact"] == true or rset["title_exact"] == true
+            or (candidate.alias_primary == true and candidate.alias_unique == true and candidate.score >= 90)
+        candidate.ambiguous = candidate.identity_collision == true
+            or (index == 1 and runner_up ~= nil and candidate.score_gap < 12 and not exact_identity)
         if candidate.direct or candidate.executable_match then candidate.evidence_tier = "proof"
         elseif candidate.score >= 88 or rset["pe_product_exact"] or rset["official_title_exact"] then candidate.evidence_tier = "strong"
         elseif candidate.score >= 65 then candidate.evidence_tier = "supporting"
@@ -843,7 +863,8 @@ function M.detect_game_candidates(request_json)
             if rset[r] then table.insert(neg, r) end
         end
         candidate.negative_reasons = neg
-        candidate.confidence = (candidate.score >= 90 and not candidate.ambiguous) and "high" or (candidate.score >= 70 and "medium" or "low")
+        candidate.confidence = (candidate.score >= 90 and candidate.identity_collision ~= true and (not candidate.ambiguous or exact_identity))
+            and "high" or (candidate.score >= 70 and "medium" or "low")
         table.insert(output, candidate)
     end
     if (not store_search_confirmed or #output == 0) and deps.shortcut_detection_local and deps.shortcut_detection_local.discover_local_candidates then

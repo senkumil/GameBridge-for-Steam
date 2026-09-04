@@ -6,13 +6,16 @@ import { gdlText } from '../../steam/localization';
 import { findActiveShortcutAppId, findShortcutAppIdByName, getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
 import {
 	applyOfficialShortcutIcon, getModernLibraryAssets, invalidateLibraryAssetCaches,
-	refreshModernLibraryAssets, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult,
+	refreshModernLibraryAssets, reserveShortcutArtworkTarget, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult,
 } from '../library/artwork';
-import { clearShortcutArtworkForAppIdChange } from '../library/artwork-relink-cleanup';
+import {
+	clearShortcutArtworkForAppIdChange,
+	clearUnreplacedShortcutArtwork,
+	prepareShortcutArtworkForAppIdChange,
+} from '../library/artwork-relink-cleanup';
 import { isLegacyGame } from '../library/legacy-games';
 import { invalidateLinkedGameResourceCaches } from '../library/resource-cache';
 import { clearLinkedGameNote } from './linked-notes';
-import { shortcutRuntimeHost } from './host';
 import { isShortcutDismissed, undismissShortcut } from './dismissed';
 import { findMappingForShortcut, getAllShortcutRecords, refreshShortcutRecordsFromBackend } from './registry';
 import { rememberOriginalShortcutTitle, rememberShortcutSteamAppId } from './link-history';
@@ -350,17 +353,21 @@ export class LinkOrchestrator {
 		}
 
 		options.onPhase?.('assets');
-		const assetTimeoutMs = Math.min(45_000, Math.max(8_000, Number(options.assetTimeoutMs) || 12_000));
-		const artworkResult = await withTimeout(
+		const assetTimeoutMs = Math.min(30_000, Math.max(4_000, Number(options.assetTimeoutMs) || 7_000));
+		const artworkRequest = withTimeout(
 			spoofArtwork(shortcutAppId, tx.targetSteamAppId, officialName || options.title, Boolean(options.clearStaleArtwork), isLegacyGame(tx.targetSteamAppId, data)),
 			assetTimeoutMs,
 			'artwork_timeout',
 		).catch((): ArtworkApplyResult => ({ complete: false, slots: [], missing: ['timeout'], communitySlots: [] }));
-		const iconResult = await withTimeout(
+		const iconRequest = withTimeout(
 			applyOfficialShortcutIcon(shortcutAppId, tx.targetSteamAppId, Boolean(options.clearStaleArtwork)),
-			Math.min(assetTimeoutMs, 8000),
+			Math.min(assetTimeoutMs, 6_000),
 			'icon_timeout',
 		).catch((): boolean => false);
+		// Artwork and icon touch different files/APIs. Running them together keeps
+		// the foreground link bounded by the slower operation instead of the sum of
+		// both timeouts; unfinished work is retained by the durable repair queue.
+		const [artworkResult, iconResult] = await Promise.all([artworkRequest, iconRequest]);
 
 		// Update resource manifest
 		const manifest: LinkResourceManifest = tx.manifest;
@@ -400,12 +407,14 @@ export class LinkOrchestrator {
 		const initialId = Number(options.shortcutAppId || 0);
 		const tx = createLinkTransaction(initialId >= 2147483648 ? initialId : 2147483648, steamAppId);
 		const onStatus = options.onStatus || ((): void => {});
+		let releaseArtworkReservation = (): void => {};
 
 		try {
 			onStatus(gdlText('verifying_steam', 'Verifying on Steam...'), '#8f98a0');
 
 			const previousSteamAppId = initialId ? findMappingForShortcut(initialId) : null;
 			const appIdChanged = Boolean(previousSteamAppId && previousSteamAppId !== steamAppId);
+			const replacingArtwork = Boolean(options.clearStaleArtwork || appIdChanged);
 			if (appIdChanged) {
 				invalidateLinkedGameResourceCaches(
 					[steamAppId, previousSteamAppId || ''],
@@ -419,25 +428,15 @@ export class LinkOrchestrator {
 			void assetWarmup.catch((): void => {});
 
 			// Step 2: Validate candidate
-			const { data, canonicalName, localizedData } = await this.validateCandidate(tx, options);
+			const { data, canonicalName } = await this.validateCandidate(tx, options);
 			if (!tx.isCurrent()) throw new Error('transaction_aborted');
 
 			// Step 1: Resolve identity
-			const resolvedShortcutId = await this.resolveIdentity(tx, options, canonicalName);
+			await this.resolveIdentity(tx, options, canonicalName);
 			if (!tx.isCurrent()) throw new Error('transaction_aborted');
 
 			onStatus(gdlText('linked_updating', '✓ Match verified for "{name}". Applying name, icon and artwork...', { name: canonicalName || title }), '#5ba32b');
 			options.onPhase?.('identity');
-
-			if (options.clearStaleArtwork || appIdChanged) {
-				clearShortcutManifest(initialId);
-				await clearShortcutArtworkForAppIdChange(initialId);
-				if (resolvedShortcutId !== initialId) {
-					clearShortcutManifest(resolvedShortcutId);
-					await clearShortcutArtworkForAppIdChange(resolvedShortcutId);
-				}
-				invalidateLibraryAssetCaches([steamAppId]);
-			}
 
 			// Step 3: Mutate identity
 			const identityResult = await this.mutateShortcutIdentity(tx, options, data, canonicalName);
@@ -464,17 +463,41 @@ export class LinkOrchestrator {
 					},
 				};
 			}
+			releaseArtworkReservation = reserveShortcutArtworkTarget(finalShortcutId, steamAppId);
 
-			// Step 4: Commit mapping
-			await this.commitMapping(tx, finalShortcutId, identityResult.staleIds, options);
-			if (!tx.isCurrent()) throw new Error('transaction_aborted');
+			if (replacingArtwork) {
+				clearShortcutManifest(initialId);
+				// A rename can regenerate Steam's shortcut ID. Fully clear abandoned
+				// rows, but keep the final row's current images mounted until their
+				// replacements have been staged.
+				for (const staleId of identityResult.staleIds) {
+					clearShortcutManifest(staleId);
+					if (staleId !== finalShortcutId) await clearShortcutArtworkForAppIdChange(staleId);
+				}
+				await prepareShortcutArtworkForAppIdChange(finalShortcutId);
+				invalidateLibraryAssetCaches([steamAppId]);
+			}
 
-			// Step 5: Apply artwork and icons
+			// Step 4: Stage artwork and icons while the old/unlinked library page is
+			// still authoritative. Publishing the mapping only after this bounded
+			// batch prevents Steam from rendering the linked page between individual
+			// Hero/Logo writes.
 			const assetResult = await this.applyArtworkAndIcons(tx, finalShortcutId, identityResult.officialName, data, {
 				...options,
-				clearStaleArtwork: appIdChanged,
+				clearStaleArtwork: replacingArtwork,
 			});
 			if (!tx.isCurrent()) throw new Error('transaction_aborted');
+			if (replacingArtwork && !options.deferAssetSync) {
+				await clearUnreplacedShortcutArtwork(finalShortcutId, assetResult.artwork.slots, assetResult.iconApplied);
+			}
+
+			// Step 5: Publish the stable shortcut -> Steam mapping atomically. The
+			// mapping subscriber owns the one visible Library refresh for a new or
+			// changed AppID.
+			await this.commitMapping(tx, finalShortcutId, identityResult.staleIds, options);
+			if (!tx.isCurrent()) throw new Error('transaction_aborted');
+			releaseArtworkReservation();
+			releaseArtworkReservation = (): void => {};
 
 			// Step 6: Verify & undismiss
 			undismissShortcut(finalShortcutId);
@@ -486,17 +509,10 @@ export class LinkOrchestrator {
 			if (shouldAutoApplyNoLauncher(steamAppId) && identityResult.noLauncherConfigured) finalMessage += ' -nolauncher.';
 			onStatus(finalMessage, '#5ba32b');
 
-			if (options.refreshLibrary !== false) {
-				shortcutRuntimeHost().refreshLibraryArtwork?.(finalShortcutId);
-				shortcutRuntimeHost().resetLibraryInjection?.(true, options.doc);
-			}
-
-			if (!localizedData) {
-				void getGameData(steamAppId).then(lateData => {
-					if (!lateData || findMappingForShortcut(finalShortcutId) !== steamAppId) return;
-					shortcutRuntimeHost().resetLibraryInjection?.(true, options.doc);
-				}).catch((): void => {});
-			}
+			// There is intentionally no second forced refresh here. For new/relinked
+			// games commitMapping emits the mapping change; for same-AppID repairs the
+			// single batch_complete artwork event refreshes the active page. A late
+			// metadata request is already awaited by the Library hydration itself.
 
 			tx.phase = 'completed';
 			tx.completedAt = Date.now();
@@ -524,6 +540,8 @@ export class LinkOrchestrator {
 				: gdlText('save_failed', 'Could not complete the link. It remains unlinked and can be retried.'),
 				error === 'shortcut_rename_pending' ? '#e5ad37' : '#ff6b6b');
 			return { ok: false, error };
+		} finally {
+			releaseArtworkReservation();
 		}
 	}
 }

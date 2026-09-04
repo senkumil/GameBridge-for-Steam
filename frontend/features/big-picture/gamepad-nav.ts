@@ -510,16 +510,16 @@ export function installBigPictureGamepadNavigation(
 	// GAMEPAD POLLING (HTML5 Gamepad API)
 	// Supports Xbox, PlayStation, Steam Deck & generic controllers
 	// -------------------------------------------------------------
-	let gamepadRafId: number | null = null;
+	let gamepadPollTimer: ReturnType<typeof setTimeout> | null = null;
 	const prevButtonStates = new Map<number, boolean>();
 	const lastDirTriggerTime = new Map<string, number>();
 	const dirHoldStartTime = new Map<string, number>();
 
 	const pollGamepads = () => {
 		if (!root.isConnected || !doc.body?.isConnected) {
-			if (gamepadRafId != null) {
-				win.cancelAnimationFrame(gamepadRafId);
-				gamepadRafId = null;
+			if (gamepadPollTimer != null) {
+				clearTimeout(gamepadPollTimer);
+				gamepadPollTimer = null;
 			}
 			return;
 		}
@@ -606,7 +606,9 @@ export function installBigPictureGamepadNavigation(
 			}
 		}
 
-		gamepadRafId = win.requestAnimationFrame(pollGamepads);
+		// 20 Hz is ample for controller navigation and avoids a permanent 60/120 Hz
+		// JavaScript loop in SteamWebHelper while Big Picture is open.
+		gamepadPollTimer = setTimeout(pollGamepads, 50);
 	};
 
 	win.addEventListener('keydown', onGlobalKeyDown, true);
@@ -614,7 +616,7 @@ export function installBigPictureGamepadNavigation(
 	root.addEventListener('focusin', onFocusIn);
 	root.addEventListener('focusout', onFocusOut);
 
-	gamepadRafId = win.requestAnimationFrame(pollGamepads);
+	gamepadPollTimer = setTimeout(pollGamepads, 50);
 
 	activeNavInstances.set(doc, {
 		doc,
@@ -622,9 +624,9 @@ export function installBigPictureGamepadNavigation(
 		strip,
 		controls,
 		cleanup: () => {
-			if (gamepadRafId != null) {
-				win.cancelAnimationFrame(gamepadRafId);
-				gamepadRafId = null;
+			if (gamepadPollTimer != null) {
+				clearTimeout(gamepadPollTimer);
+				gamepadPollTimer = null;
 			}
 			win.removeEventListener('keydown', onGlobalKeyDown, true);
 			doc.removeEventListener('keydown', onGlobalKeyDown, true);

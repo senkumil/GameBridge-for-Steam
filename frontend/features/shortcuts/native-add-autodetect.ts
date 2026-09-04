@@ -335,7 +335,7 @@ export function startNativeAddAutoDetector(): void {
 	watcherTimer = setInterval(() => {
 		ensureInteractionListeners();
 		tick();
-	}, 2000);
+	}, 4000);
 	ensureInteractionListeners();
 	tick();
 }

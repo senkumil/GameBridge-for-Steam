@@ -17,6 +17,7 @@ class SteamUIModeService {
 	private listeners = new Set<UIModeListener>();
 	private unregisterNative: (() => void) | null = null;
 	private pollTimer: ReturnType<typeof setInterval> | null = null;
+	private nativeModeListenerRegistered = false;
 	private initialized = false;
 
 	public initialize(): void {
@@ -44,6 +45,7 @@ class SteamUIModeService {
 				});
 				if (typeof unregister === 'function') {
 					this.unregisterNative = unregister;
+					this.nativeModeListenerRegistered = true;
 				}
 			}
 		} catch (error) {
@@ -55,9 +57,13 @@ class SteamUIModeService {
 
 		// 3. Periodic fallback poll to detect mode transitions when native callbacks miss
 		if (!this.pollTimer) {
+			// Native callbacks are authoritative. Keep only a low-frequency safety
+			// poll when they are available; older Steam builds without callbacks
+			// still get a modest fallback cadence.
+			const pollMs = this.nativeModeListenerRegistered ? 5000 : 2500;
 			this.pollTimer = setInterval(() => {
 				this.checkCurrentMode();
-			}, 1000);
+			}, pollMs);
 		}
 	}
 
@@ -70,6 +76,7 @@ class SteamUIModeService {
 			try { this.unregisterNative(); } catch {}
 			this.unregisterNative = null;
 		}
+		this.nativeModeListenerRegistered = false;
 		this.listeners.clear();
 		this.initialized = false;
 	}

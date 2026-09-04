@@ -4,7 +4,6 @@ import { loc, officialSteamText, steamIntlLocale } from '../../steam/localizatio
 import { findMappingForTitle, loadMappings } from '../../core/mappings';
 import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes, toSignedShortcutAppId } from '../../steam/shortcuts';
 import { fetchPlaytimeStatsBatch } from '../playtime/service';
-import { disposeBigPictureAchievementCards, refreshBigPictureAchievementCards } from './achievement-cards';
 import { disposeBigPictureShortcutDetails, refreshBigPictureShortcutDetails } from './details';
 import { syncMissingArtworkForMappedShortcuts } from '../library/artwork-sync';
 
@@ -417,7 +416,6 @@ export function activateBigPicture(doc: Document): void {
 
 export function deactivateBigPicture(): void {
 	disposeBigPictureShortcutDetails(gdlBigPictureDoc);
-	disposeBigPictureAchievementCards(gdlBigPictureDoc);
 	gdlBigPictureActive = false;
 	gdlBigPictureDoc = null;
 	restoreBigPictureShortcutState();
@@ -439,7 +437,6 @@ export async function refreshBigPicture(doc: Document | null = gdlBigPictureDoc)
 	// game's first render (or leave the previous game's content visible) hostage.
 	const detailRefresh = refreshBigPictureShortcutDetails(doc);
 	mergeShortcutsIntoBigPictureLibrary(doc);
-	refreshBigPictureAchievementCards(doc);
 	if (!isBigPictureGameDetailSurface(doc)) {
 		void patchBigPictureHomePlaytime(doc)
 			.catch(error => backendLog('Big Picture playtime refresh failed: ' + error));

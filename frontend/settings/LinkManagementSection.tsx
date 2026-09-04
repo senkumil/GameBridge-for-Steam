@@ -176,14 +176,14 @@ export const LinkManagementSection: React.FC<LinkManagementSectionProps> = ({ pr
 		try {
 			const result = await linkAllShortcutsExperimental((done, total, title, phase) => {
 				if (abortController.signal.aborted) return;
+				const text = phase === 'analyzing'
+					? gdlText('bulk_link_analyzing_progress', 'Analyzing {done}/{total}: {game}', { done: String(done), total: String(total), game: title })
+					: phase === 'resources'
+						? gdlText('bulk_link_resources_progress', 'Applying resources {done}/{total}: {game}', { done: String(done), total: String(total), game: title })
+						: gdlText('bulk_link_progress', 'Linking {done}/{total}: {game}', { done: String(done), total: String(total), game: title });
 				setBulkLinkState({
 					progress: { phase, done, total, title },
-					status: {
-						text: phase === 'analyzing'
-							? gdlText('bulk_link_analyzing_progress', 'Analyzing {done}/{total}: {game}', { done: String(done), total: String(total), game: title })
-							: gdlText('bulk_link_progress', 'Linking {done}/{total}: {game}', { done: String(done), total: String(total), game: title }),
-						color: '#66c0f4',
-					},
+					status: { text, color: '#66c0f4' },
 				});
 			}, abortController.signal);
 			if (abortController.signal.aborted) return;
@@ -350,19 +350,32 @@ export const LinkManagementSection: React.FC<LinkManagementSectionProps> = ({ pr
 						</div>
 					</div>
 					{shortcutActionStatus && <div style={{ marginTop: '8px', color: shortcutActionStatus.color, fontSize: '11.5px' }}>{shortcutActionStatus.text}</div>}
-					{dynamicBulkLinkStatus && <div style={{ marginTop: '8px', color: dynamicBulkLinkStatus.color, fontSize: '11.5px', lineHeight: 1.4 }}>{dynamicBulkLinkStatus.text}</div>}
+					{dynamicBulkLinkStatus && shortcutActionBusy !== 'bulk-link' && <div style={{ marginTop: '8px', color: dynamicBulkLinkStatus.color, fontSize: '11.5px', lineHeight: 1.4 }}>{dynamicBulkLinkStatus.text}</div>}
 					{bulkLinkProgress && shortcutActionBusy === 'bulk-link' && (
 						<div style={{ marginTop: '9px' }}>
 							<div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', color: '#c6d4df', fontSize: '11px' }}>
 								<span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
 									{bulkLinkProgress.phase === 'analyzing'
 										? gdlText('bulk_link_analyzing_game', 'Analyzing: {game}', { game: bulkLinkProgress.title })
-										: gdlText('bulk_link_linking_game', 'Linking: {game}', { game: bulkLinkProgress.title })}
+										: bulkLinkProgress.phase === 'resources'
+											? gdlText('bulk_link_resources_game', 'Applying resources: {game}', { game: bulkLinkProgress.title })
+											: gdlText('bulk_link_linking_game', 'Linking: {game}', { game: bulkLinkProgress.title })}
 								</span>
 								<strong style={{ flex: '0 0 auto', color: '#66c0f4' }}>{bulkLinkProgress.done}/{bulkLinkProgress.total}</strong>
 							</div>
 							<div style={{ height: '4px', marginTop: '6px', background: 'rgba(255,255,255,.08)', borderRadius: '2px', overflow: 'hidden' }}>
-								<div style={{ height: '100%', width: `${bulkLinkProgress.total > 0 ? Math.min(100, (bulkLinkProgress.done / bulkLinkProgress.total) * 100) : 0}%`, background: '#1a9fff', transition: 'width .18s ease' }} />
+								<div style={{
+									height: '100%',
+									width: `${((): number => {
+										if (bulkLinkProgress.total <= 0) return 0;
+										const phaseProgress = Math.min(1, bulkLinkProgress.done / bulkLinkProgress.total);
+										if (bulkLinkProgress.phase === 'analyzing') return phaseProgress * 33.333;
+										if (bulkLinkProgress.phase === 'linking') return 33.333 + phaseProgress * 33.333;
+										return 66.666 + phaseProgress * 33.334;
+									})()}%`,
+									background: '#1a9fff',
+									transition: 'width .18s ease',
+								}} />
 							</div>
 						</div>
 					)}

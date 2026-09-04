@@ -7,8 +7,7 @@ import { rememberedShortcutSteamAppId } from './link-history';
 import { documentHasNativeAddNonSteamDialog } from './native-add-guard';
 import { shortcutRuntimeHost } from './host';
 import { markNativeArtworkCustomization } from '../library/artwork';
-import { waitForSteamBridge } from '../library/steam-bridge';
-import { backendLog, readLocalArtworkImageBackend, saveShortcutArtworkBackend } from '../../api/backend';
+import { backendLog, saveShortcutArtworkBackend } from '../../api/backend';
 
 type CustomizationSlotKind = 'portrait' | 'hero' | 'logo' | 'wide';
 
@@ -278,7 +277,6 @@ function subtreeSlotKind(root: HTMLElement, markers: Record<CustomizationSlotKin
 	return null;
 }
 
-
 const NATIVE_ARTWORK_IMAGE_TYPES: Record<CustomizationSlotKind, number> = {
 	portrait: 0,
 	hero: 1,
@@ -302,115 +300,132 @@ function nativeArtworkRowForButton(
 function isNativeChangeButton(button: HTMLElement, row: HTMLElement): boolean {
 	const buttons = Array.from(row.querySelectorAll<HTMLElement>('button,[role="button"]'))
 		.filter(candidate => !candidate.closest('.gdl-customization-artwork-injected, #gdl-artwork-picker-overlay, [id^="gdl-"]'));
-	const index = buttons.indexOf(button);
-	if (index === 0) return true;
+	if (buttons.indexOf(button) === 0) return true;
 	const label = normalizedUiText(`${button.textContent || ''} ${button.getAttribute('aria-label') || ''} ${button.getAttribute('title') || ''}`);
 	return ['change', 'browse', 'choose', 'cambiar', 'seleccionar', 'elegir', 'parcourir', 'ändern', 'cambia', 'изменить', '更改', '変更', '바꾸기']
 		.some(token => label.includes(token));
 }
 
-function selectedFilePath(value: unknown): string {
-	if (typeof value === 'string') return value.trim();
-	if (Array.isArray(value)) return selectedFilePath(value[0]);
-	if (value && typeof value === 'object') {
-		const record = value as Record<string, unknown>;
-		for (const key of ['path', 'strPath', 'file', 'filename', 'selectedPath']) {
-			const candidate = selectedFilePath(record[key]);
-			if (candidate) return candidate;
-		}
-		for (const key of ['paths', 'files', 'rgFiles']) {
-			const candidate = selectedFilePath(record[key]);
-			if (candidate) return candidate;
-		}
-	}
-	return '';
+function fileAsDataUrl(file: File, view: Window): Promise<string | null> {
+	return new Promise(resolve => {
+		try {
+			const ReaderCtor = (view as any).FileReader || FileReader;
+			const reader = new ReaderCtor();
+			reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+			reader.onerror = () => resolve(null);
+			reader.readAsDataURL(file);
+		} catch { resolve(null); }
+	});
 }
 
 function updateNativeArtworkPreview(row: HTMLElement, dataUrl: string): void {
 	try {
-		const images = Array.from(row.querySelectorAll<HTMLImageElement>('img'))
-			.filter(img => !img.closest('.gdl-customization-artwork-injected, #gdl-artwork-picker-overlay, [id^="gdl-"]'));
-		if (images[0]) {
-			images[0].src = dataUrl;
+		const image = Array.from(row.querySelectorAll<HTMLImageElement>('img'))
+			.find(candidate => !candidate.closest('.gdl-customization-artwork-injected, #gdl-artwork-picker-overlay, [id^="gdl-"]'));
+		if (image) {
+			image.src = dataUrl;
 			return;
 		}
-		const candidates = Array.from(row.querySelectorAll<HTMLElement>('[style*="background" i], [class*="image" i], [class*="artwork" i]'));
-		const preview = candidates.find(element => {
-			const rect = element.getBoundingClientRect();
-			return rect.width >= 70 && rect.height >= 40 && rect.width <= 700 && rect.height <= 500;
-		});
+		const preview = Array.from(row.querySelectorAll<HTMLElement>('[style*="background" i], [class*="image" i], [class*="artwork" i]'))
+			.find(element => {
+				const rect = element.getBoundingClientRect();
+				return rect.width >= 70 && rect.height >= 40 && rect.width <= 700 && rect.height <= 500;
+			});
 		if (preview) preview.style.backgroundImage = `url("${dataUrl}")`;
 	} catch {}
 }
 
-async function applyNativeArtworkChoice(
+function parseBackendResponse(raw: unknown): any {
+	let value: any = raw;
+	for (let attempt = 0; attempt < 3 && typeof value === 'string'; attempt += 1) value = JSON.parse(value);
+	return value;
+}
+
+/** Steam's native Change button is unreliable for linked non-Steam shortcuts
+ * on some CEF builds: it flashes but never opens a usable picker. Keep the
+ * native button as the entry point, then use a document-owned file input and
+ * persist the bytes through both the Steam bridge and the grid-file fallback. */
+function chooseNativeArtworkFile(
+	doc: Document,
 	row: HTMLElement,
 	shortcutId: number,
 	steamAppId: string,
 	slot: CustomizationSlotKind,
-): Promise<void> {
-	const system = (window as any).SteamClient?.System;
-	if (typeof system?.OpenFileDialog !== 'function') return;
-	const imageType = NATIVE_ARTWORK_IMAGE_TYPES[slot];
-	try {
-		const chosen = await system.OpenFileDialog({
-			bChooseDirectory: false,
-			strTitle: loc('AppProperties_ChangeArtwork', 'Choose artwork'),
-			rgFilters: [
-				{ strFileTypeName: 'Images', rFilePatterns: ['*.png', '*.jpg', '*.jpeg', '*.webp'], bUseAsDefault: true },
-				{ strFileTypeName: 'All files', rFilePatterns: ['*'] },
-			],
-		});
-		const path = selectedFilePath(chosen);
-		if (!path) return;
-		const raw = await readLocalArtworkImageBackend({ request_json: JSON.stringify({ path }) });
-		let response: any = raw;
-		for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
-		if (response?.ok !== true || !response?.data_base64 || !response?.mime) throw new Error(response?.error || 'read_failed');
-		const base64 = String(response.data_base64);
-		const mime = String(response.mime).toLowerCase();
-		const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
-		let saved = false;
-		const apps = (window as any).SteamClient?.Apps;
-		if (typeof apps?.SetCustomArtworkForApp === 'function') {
+): void {
+	const view = doc.defaultView;
+	if (!view || !doc.body) return;
+	const input = doc.createElement('input');
+	input.type = 'file';
+	input.accept = 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp';
+	input.tabIndex = -1;
+	input.setAttribute('aria-hidden', 'true');
+	input.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:1px;height:1px;opacity:0;pointer-events:none;';
+	doc.body.appendChild(input);
+	let cleaned = false;
+	const cleanup = (): void => {
+		if (cleaned) return;
+		cleaned = true;
+		input.remove();
+	};
+	view.setTimeout(cleanup, 120_000);
+	input.addEventListener('change', () => {
+		const file = input.files?.[0];
+		if (!file) { cleanup(); return; }
+		void (async () => {
 			try {
-				const accepted = await waitForSteamBridge(
-					apps.SetCustomArtworkForApp(shortcutId, base64, ext, imageType), 5000,
-				);
-				saved = Boolean(accepted);
-			} catch (error) {
-				backendLog(`Steam native artwork change failed (${slot}) for ${shortcutId}: ${String(error)}`);
-			}
-		}
-		if (!saved) {
-			const persisted = await saveShortcutArtworkBackend({ request_json: JSON.stringify({
-				shortcut_app_id: shortcutId,
-				steam_app_id: steamAppId,
-				image_type: imageType,
-				data_base64: base64,
-				extension: ext,
-			}) });
-			let persistedResponse: any = persisted;
-			for (let attempt = 0; attempt < 3 && typeof persistedResponse === 'string'; attempt += 1) persistedResponse = JSON.parse(persistedResponse);
-			saved = persistedResponse?.ok === true || persistedResponse?.saved === true;
-		}
-		if (!saved) throw new Error('save_failed');
+				const dataUrl = await fileAsDataUrl(file, view);
+				if (!dataUrl || !/^data:image\/(?:png|jpe?g|webp);base64,/i.test(dataUrl)) throw new Error('invalid_image');
+				const comma = dataUrl.indexOf(',');
+				const base64 = dataUrl.slice(comma + 1);
+				const mime = dataUrl.slice(5, dataUrl.indexOf(';')).toLowerCase();
+				const extension = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+				const imageType = NATIVE_ARTWORK_IMAGE_TYPES[slot];
 
-		markNativeArtworkCustomization(shortcutId, steamAppId);
-		updateNativeArtworkPreview(row, `data:${mime};base64,${base64}`);
-		shortcutRuntimeHost().refreshLibraryArtwork?.(shortcutId);
-		try {
-			window.dispatchEvent(new CustomEvent('gdl:artwork-changed', {
-				detail: { shortcutAppId: shortcutId, steamAppId, user_action: true, native_customization: true, slot },
-			}));
-		} catch {}
-		backendLog(`Steam-native artwork choice persisted (${slot}) for ${shortcutId} -> ${steamAppId}`);
-	} catch (error) {
-		backendLog(`Could not apply Steam-native artwork choice (${slot}) for ${shortcutId}: ${String(error)}`);
-	}
+				const backendWrite = saveShortcutArtworkBackend({ request_json: JSON.stringify({
+					shortcut_app_id: shortcutId,
+					steam_app_id: steamAppId,
+					image_type: imageType,
+					data_base64: base64,
+					extension,
+				}) }).then(raw => {
+					const response = parseBackendResponse(raw);
+					return response?.ok === true || response?.saved === true;
+				}).catch(() => false);
+
+				// The local grid write is fast and deterministic. Only fall back to the
+				// Steam bridge if that write fails; running both against the same target
+				// file concurrently can make Steam immediately restore the old preview.
+				let saved = await backendWrite;
+				const apps = (window as any).SteamClient?.Apps;
+				if (!saved && typeof apps?.SetCustomArtworkForApp === 'function') {
+					saved = await Promise.race([
+						Promise.resolve(apps.SetCustomArtworkForApp(shortcutId, base64, extension, imageType))
+							.then(result => result !== false).catch(() => false),
+						new Promise<boolean>(resolve => view.setTimeout(() => resolve(false), 5_000)),
+					]);
+				}
+				if (!saved) throw new Error('save_failed');
+
+				markNativeArtworkCustomization(shortcutId, steamAppId);
+				updateNativeArtworkPreview(row, dataUrl);
+				shortcutRuntimeHost().refreshLibraryArtwork?.(shortcutId);
+				try {
+					window.dispatchEvent(new CustomEvent('gdl:artwork-changed', {
+						detail: { shortcutAppId: shortcutId, steamAppId, user_action: true, native_customization: true, slot },
+					}));
+				} catch {}
+				backendLog(`Native artwork changed (${slot}) for ${shortcutId} -> ${steamAppId}`);
+			} catch (error) {
+				backendLog(`Could not change native artwork (${slot}) for ${shortcutId}: ${String(error)}`);
+			} finally { cleanup(); }
+		})();
+	}, { once: true });
+	// This remains in the original trusted click event, which is required by CEF
+	// to open a file picker. No asynchronous IPC runs before the dialog opens.
+	input.click();
 }
 
-function bindNativeArtworkControlTracking(
+function bindNativeArtworkChangeButtons(
 	state: CustomizationObserverState,
 	container: HTMLElement,
 	shortcutId: number | null,
@@ -429,26 +444,16 @@ function bindNativeArtworkControlTracking(
 	const handler: EventListener = event => {
 		const ElementCtor = container.ownerDocument.defaultView?.Element;
 		if (!ElementCtor || !(event.target instanceof ElementCtor)) return;
-		const target = event.target as Element;
-		const button = target.closest<HTMLElement>('button,[role="button"]');
-		if (!button || !container.contains(button)) return;
-		if (button.closest('.gdl-customization-artwork-injected, #gdl-artwork-picker-overlay, [id^="gdl-"]')) return;
+		const button = (event.target as Element).closest<HTMLElement>('button,[role="button"]');
+		if (!button || !container.contains(button)
+			|| button.closest('.gdl-customization-artwork-injected, #gdl-artwork-picker-overlay, [id^="gdl-"]')) return;
 		const resolved = nativeArtworkRowForButton(button, container, markers);
-		if (!resolved) return;
-		const { slot, row } = resolved;
-		if (isNativeChangeButton(button, row) && typeof (window as any).SteamClient?.System?.OpenFileDialog === 'function') {
-			// Steam's native Change button is retained as the UI surface, but linked
-			// shortcuts use our reliable persistence bridge so an existing plugin
-			// grid file cannot immediately win back the slot after the file picker closes.
-			event.preventDefault();
-			event.stopPropagation();
-			(event as any).stopImmediatePropagation?.();
-			markNativeArtworkCustomization(shortcutId, steamAppId);
-			void applyNativeArtworkChoice(row, shortcutId, steamAppId, slot);
-			return;
-		}
+		if (!resolved || !isNativeChangeButton(button, resolved.row)) return;
+		event.preventDefault();
+		event.stopPropagation();
+		(event as any).stopImmediatePropagation?.();
 		markNativeArtworkCustomization(shortcutId, steamAppId);
-		console.info(`[GDL] Steam-native artwork control used (${slot}); automatic repaint disabled for ${shortcutId} -> ${steamAppId}.`);
+		chooseNativeArtworkFile(container.ownerDocument, resolved.row, shortcutId, steamAppId, resolved.slot);
 	};
 	container.addEventListener('click', handler, true);
 	state.nativeArtworkContainer = container;
@@ -559,7 +564,7 @@ export function tryInjectCustomizationArtwork(doc: Document, popupTitle: string,
 		if (appInput && /^\d+$/.test(appInput.value.trim())) artworkAppId = appInput.value.trim();
 	}
 	const bindingKey = [gameTitle, shortcutId || '', artworkAppId].join('\u001f');
-	bindNativeArtworkControlTracking(state, container, shortcutId, artworkAppId);
+	bindNativeArtworkChangeButtons(state, container, shortcutId, artworkAppId);
 	const existing = doc.querySelector<HTMLElement>('.gdl-customization-artwork-injected');
 	const placementIsCurrent = existing?.parentElement === container
 		&& (insertBefore ? existing.nextSibling === insertBefore : existing === container.lastElementChild);

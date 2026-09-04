@@ -46,7 +46,7 @@ export interface BulkLinkAllResult {
 	failed: number;
 	outcomes: BulkLinkGameOutcome[];
 }
-export type BulkLinkProgressPhase = 'analyzing' | 'linking';
+export type BulkLinkProgressPhase = 'analyzing' | 'linking' | 'resources';
 
 function evaluateReliableBulkCandidate(
 	context: ShortcutDetectionContext,
@@ -386,7 +386,7 @@ export async function linkAllShortcutsExperimental(
 					const target = priorityIdx >= 0 ? remainingArt.splice(priorityIdx, 1)[0] : remainingArt.shift();
 					if (!target) return;
 
-					onProgress?.(artDone, successfullyLinked.length, target.title, 'linking');
+					onProgress?.(artDone, successfullyLinked.length, target.title, 'resources');
 
 					// Do not let icon work compete with Hero/Logo/Portrait during the first
 					// visible paint. Critical artwork gets the worker/network budget first.
@@ -403,7 +403,7 @@ export async function linkAllShortcutsExperimental(
 
 					artDone += 1;
 					if (!signal?.aborted) {
-						onProgress?.(artDone, successfullyLinked.length, target.title, 'linking');
+						onProgress?.(artDone, successfullyLinked.length, target.title, 'resources');
 					}
 				}
 			});

@@ -1,5 +1,5 @@
 import { loc } from '../../steam/localization';
-import type { BigPictureTab } from './tab-renderers';
+import type { BigPictureTab } from './types';
 
 export const TAB_TEXT: Record<BigPictureTab, string[]> = {
 	activity: [

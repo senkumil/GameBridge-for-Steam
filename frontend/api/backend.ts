@@ -33,6 +33,7 @@ export const saveShortcutArtworkBackend = callable<[{ request_json: string }], s
 
 export const clearArtworkBackend  = callable<[{ shortcut_app_id: string }], string>('clear_artwork');
 export const clearArtworkExceptIconBackend = callable<[{ shortcut_app_id: string }], string>('clear_artwork_except_icon');
+export const clearArtworkSlotsBackend = callable<[{ request_json: string }], string>('clear_artwork_slots');
 export const clearAllLinkedArtworksBackend = callable<[], string>('clear_all_linked_artworks');
 
 export const detectGameCandidatesBackend = callable<[{ request_json: string }], string>('detect_game_candidates');
@@ -135,8 +136,6 @@ export function parseCommunityItemsCatalogResponse(raw: unknown): SteamCommunity
 }
 
 export const fetchNewsBackend = callable<[{ steam_app_id: string; language: string }], string>('fetch_news');
-export const fetchHistoricalNewsBackend = callable<[{ steam_app_id: string; language: string }], string>('fetch_news_historical');
-
 export const fetchPartnerEventsBackend = callable<[{ steam_app_id: string; language: string }], string>('fetch_partner_events');
 
 export const fetchPublishedPreviewsBackend = callable<[{ file_ids_csv: string }], string>('fetch_published_file_previews');

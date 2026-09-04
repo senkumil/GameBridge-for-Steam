@@ -38,6 +38,7 @@ import { disposeLinkedGamePrefetch, restartLinkedGamePrefetch, startLinkedGamePr
 import { installGhostSidebarCleanup } from '../features/library/sidebar-cleanup';
 import { adoptExistingSteamWindows, resolveSteamWindowContext } from './existing-windows';
 import { installMappingRefresh } from './mapping-refresh';
+import { installArtworkBatchRefresh } from './artwork-batch-refresh';
 import { syncMissingArtworkForMappedShortcuts } from '../features/library/artwork-sync';
 let mainWindowDoc: Document | null = null;
 setLocalizationDocumentProvider(() => mainWindowDoc);
@@ -45,12 +46,10 @@ function normalizedDomText(value: unknown): string { return String(value || '').
 function currentCopiedFeedbackLabels(): Set<string> {
 	return new Set(['copied!', 'copied', '¡copiado!', 'copiado!', 'copiado', normalizedDomText(officialSteamText('Copied!')), normalizedDomText(officialSteamText('Copied'))].filter(Boolean));
 }
-
 function sweepCopiedFeedbackTooltips(doc: Document): void {
 	if (!doc || !doc.body) return;
 	const copiedFeedbackLabels = currentCopiedFeedbackLabels();
 	if (copiedFeedbackLabels.size === 0) return;
-
 	try {
 		const candidates = doc.querySelectorAll<HTMLElement>('div, span, p, [class*="tooltip" i], [class*="popup" i], [class*="toast" i], [class*="copied" i], [class*="badge" i], [class*="bubble" i]');
 		for (const el of Array.from(candidates)) {
@@ -72,7 +71,6 @@ function sweepCopiedFeedbackTooltips(doc: Document): void {
 		}
 	} catch {}
 }
-
 function scheduleCopiedFeedbackCleanup(doc: Document, _roots?: Iterable<Node>): void {
 	sweepCopiedFeedbackTooltips(doc);
 }
@@ -146,7 +144,6 @@ function windowCreated(context: any): void {
 		// desktop and Big Picture documents observe the same file change.
 		installLocalAchievementUI(popupDoc);
 	}
-
 	if (isMainWindow) {
 		mainWindowDoc = popupDoc;
 		syncDesktopLibraryHomePlaytimeDom(popupDoc);
@@ -167,7 +164,6 @@ function windowCreated(context: any): void {
 			} catch {}
 		}, 1000);
 	}
-
 	let mutationTimer: ReturnType<typeof setTimeout> | null = null;
 	let playtimeTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastPlaytimeRefreshAt = 0;
@@ -214,8 +210,10 @@ function windowCreated(context: any): void {
 			return;
 		}
 		if (isMainWindow) {
-			tryInjectPropertiesField(popupDoc, popupTitle);
-			tryInjectCustomizationArtwork(popupDoc, popupTitle);
+			// Properties/Personalización live in dedicated popup documents. Running
+			// their full-text/DOM scanners against SP Desktop on every Library
+			// mutation created needless startup work and retained large React trees.
+			// Keep desktop injection restricted to actual Library surfaces.
 			// Native metadata and layout remain Steam-owned. The only native action is
 			// reconciling the user's information-toggle preference through Steam's button.
 			if (isPublicSteamLibraryRoute(popupDoc)) {
@@ -323,8 +321,7 @@ function windowCreated(context: any): void {
 			if (isMainWindow) handleLibraryNavigation(popupDoc);
 			runInjection('navigation');
 		} catch {}
-	}, 1000);
-
+	}, 2500);
 	// Keep the shim alive while Big Picture replaces its app overview tree.
 	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 	lifecycle.add(() => { if (refreshInterval) clearInterval(refreshInterval); refreshInterval = null; });
@@ -336,7 +333,7 @@ function windowCreated(context: any): void {
 					if (getBigPictureDocument() === popupDoc) deactivateBigPicture();
 					return;
 				}
-				if (!isBigPictureSurface() || popupDoc.hidden || Date.now() - lastBigPictureRefreshAt < 9000) {
+				if (!isBigPictureSurface() || popupDoc.hidden || Date.now() - lastBigPictureRefreshAt < 14000) {
 					if (!isBigPictureSurface() && isBigPictureActive() && getBigPictureDocument() === popupDoc) {
 						deactivateBigPicture();
 						if (isMainWindow) {
@@ -350,9 +347,8 @@ function windowCreated(context: any): void {
 			} catch (e) {
 				backendLog('Big Picture refresh error: ' + e);
 			}
-		}, 10000);
+		}, 15000);
 	}
-
 	const isPropertiesWindow = !isMainWindow && /properties|propiedades|propriedades|propriétés|eigenschaften|proprietà|shortcut/i.test(popupTitle || popupDoc.title || '');
 	const linkedShortcutAlreadyVisible = (isMainWindow && Boolean(findNonSteamNotice(popupDoc))) || isPropertiesWindow;
 	lifecycle.timeout(() => {
@@ -366,9 +362,11 @@ function safeStartup(label: string, action: () => void): void {
 		try { backendLog(`[NGL][Startup] ${label} failed: ${String(error)}`); } catch {}
 	}
 }
-
 export default definePlugin(() => {
-	console.log('[GDL] definePlugin callback executing - frontend initialized successfully');
+	const startupStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+	const deferredStartupTimers: ReturnType<typeof setTimeout>[] = [];
+	const deferStartup = (label: string, action: () => void, delay = 0): void => { deferredStartupTimers.push(setTimeout(() => safeStartup(label, action), delay)); };
+	console.log('[GDL] definePlugin callback executing - returning plugin UI before background hydration');
 	safeStartup('cache protection', () => setProtectedCacheAppIds(Object.values(mappings)));
 	setTimeout(() => safeStartup('cache pruning', () => pruneCacheStorage()), 750);
 	safeStartup('library runtime host', () => configureLibraryRuntimeHost({ getMainWindowDoc: () => mainWindowDoc }));
@@ -390,12 +388,12 @@ export default definePlugin(() => {
 		},
 		runPendingLinkJobs: () => { void processPendingLinkJobs(mainWindowDoc); },
 	}));
-	safeStartup('native add detector', () => startNativeAddAutoDetector());
+	// DOM/registry scans start only after Millennium can render the plugin card.
+	deferStartup('native add detector', () => startNativeAddAutoDetector(), 1200);
 	safeStartup('social runtime host', () => configureSocialRuntimeHost({ getCurrentInjectedAppId, getCurrentInjectedShortcutAppId }));
 	if (Object.keys(mappings).length > 0) backendLog('Instant startup mapping snapshot: ' + Object.keys(mappings).length + ' entrie(s)');
-
 	let unsubscribeUIMode = (): void => {};
-	safeStartup('Steam UI mode service', () => {
+	deferStartup('Steam UI mode service', () => {
 		steamUIModeService.initialize();
 		unsubscribeUIMode = steamUIModeService.subscribe((state) => {
 			if (state.isGamepadUI) {
@@ -411,14 +409,15 @@ export default definePlugin(() => {
 				}
 			}
 		});
-	});
-
-	try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.startsWith('events8_') || k.startsWith('events7_') || k.startsWith('friends_') || k.startsWith('gdl_cache_friends_') || k === 'gdl_info_panel_expanded' || k === 'gdl_native_info_panel_expanded')) localStorage.removeItem(k); } } catch {}
-	loadMappings().then(() => {
+	}, 0);
+	deferStartup('legacy cache cleanup', () => { try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.startsWith('events8_') || k.startsWith('events7_') || k.startsWith('friends_') || k.startsWith('gdl_cache_friends_') || k === 'gdl_info_panel_expanded' || k === 'gdl_native_info_panel_expanded')) localStorage.removeItem(k); } } catch {} }, 300);
+	const hydrateMappingsAfterMount = (): void => { void loadMappings().then(() => {
 		backendLog('Loaded ' + Object.keys(mappings).length + ' mapping(s)');
-		startLinkedGamePrefetch(getCurrentInjectedAppId);
-		startPlaytimeTracker();
-		startFirstLaunchAchievementWatcher();
+		// Keep the first paint cheap. None of these background services is needed
+		// to render the Millennium plugin card, so stagger them after hydration.
+		deferStartup('playtime tracker', () => startPlaytimeTracker(), 700);
+		deferStartup('achievement launch watcher', () => startFirstLaunchAchievementWatcher(), 1100);
+		deferStartup('linked game prefetch', () => startLinkedGamePrefetch(getCurrentInjectedAppId), 1600);
 		void processPendingLinkJobs(mainWindowDoc);
 		void neutralizeSteamAppIdFileBackend({ request_json: '{}' }).catch(() => {});
 		if (mainWindowDoc) {
@@ -427,14 +426,16 @@ export default definePlugin(() => {
 		}
 		const bigPictureDoc = getBigPictureDocument();
 		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
-		void syncMissingArtworkForMappedShortcuts();
-		scheduleReconciliation(5000);
+		deferStartup('startup artwork reconciliation', () => {
+			void syncMissingArtworkForMappedShortcuts();
+			scheduleReconciliation(5000);
+		}, 2200);
 	}).catch((e) => {
 		console.error('[GDL] Failed to load mappings from backend:', e);
-		startPlaytimeTracker();
-		startFirstLaunchAchievementWatcher();
-	});
-
+		deferStartup('playtime tracker fallback', () => startPlaytimeTracker(), 700);
+		deferStartup('achievement watcher fallback', () => startFirstLaunchAchievementWatcher(), 1100);
+	}); };
+	deferStartup('mapping hydration', hydrateMappingsAfterMount, 0);
 	let disposeMappingRefresh = (): void => {};
 	try { disposeMappingRefresh = installMappingRefresh({
 		getCurrentAppId: getCurrentInjectedAppId,
@@ -442,9 +443,9 @@ export default definePlugin(() => {
 		resetLibrary: () => resetLibraryInjection(true),
 		refreshBigPicture: () => { const doc = getBigPictureDocument(); if (doc) void refreshBigPicture(doc).catch(() => {}); },
 	}); } catch (error) { console.error('[GDL] Mapping refresh startup failed:', error); }
-	const repaintArtwork = (event: Event): void => { const d = (event as CustomEvent<{ steamAppId?: unknown; user_action?: boolean; user_choice?: boolean; priority_ready?: boolean }>).detail; if (d && String(d.steamAppId || '') === getCurrentInjectedAppId() && (d.user_action || d.user_choice || d.priority_ready)) resetLibraryInjection(true); };
-	window.addEventListener('gdl:artwork-changed', repaintArtwork);
-
+	const disposeArtworkBatchRefresh = installArtworkBatchRefresh(
+		getCurrentInjectedAppId, () => resetLibraryInjection(true),
+	);
 	const onPlaytimeChanged = (): void => {
 		if (mainWindowDoc) {
 			void patchDesktopLibraryHomePlaytime(mainWindowDoc).catch(() => {});
@@ -454,7 +455,6 @@ export default definePlugin(() => {
 		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(() => {});
 	};
 	window.addEventListener('gdl:playtime-changed', onPlaytimeChanged);
-
 	let unsubscribeLanguageRefresh = (): void => {};
 	try { unsubscribeLanguageRefresh = subscribeSteamLanguageChange((language, previousLanguage) => {
 		if (!previousLanguage || previousLanguage === language) return;
@@ -466,23 +466,22 @@ export default definePlugin(() => {
 		const bigPictureDoc = getBigPictureDocument();
 		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(() => {});
 	}); } catch (error) { console.error('[GDL] Language subscription failed:', error); }
-	safeStartup('language watcher', () => startSteamLanguageWatcher());
-
-	getSteamLanguage(true).catch(() => {});
-
+	deferStartup('language watcher', () => startSteamLanguageWatcher(), 500);
+	deferStartup('Steam language hydration', () => { void getSteamLanguage(true).catch(() => {}); }, 50);
 	try { Millennium.AddWindowCreateHook(windowCreated); } catch (e) { console.error('[GDL] Failed to register window hook:', e); }
 	const existingWindowAdoptionTimers = [0, 250, 1000, 2500].map(delay => setTimeout(() => {
 		try { adoptExistingSteamWindows(windowCreated); } catch (e) { console.error('[GDL] Failed to adopt existing Steam windows:', e); }
 	}, delay));
-	console.log('[GDL] Window create hook registered');
+	console.log(`[GDL][Startup] Plugin descriptor ready in ${Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startupStartedAt)}ms; background services deferred.`);
 	return {
 		title: 'NativeGameLink for Steam',
 		icon: <IconsModule.Settings />,
 		content: <SettingsContent clearAchievementCache={clearLocalAchievementCache} showAchievementToast={showAchievementToast} />,
 		onDismount: () => {
-			window.removeEventListener('gdl:artwork-changed', repaintArtwork);
+			disposeArtworkBatchRefresh();
 			window.removeEventListener('gdl:playtime-changed', onPlaytimeChanged);
 			for (const timer of existingWindowAdoptionTimers) clearTimeout(timer);
+			for (const timer of deferredStartupTimers) clearTimeout(timer);
 			disposeDocumentLifecycles();
 			unsubscribeLanguageRefresh();
 			unsubscribeUIMode();

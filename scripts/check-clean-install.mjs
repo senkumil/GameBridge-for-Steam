@@ -85,9 +85,10 @@ for (const [name, source] of [['backend/lib/steamworks_sync.lua', steamworks], [
     failures.push(`${name}: helper path must be derived from Millennium's actual plugin directory`);
   }
 }
-if (!artworkProperties.includes('event.stopPropagation()') || !artworkProperties.includes('SteamClient') || !artworkProperties.includes('OpenFileDialog')) {
-  failures.push('artwork picker must isolate Steam row events and use an explicit native file dialog when available');
+if (!artworkProperties.includes('event.stopPropagation()') || !artworkProperties.includes('fileInput.click()') || artworkProperties.includes('OpenFileDialog')) {
+  failures.push('artwork picker must isolate its own row events and use a CEF file input without SteamClient native file-dialog IPC');
 }
+
 if (!frontendMappings.includes('filterMappingsForLocalShortcuts')
     || !frontendMappings.includes('listShortcutsBackend')
     || !frontendMappings.includes('stale cached mapping(s)')) {

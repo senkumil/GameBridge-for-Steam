@@ -347,7 +347,7 @@ function M.discover_local_candidates(request)
                 if is_short_title and not folder_exact and folder_similarity < 0.7 then
                     score = math.min(score, 60); detection_add_reason(candidate, "short_title_unverified")
                 else
-                    score = math.max(score, 90); detection_add_reason(candidate, "title_exact")
+                    score = math.max(score, candidate.alias_unique and 99 or 90); detection_add_reason(candidate, "title_exact")
                 end
             elseif title_similarity >= 0.65 then
                 detection_add_reason(candidate, "title_similar")
@@ -401,7 +401,10 @@ function M.discover_local_candidates(request)
         candidate._reason_set = nil
         local runner_up = candidates[index == 1 and 2 or 1]
         candidate.score_gap = runner_up and math.max(0, candidate.score - runner_up.score) or candidate.score
-        candidate.ambiguous = (index == 1 and runner_up ~= nil and candidate.score_gap < 12) or candidate.identity_collision == true
+        local exact_identity = rset["title_exact"] == true
+            or (candidate.alias_primary == true and candidate.alias_unique == true and candidate.score >= 90)
+        candidate.ambiguous = candidate.identity_collision == true
+            or (index == 1 and runner_up ~= nil and candidate.score_gap < 12 and not exact_identity)
 
         if candidate.direct then candidate.evidence_tier = "proof"
         elseif candidate.score >= 88 or rset["pe_product_exact"] then candidate.evidence_tier = "strong"

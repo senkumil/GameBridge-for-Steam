@@ -139,7 +139,6 @@ function ensureFallbackPanel(doc: Document, strip: HTMLElement): HTMLElement | n
 	panel.id = 'gdl-bp-detail-fallback-panel';
 	panel.dataset.gdlBpFallbackPanel = '1';
 	panel.setAttribute('aria-live', 'polite');
-	panel.style.cssText = 'display: block !important; visibility: visible !important; width: 100%; min-height: 400px; position: relative; z-index: 10;';
 	mount.parent.insertBefore(panel, mount.anchor.nextSibling);
 	return panel;
 }
@@ -159,7 +158,6 @@ export function ensureNativePanelRoot(
 		root.id = 'gdl-bp-detail-root';
 		root.dataset.gdlBigPictureDetails = '1';
 	}
-	root.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important; width: 100%; min-height: 350px;';
 	panel.dataset.gdlBpNativePanel = '1';
 	if (root.parentElement !== panel) panel.appendChild(root);
 	if (panel.firstChild !== root) panel.insertBefore(root, panel.firstChild);
@@ -167,7 +165,8 @@ export function ensureNativePanelRoot(
 		if (child !== root && child.id !== 'gdl-bp-detail-root') {
 			const text = (child.textContent || '').toLowerCase();
 			if (child.matches('[class*="EmptyDetails"], [class*="NonSteamNotice"], [class*="NonSteamExplanation"], [class*="CollectionsSection"]') || text.includes('no-steam') || text.includes('non-steam')) {
-				(child as HTMLElement).style.display = 'none';
+				(child as HTMLElement).hidden = true;
+				(child as HTMLElement).dataset.gdlBpHiddenNotice = '1';
 			}
 		}
 	});
@@ -189,10 +188,18 @@ export function hideBigPictureNonSteamNotices(doc: Document): void {
 		if (text && anchors.some(anchor => text.includes(anchor))) {
 			const container = (el.closest('[class*="Section"], [class*="Container"], [class*="Shelf"], [class*="Panel"]') as HTMLElement) || el;
 			if (!container.contains(doc.getElementById('gdl-bp-detail-root')!)) {
-				container.style.setProperty('display', 'none', 'important');
+				container.hidden = true;
+				container.dataset.gdlBpHiddenNotice = '1';
 				container.setAttribute('aria-hidden', 'true');
 			}
 		}
 	}
 }
 
+export function restoreBigPictureNonSteamNotices(doc: Document): void {
+	for (const element of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-hidden-notice="1"]'))) {
+		element.hidden = false;
+		delete element.dataset.gdlBpHiddenNotice;
+		element.removeAttribute('aria-hidden');
+	}
+}

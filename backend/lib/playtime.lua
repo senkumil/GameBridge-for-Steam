@@ -491,6 +491,8 @@ function M.clear_all()
     return ok
 end
 
-load_sessions()
+-- Session state is loaded lazily by the first playtime API call. Reading and
+-- pruning the history during backend module construction delays Millennium
+-- readiness on installations with a large playtime file.
 return M
 end

@@ -158,8 +158,11 @@ const artworkLua = readFileSync(path.join(process.cwd(), 'backend', 'lib', 'artw
 const mainLua = readFileSync(path.join(process.cwd(), 'backend', 'main.lua'), 'utf8');
 assert(artworkLua.includes('deps.artwork_candidates.fetch_community_artwork'),
 	'artwork.lua delegates fetch_community_artwork directly to deps.artwork_candidates');
-assert(mainLua.includes('deps.artwork_candidates = artwork_candidates'),
-	'main.lua injects artwork_candidates into deps before artwork factory');
+assert(
+	mainLua.includes('deps.artwork_candidates = artwork_candidates')
+		|| (mainLua.includes('artwork_candidates = \"artwork_candidates\"') && mainLua.includes('setmetatable(deps')),
+	'main.lua exposes artwork_candidates to artwork through eager or lazy dependency injection',
+);
 assert(!artworkLua.includes('STEAMGRIDDB_CURATED_RANKS'),
 	'artwork.lua no longer maintains duplicate STEAMGRIDDB_CURATED_RANKS table');
 

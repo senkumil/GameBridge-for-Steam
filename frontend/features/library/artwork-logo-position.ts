@@ -11,10 +11,10 @@ export interface SteamLogoPosition {
 const STORAGE_PREFIX = 'gdl_logo_position4_';
 const PREVIOUS_PREFIXES = ['gdl_logo_position1_', 'gdl_logo_position2_', 'gdl_logo_position3_'];
 const PES_2013_POSITION: SteamLogoPosition = { pinnedPosition: 'BottomCenter', nWidthPct: 50, nHeightPct: 50 };
-const MKK_POSITION: SteamLogoPosition = { pinnedPosition: 'CenterCenter', nWidthPct: 50, nHeightPct: 50 };
+const MKK_POSITION: SteamLogoPosition = { pinnedPosition: 'CenterCenter', nWidthPct: 58, nHeightPct: 58 };
 
 function profileRevision(steamAppId: string): number {
-	if (steamAppId === '237110' || steamAppId === '1888930') return 2;
+	if (steamAppId === '237110') return 3;
 	return 1;
 }
 

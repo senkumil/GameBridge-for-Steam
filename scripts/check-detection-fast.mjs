@@ -25,11 +25,14 @@ function readProjectFile(relPath) {
 // --------------------------------------------------------------------------
 {
 	const mainLua = readProjectFile('backend/main.lua');
-	if (!mainLua.includes('detect_game_candidates_local')
-		|| !mainLua.includes('deps.shortcut_detection_local')) {
-		throw new Error('DFAST02 Failed: backend/main.lua does not wire detect_game_candidates_local or deps.shortcut_detection_local.');
+	const hasLocalFacade = mainLua.includes('detect_game_candidates_local');
+	const hasEagerLocalDependency = mainLua.includes('deps.shortcut_detection_local');
+	const hasLazyLocalDependency = mainLua.includes('shortcut_detection_local = \"shortcut_detection_local\"')
+		&& mainLua.includes('module(\"shortcut_detection\").detect_game_candidates_local');
+	if (!hasLocalFacade || (!hasEagerLocalDependency && !hasLazyLocalDependency)) {
+		throw new Error('DFAST02 Failed: backend/main.lua does not wire detect_game_candidates_local through either eager or lazy backend dependencies.');
 	}
-	console.log('✓ DFAST02 Passed: Backend main.lua facade exposes detect_game_candidates_local IPC.');
+	console.log('✓ DFAST02 Passed: Backend main.lua facade exposes detect_game_candidates_local IPC through eager/lazy wiring.');
 }
 
 // --------------------------------------------------------------------------

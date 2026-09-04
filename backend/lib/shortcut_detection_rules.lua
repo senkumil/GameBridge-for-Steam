@@ -13,12 +13,12 @@ local M = {}
 -- Declarative registry of game-specific override and tracking behaviors.
 -- Adding a new game only requires adding a table entry here.
 local GAME_CUSTOM_RULES = {
-    ["red_dead_redemption"] = {
-        title_patterns = { "reddead", "rdr" },
+    ["red_dead_redemption_2"] = {
+        title_patterns = { "reddeadredemption2", "rdr2" },
         auto_override_target = "Launcher.exe",
         auto_override_triggers = { ["rdr2.exe"] = true },
         preserve_launchers = { ["launcher.exe"] = true },
-        sibling_indicators = { "rdr2.exe", "rdr.exe" },
+        sibling_indicators = { "rdr2.exe" },
     },
     ["the_last_of_us"] = {
         title_patterns = { "thelastofus", "tlou", "lastofus" },

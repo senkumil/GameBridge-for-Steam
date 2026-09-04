@@ -606,6 +606,33 @@ function M.clear_artwork(shortcut_app_id)
     return cjson.encode({ removed = remove_grid_files(fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid"), tostring(shortcut_app_id), { "p", "_hero", "_logo", "_icon", "" }) })
 end
 
+-- Relinking stages replacement artwork before publishing the new mapping. Only
+-- slots for which no replacement was found are removed, so a valid Hero/Logo
+-- never passes through an avoidable blank state during the transaction.
+function M.clear_artwork_slots(request_json)
+    local request = util.decode_json(cjson, request_json)
+    if not request or type(request) ~= "table" then return cjson.encode({ ok = false, error = "invalid_request" }) end
+    local shortcut_app_id = tostring(request.shortcut_app_id or ""):match("(%d+)") or ""
+    local requested_slots = type(request.slots) == "table" and request.slots or {}
+    if shortcut_app_id == "" then return cjson.encode({ ok = false, error = "invalid_shortcut" }) end
+    local suffix_by_slot = { [0] = "p", [1] = "_hero", [2] = "_logo", [3] = "", [4] = "_icon" }
+    local suffixes, slots, seen = {}, {}, {}
+    for _, raw_slot in ipairs(requested_slots) do
+        local slot = math.floor(tonumber(raw_slot) or -1)
+        local suffix = suffix_by_slot[slot]
+        if suffix ~= nil and not seen[slot] then
+            seen[slot] = true
+            suffixes[#suffixes + 1] = suffix
+            slots[#slots + 1] = slot
+        end
+    end
+    if #suffixes == 0 then return cjson.encode({ ok = true, removed = 0, slots = {} }) end
+    local account_id = get_active_account_id()
+    if not account_id then return cjson.encode({ ok = false, error = "active_user_not_found" }) end
+    local removed = remove_grid_files(fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid"), shortcut_app_id, suffixes)
+    return cjson.encode({ ok = true, removed = removed, slots = slots })
+end
+
 function M.clear_all_linked_artworks()
     local account_id = get_active_account_id()
     if not account_id then return cjson.encode({ error = "Could not determine active Steam user" }) end

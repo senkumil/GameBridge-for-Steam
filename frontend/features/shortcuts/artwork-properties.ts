@@ -1,4 +1,4 @@
-import { backendLog, fetchCommunityArtworkCandidatesBackend, readLocalArtworkImageBackend } from '../../api/backend';
+import { backendLog, fetchCommunityArtworkCandidatesBackend } from '../../api/backend';
 import { getPreferences, steamGridDbApiKeyCandidates } from '../../core/preferences';
 import { escapeHtml } from '../../core/text';
 import {
@@ -174,33 +174,14 @@ function openArtworkModal(context: ShortcutArtworkSettingsContext, data: Artwork
 		img.src = dataUrl;
 	};
 
-	uploadBtn.addEventListener('click', async (event) => {
+	uploadBtn.addEventListener('click', (event) => {
 		event.preventDefault();
 		event.stopPropagation();
-		const steamSystem = (window as any).SteamClient?.System;
-		if (typeof steamSystem?.OpenFileDialog === 'function') {
-			try {
-				// Keep the native method bound to SteamClient.System; some clean-client
-				// builds require its receiver and otherwise open/fail unpredictably.
-				const selectedPath = await steamSystem.OpenFileDialog({
-					bChooseDirectory: false,
-					strTitle: gdlText('game_artwork_upload_btn', 'Upload image'),
-					rgFilters: [
-						{ strFileTypeName: 'Images', rFilePatterns: ['*.png', '*.jpg', '*.jpeg', '*.webp'], bUseAsDefault: true },
-						{ strFileTypeName: 'All files', rFilePatterns: ['*'] },
-					],
-				});
-				if (typeof selectedPath === 'string' && selectedPath.trim()) {
-					const raw = await readLocalArtworkImageBackend({ request_json: JSON.stringify({ path: selectedPath }) });
-					let response: any = raw;
-					for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
-					if (response?.ok === true && response?.mime && response?.data_base64) {
-						acceptUploadedImage(`data:${response.mime};base64,${response.data_base64}`);
-					}
-				}
-				return;
-			} catch { return; }
-		}
+		// Use the CEF file input only. NativeGameLink must not invoke SteamClient
+		// System file-dialog IPC itself: on some Big Picture/clean-client builds
+		// that bridge can surface a stray Windows dialog (observed as a Save As
+		// window with "home" prefilled). Steam's own Personalización controls
+		// remain completely native; this applies only to our optional picker.
 		fileInput.click();
 	});
 	fileInput.addEventListener('change', () => {

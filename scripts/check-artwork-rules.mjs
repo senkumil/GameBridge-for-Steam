@@ -96,7 +96,8 @@ if (artworkSource.includes("missing: ['steam_client_api']")
 	|| !artworkSource.includes('const canUseSteamArtworkApi =')
 	|| !artworkSource.includes('continuing with backend grid-file fallback')
 	|| !artworkSource.includes('let preparedDataUrl: string | null = dataUrl')
-	|| !artworkSource.includes('if (!slotApplied && preparedDataUrl)')) {
+	|| !artworkSource.includes('if (preparedDataUrl)')
+	|| !artworkSource.includes('if (!slotApplied && preparedDataUrl && canUseSteamArtworkApi)')) {
 	throw new Error('Automatic artwork must not abort when the Steam bridge is unavailable; it must use prepared grid-file fallback bytes.');
 }
 
@@ -107,4 +108,3 @@ if (!achievementsSource.includes('for name, m in pairs(metadata) do') && !achiev
 }
 
 console.log('Artwork and achievement quality and safety rule checks passed.');
-

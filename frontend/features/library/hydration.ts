@@ -33,7 +33,7 @@ function ownedActivityFeed(session: LinkedRenderSession): HTMLElement | null {
  * by the exact document/AppID/shortcut/generation captured by the caller. */
 export function hydrateLinkedSecondaryResources(session: LinkedRenderSession, data: SteamGameData): void {
 	const activityGuard = { isCurrent: session.isCurrent, shortcutAppId: session.shortcutAppId };
-	void getNews(session.steamAppId, session.language).then(newsItems => {
+	void getNews(session.steamAppId, session.language, data).then(newsItems => {
 		const feed = ownedActivityFeed(session);
 		if (!feed) return;
 		const signature = newsItemsSignature(newsItems);

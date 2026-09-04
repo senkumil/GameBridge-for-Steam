@@ -1,7 +1,7 @@
 import type { CommunityContentItem, FriendCategories, NewsItem, SteamGameData } from '../../domain/types';
 import { backendLog } from '../../api/backend';
 import { GDL_INJECTED } from './constants';
-import { getModernLibraryAssets, getResolvedLibraryAssets, linkedShortcutPortrait, spoofArtwork } from './artwork';
+import { getModernLibraryAssets, getResolvedLibraryAssets, linkedShortcutPortrait } from './artwork';
 import { legacyInfoPortraitSync, resolveLegacyInfoPortrait } from './legacy-info-portrait';
 import { ensureNativeGameChrome, removeNativeGameChrome, steamNativeGameInfo } from './native-chrome';
 import {
@@ -92,11 +92,6 @@ export function renderLinkedGamePage(
 	}
 	cleanupPreviousRender(doc);
 	const isLegacy = isLegacyGame(steamAppId, data);
-	const numericShortcutId = Number(context.shortcutAppId || 0);
-	if (numericShortcutId >= 2147483648) {
-		void spoofArtwork(numericShortcutId, steamAppId, data.name || '', false, isLegacy)
-			.catch(error => backendLog('Hot artwork repair failed for ' + steamAppId + ': ' + String(error)));
-	}
 	const initialAssets = getResolvedLibraryAssets(steamAppId);
 	prepareNativeLibraryLayout(layout);
 

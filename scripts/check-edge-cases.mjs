@@ -53,12 +53,12 @@ if (!storeLua.includes('probe_on_demand')) {
 	throw new Error('store.lua must set metadata_sources.artwork = "probe_on_demand" for delisted games.');
 }
 
-// 6. News fallback must concatenate appid cleanly and flag steam_old_news
+// 6. News fetch must concatenate appid cleanly and use one unfiltered request.
 if (newsLua.includes('.. steam_app_id ..')) {
 	throw new Error('news.lua must not concatenate table steam_app_id into fallback URL.');
 }
-if (!newsLua.includes('source = "steam_old_news"')) {
-	throw new Error('news.lua must report source = "steam_old_news" when retrieving unfiltered historical news.');
+if (!newsLua.includes('local news, transient_error = fetch_news_json(appid, lang)') || newsLua.includes('announcements_only')) {
+	throw new Error('news.lua must fetch all official channels once without an announcements-first timeout.');
 }
 
 // 7. Community logo trimming without fixed 1280x720 letterboxing

@@ -30,6 +30,13 @@ function detectionTitleHint(title: string): string {
 	return hint.trim() || String(title || '').trim();
 }
 
+async function withDetectionBudget<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+	return await Promise.race<T | null>([
+		promise.catch((): null => null),
+		new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs)),
+	]);
+}
+
 function readShortcutPathFromProperties(doc: Document): { exePath: string; startDir: string; launchOptions: string } {
 	const values = Array.from(doc.querySelectorAll('input')).map(input => (input as HTMLInputElement).value?.trim() || '');
 	let exePath = '';
@@ -74,12 +81,22 @@ export async function buildShortcutDetectionContext(
 	let recommendedStartDir = '';
 	let trackingExecutableAutoApply = false;
 
+	// Tracking/launcher analysis comes from the backend filesystem/VDF resolver.
+	// Always request it: SteamClient often already supplies exe/startDir, which
+	// previously skipped this call entirely and silently removed the "use real
+	// game executable" recommendation (including RDR2's Launcher.exe rule).
+	const backendDetailsPromise = withDetectionBudget(
+		getShortcutDetailsBackend({ shortcut_app_id: String(shortcutAppId), title: title || '' }),
+		1200,
+	);
+
 	if (!exePath || !startDir) {
 		const appsApi = (window as any).SteamClient?.Apps;
 		if (typeof appsApi?.GetCachedAppDetails === 'function') {
 			for (const id of [shortcutAppId, shortcutAppId - 4294967296]) {
 				try {
-					const raw = await appsApi.GetCachedAppDetails(id);
+					const raw = await withDetectionBudget(Promise.resolve(appsApi.GetCachedAppDetails(id)), 300);
+					if (raw == null) continue;
 					let details: any = raw;
 					if (typeof raw === 'string') details = JSON.parse(raw);
 					if (!details || typeof details !== 'object') continue;
@@ -92,25 +109,28 @@ export async function buildShortcutDetectionContext(
 		}
 	}
 
-	if (!exePath || !startDir) {
-		try {
-			const raw = await getShortcutDetailsBackend({ shortcut_app_id: String(shortcutAppId), title: title || '' });
-			let details: any = raw;
-			for (let attempt = 0; attempt < 2 && typeof details === 'string'; attempt++) details = JSON.parse(details);
-			if (details && typeof details === 'object' && !details.error) {
-				exePath ||= String(details.exe_path || '');
-				startDir ||= String(details.start_dir || '');
-				launchOptions ||= String(details.launch_options || '');
-				backendTitle = String(details.title || '').trim();
-				bootstrapDetected = !!details.bootstrap_detected;
-				recommendedExePath = cleanShortcutPath(details.recommended_exe_path || '');
-				recommendedStartDir = cleanShortcutPath(details.recommended_start_dir || '');
-				trackingExecutableAutoApply = details.tracking_executable_auto_apply === true;
-				if (exePath) backendLog(`Resolved shortcut executable from shortcuts.vdf for ${title || backendTitle || shortcutAppId}`);
+	try {
+		const raw = await backendDetailsPromise;
+		if (raw == null) throw new Error('shortcut_details_budget_exceeded');
+		let details: any = raw;
+		for (let attempt = 0; attempt < 2 && typeof details === 'string'; attempt++) details = JSON.parse(details);
+		if (details && typeof details === 'object' && !details.error) {
+			exePath ||= String(details.exe_path || '');
+			startDir ||= String(details.start_dir || '');
+			launchOptions ||= String(details.launch_options || '');
+			backendTitle = String(details.title || '').trim();
+			bootstrapDetected = !!details.bootstrap_detected;
+			recommendedExePath = cleanShortcutPath(details.recommended_exe_path || '');
+			recommendedStartDir = cleanShortcutPath(details.recommended_start_dir || '');
+			trackingExecutableAutoApply = details.tracking_executable_auto_apply === true;
+			if (recommendedExePath) {
+				backendLog(`Tracking executable recommendation for ${title || backendTitle || shortcutAppId}: ${recommendedExePath}`);
+			} else if (exePath) {
+				backendLog(`Resolved shortcut executable from shortcuts.vdf for ${title || backendTitle || shortcutAppId}`);
 			}
-		} catch (error) {
-			backendLog(`Could not read shortcut ${shortcutAppId} from shortcuts.vdf: ${error}`);
 		}
+	} catch (error) {
+		backendLog(`Could not enrich shortcut ${shortcutAppId} from shortcuts.vdf: ${error}`);
 	}
 
 	exePath = cleanShortcutPath(exePath);
@@ -141,7 +161,7 @@ export async function buildShortcutDetectionContext(
 	};
 }
 
-export const DETECTION_MODEL_VERSION = 'v8';
+export const DETECTION_MODEL_VERSION = 'v10';
 
 function parseDetectionCandidate(candidate: any): ShortcutDetectionCandidate {
 	return {

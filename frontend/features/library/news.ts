@@ -1,5 +1,5 @@
-import type { CommunityContentItem, NewsItem } from '../../domain/types';
-import { backendLog, fetchCommunityContentBackend, fetchHistoricalNewsBackend, fetchNewsBackend, fetchPartnerEventsBackend } from '../../api/backend';
+import type { CommunityContentItem, NewsItem, SteamGameData } from '../../domain/types';
+import { backendLog, fetchCommunityContentBackend, fetchNewsBackend, fetchPartnerEventsBackend } from '../../api/backend';
 import { CACHE_RETENTION, CACHE_TTL, cacheDeleteMatching, cacheGet, cacheRead, cacheSet } from '../../core/cache';
 import { RetryingRequestCache } from '../../core/request-cache';
 import { getGameData, getSynchronousGameData } from '../../core/game-data';
@@ -10,7 +10,6 @@ import { gdlText, getSteamLanguage, loc, steamIntlLocale, steamLanguageSync } fr
 // the same four requests again, while allowing recovery much sooner than the
 // normal persistent-news TTL.
 const TRANSIENT_NEWS_RETRY_MS = 2 * 60 * 1000;
-const SPARSE_NEWS_MIN_ITEMS = 3;
 const communityRequests = new RetryingRequestCache<CommunityContentItem[]>({
 	ttlMs: CACHE_TTL.communityContent,
 	retries: 1,
@@ -27,11 +26,12 @@ const newsRequests = new RetryingRequestCache<NewsItem[]>({
 });
 
 
-function historicalNewsModeSync(steamAppId: string, language: string): boolean {
-	return getSynchronousGameData(steamAppId, language)?.is_delisted === true;
+function historicalNewsModeSync(steamAppId: string, language: string, metadata?: SteamGameData | null): boolean {
+	return (metadata || getSynchronousGameData(steamAppId, language))?.is_delisted === true;
 }
 
-async function historicalNewsMode(steamAppId: string, language: string): Promise<boolean> {
+async function historicalNewsMode(steamAppId: string, language: string, metadata?: SteamGameData | null): Promise<boolean> {
+	if (metadata) return metadata.is_delisted === true;
 	const cached = getSynchronousGameData(steamAppId, language);
 	if (cached) return cached.is_delisted === true;
 	const loaded = await getGameData(steamAppId, language).catch((): null => null);
@@ -39,7 +39,80 @@ async function historicalNewsMode(steamAppId: string, language: string): Promise
 }
 
 function newsCacheKey(steamAppId: string, language: string, historical: boolean): string {
-	return `${historical ? 'events16_removed' : 'events16_standard'}_${language}-en_${steamAppId}`;
+	return `${historical ? 'events18_removed' : 'events18_standard'}_${language}-en_${steamAppId}`;
+}
+
+function steamReleaseTimestamp(value: unknown): number | null {
+	const releaseText = String(value || '').trim();
+	if (!releaseText) return null;
+	const native = Date.parse(releaseText);
+	if (Number.isFinite(native) && native > 0) return Math.floor(native / 1000);
+
+	// Steam localizes release_date.date. Chromium's Date.parse understands the
+	// English form but rejects otherwise valid Spanish/German/French/etc. month
+	// names, which used to make the guaranteed feed card disappear on legacy
+	// games. Normalize the common month stems and retain numeric CJK dates.
+	const normalized = releaseText.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+	const ymd = normalized.match(/\b(19\d{2}|20\d{2})\D{1,4}(\d{1,2})\D{1,4}(\d{1,2})\b/);
+	if (ymd) {
+		const year = Number(ymd[1]);
+		const month = Number(ymd[2]);
+		const day = Number(ymd[3]);
+		if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return Math.floor(Date.UTC(year, month - 1, day) / 1000);
+	}
+	const monthAliases: string[][] = [
+		['jan', 'ene', 'gen', 'januar', 'janvier', 'janeiro'],
+		['feb', 'fev', 'februar', 'fevrier', 'fevereiro'],
+		['mar', 'marz', 'mars', 'marzo', 'marco'],
+		['apr', 'abr', 'avr', 'avril', 'abril'],
+		['may', 'mai', 'mayo', 'maggio'],
+		['jun', 'juin', 'juni', 'junio', 'giugno'],
+		['jul', 'juil', 'juli', 'julio', 'luglio'],
+		['aug', 'ago', 'aout', 'agosto'],
+		['sep', 'set', 'sept', 'september', 'septiembre', 'setembro'],
+		['oct', 'out', 'okt', 'octubre', 'ottobre'],
+		['nov', 'noviembre', 'novembro'],
+		['dec', 'dic', 'dez', 'des', 'decembre', 'diciembre', 'dicembre'],
+	];
+	const year = Number(normalized.match(/\b(19\d{2}|20\d{2})\b/)?.[1] || 0);
+	const tokens: string[] = Array.from(normalized.match(/[a-z]+|\d+/g) || []);
+	const monthIndex = monthAliases.findIndex(aliases => tokens.some(token => aliases.some(alias => token.startsWith(alias))));
+	const day = Number(tokens.find(token => /^\d{1,2}$/.test(token) && Number(token) >= 1 && Number(token) <= 31) || 1);
+	if (year > 0 && monthIndex >= 0) return Math.floor(Date.UTC(year, monthIndex, day) / 1000);
+	return null;
+}
+
+function officialReleaseFallback(steamAppId: string, language: string, metadata?: SteamGameData | null): NewsItem[] {
+	const data = metadata || getSynchronousGameData(steamAppId, language)
+		|| getSynchronousGameData(steamAppId, 'english');
+	const releaseTimestamp = steamReleaseTimestamp(data?.release_date?.date);
+	const name = String(data?.name || `Steam App ${steamAppId}`).trim();
+	const retired = data?.is_delisted === true;
+	// The date is only used to place the generic metadata card in the activity
+	// chronology. Round it to the current UTC day so repeated renders remain
+	// byte-for-byte stable even when the Store record has no public release date.
+	const fallbackTimestamp = Math.floor(Date.now() / 86_400_000) * 86_400;
+	return [{
+		gid: releaseTimestamp ? `gdl-steam-release-${steamAppId}` : `gdl-steam-metadata-${steamAppId}`,
+		title: releaseTimestamp
+			? gdlText('feed_release_title', '{name} was released on Steam', { name })
+			: gdlText('feed_metadata_title', '{name} is linked to its Steam information', { name }),
+		url: retired
+			? `https://steamcommunity.com/app/${steamAppId}`
+			: `https://store.steampowered.com/app/${steamAppId}`,
+		contents: String(data?.short_description || gdlText('feed_metadata_description', 'Official Steam information is available for this game.')),
+		date: releaseTimestamp || fallbackTimestamp,
+		event_type: releaseTimestamp ? 10 : 28,
+		image: String(data?.header_image || data?.capsule_image || ''),
+		feedlabel: releaseTimestamp
+			? gdlText('steam_release_label', 'Steam release')
+			: gdlText('feed_metadata_label', 'Steam game information'),
+		feedname: 'steam_store_release_metadata',
+	}];
+}
+
+function ensureNewsFeed(steamAppId: string, language: string, items: NewsItem[], metadata?: SteamGameData | null): NewsItem[] {
+	return items.length > 0 ? items : officialReleaseFallback(steamAppId, language, metadata);
 }
 
 function compactNewsItems(items: NewsItem[]): NewsItem[] {
@@ -75,24 +148,21 @@ export function isNewsItemLanguageCompatible(item: Partial<NewsItem>, preferredL
 	return true;
 }
 
-export function getCachedNews(steamAppId: string, language = steamLanguageSync() || 'english'):
+export function getCachedNews(steamAppId: string, language = steamLanguageSync() || 'english', metadata?: SteamGameData | null):
 	{ data: NewsItem[]; fresh: boolean } | null {
-	const historical = historicalNewsModeSync(steamAppId, language);
+	const historical = historicalNewsModeSync(steamAppId, language, metadata);
 	const key = newsCacheKey(steamAppId, language, historical);
 	const entry = cacheRead<NewsItem[]>(key, CACHE_TTL.news, CACHE_RETENTION.news);
 	const memory = newsRequests.peek(key);
-	if (!entry && memory === null) return null;
 	const combined = [...(memory || []), ...(entry?.data || [])]
 		.filter(item => isNewsItemLanguageCompatible(item, language));
-	const data = compactNewsItems(mergeSupplementalPatchNotes(steamAppId, combined));
-	// Active Store games retain the normal Steam cache behavior. Only removed
-	// games keep a sparse feed provisional so their historical enrichment can
-	// continue on the short retry cadence.
+	const data = ensureNewsFeed(steamAppId, language,
+		compactNewsItems(mergeSupplementalPatchNotes(steamAppId, combined)), metadata);
 	return {
 		data,
-		fresh: historical
-			? data.length >= SPARSE_NEWS_MIN_ITEMS && Boolean(entry?.fresh || memory !== null)
-			: Boolean(entry?.fresh || memory !== null),
+		// A synthesized card is ready to render but never counts as a fresh
+		// network snapshot; getNews will still replace it with real Steam posts.
+		fresh: Boolean((entry?.fresh || memory !== null) && combined.length > 0),
 	};
 }
 
@@ -145,14 +215,14 @@ export async function getCommunityContent(steamAppId: string, requestedLanguage?
 	return loaded ?? stale;
 }
 
-export async function getNews(steamAppId: string, requestedLanguage?: string): Promise<NewsItem[]> {
+export async function getNews(steamAppId: string, requestedLanguage?: string, metadata?: SteamGameData | null): Promise<NewsItem[]> {
 	// Ask Steam for the client language first, then use English only for events
 	// that have no localized version. Keeping the language in the cache key is
 	// important when the user changes Steam's language between sessions.
 	const preferredLanguage = requestedLanguage || await getSteamLanguage().catch(() => steamLanguageSync() || 'english');
-	const historical = await historicalNewsMode(steamAppId, preferredLanguage);
+	const historical = await historicalNewsMode(steamAppId, preferredLanguage, metadata);
 	const cacheKey = newsCacheKey(steamAppId, preferredLanguage, historical);
-	const snapshot = getCachedNews(steamAppId, preferredLanguage);
+	const snapshot = getCachedNews(steamAppId, preferredLanguage, metadata);
 	if (snapshot?.fresh) return snapshot.data;
 	const stale = (snapshot?.data || [])
 		.filter(item => isNewsItemLanguageCompatible(item, preferredLanguage));
@@ -161,19 +231,30 @@ export async function getNews(steamAppId: string, requestedLanguage?: string): P
 	// feed. Partner events provide native event types/images; announcements
 	// fill older pages so the Load More control has a real chronology.
 	const loaded = await newsRequests.get(cacheKey, async () => { try {
-		const settled = async (request: Promise<string>): Promise<{ raw: string; ok: boolean }> => {
-			try { return { raw: await request, ok: true }; }
-			catch { return { raw: '{"items":[]}', ok: false }; }
+		const settled = async (request: Promise<string>, timeoutMs = 4_500): Promise<{ raw: string; ok: boolean }> => {
+			const safeRequest = request
+				.then(raw => ({ raw, ok: true }))
+				.catch(() => ({ raw: '{"items":[]}', ok: false }));
+			return await Promise.race([
+				safeRequest,
+				new Promise<{ raw: string; ok: boolean }>(resolve => setTimeout(
+					() => resolve({ raw: '{"items":[]}', ok: false }), timeoutMs,
+				)),
+			]);
 		};
+		const emptyResult = Promise.resolve({ raw: '{"items":[]}', ok: true });
+		// Removed games commonly have no News Hub/Partner Events payload. Their
+		// public ISteamNews response is enough (and still contains Product Release
+		// posts), so do not hold the feed behind two slow HTML-page requests.
 		const [preferredResult, englishResult, announcementsResult, englishAnnouncementsResult] = await Promise.all([
-			settled(fetchPartnerEventsBackend({ steam_app_id: steamAppId, language: preferredLanguage })),
-			preferredLanguage === 'english'
-				? Promise.resolve({ raw: '{"items":[]}', ok: true })
+			historical ? emptyResult : settled(fetchPartnerEventsBackend({ steam_app_id: steamAppId, language: preferredLanguage })),
+			historical || preferredLanguage === 'english'
+				? emptyResult
 				: settled(fetchPartnerEventsBackend({ steam_app_id: steamAppId, language: 'english' })),
-			settled((historical ? fetchHistoricalNewsBackend : fetchNewsBackend)({ steam_app_id: steamAppId, language: preferredLanguage })),
+			settled(fetchNewsBackend({ steam_app_id: steamAppId, language: preferredLanguage })),
 			preferredLanguage === 'english'
 				? Promise.resolve({ raw: '{"items":[]}', ok: true })
-				: settled((historical ? fetchHistoricalNewsBackend : fetchNewsBackend)({ steam_app_id: steamAppId, language: 'english' })),
+				: settled(fetchNewsBackend({ steam_app_id: steamAppId, language: 'english' })),
 		]);
 		const preferred = JSON.parse(preferredResult.raw);
 		const english = JSON.parse(englishResult.raw);
@@ -233,10 +314,10 @@ export async function getNews(steamAppId: string, requestedLanguage?: string): P
 				return true;
 			});
 			if (deduped.length === 0 && stale.length > 0) return stale;
-			const merged = compactNewsItems(mergeSupplementalPatchNotes(
+			const merged = ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(
 				steamAppId,
 				hadTransportFailure ? [...deduped, ...stale] : deduped,
-			));
+			)), metadata);
 			// At least one official source produced usable data. Persist that valid
 			// feed even if a sibling endpoint failed; legacy AppIDs commonly expose
 			// announcements but no Partner Events endpoint.
@@ -246,12 +327,12 @@ export async function getNews(steamAppId: string, requestedLanguage?: string): P
 		// A retired AppID may no longer have a Store News Hub. Cache that expected
 		// empty state so returning to the game does not call the dead endpoint again.
 		if (partnerEventsUnavailable) {
-			const merged = compactNewsItems(mergeSupplementalPatchNotes(steamAppId, []));
+			const merged = ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata);
 			cacheSet(cacheKey, merged);
 			return merged;
 		}
 		if (!hadTransportFailure) {
-			const merged = compactNewsItems(mergeSupplementalPatchNotes(steamAppId, []));
+			const merged = ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata);
 			cacheSet(cacheKey, merged);
 			return merged;
 		}
@@ -260,9 +341,9 @@ export async function getNews(steamAppId: string, requestedLanguage?: string): P
 	}
 	// Keep the last known feed visible and suppress an immediate retry storm.
 	// RetryingRequestCache retains this fallback only for the short transient TTL.
-	return stale.length > 0 ? stale : compactNewsItems(mergeSupplementalPatchNotes(steamAppId, []));
+	return stale.length > 0 ? stale : ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata);
 	});
-	return loaded ?? (stale.length > 0 ? stale : compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])));
+	return loaded ?? (stale.length > 0 ? stale : ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata));
 }
 
 export function invalidateLibraryContentCaches(appIds: Iterable<string | number>): void {
