@@ -240,7 +240,7 @@ export const LinkManagementSection: React.FC<LinkManagementSectionProps> = ({ pr
 		});
 		void (async () => {
 			try {
-				const result = await unlinkShortcutFromSteam({ shortcutAppId: row.id, title: row.title, steamAppId: row.steamAppId || undefined });
+				const result = await unlinkShortcutFromSteam({ shortcutAppId: row.id, title: row.title, steamAppId: row.steamAppId || undefined, clearIcon: true });
 				setShortcutRevision(value => value + 1);
 				if (!result.ok) {
 					setShortcutActionStatus({

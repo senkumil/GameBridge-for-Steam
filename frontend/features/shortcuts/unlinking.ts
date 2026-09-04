@@ -1,4 +1,4 @@
-import { backendLog, clearArtworkExceptIconBackend, restoreSteamAppIdFileBackend } from '../../api/backend';
+import { backendLog, clearAllLinkedArtworksBackend, clearArtworkBackend, clearArtworkExceptIconBackend, restoreSteamAppIdFileBackend } from '../../api/backend';
 import { removeShortcutMappingsChecked, shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { normalizeTitle } from '../../core/text';
 import { getShortcutAppById, readShortcutOverviewField } from '../../steam/shortcuts';
@@ -18,6 +18,7 @@ export interface ShortcutUnlinkOptions {
 	steamAppId?: string | null;
 	exePath?: string | null;
 	preserveLinkHistory?: boolean;
+	clearIcon?: boolean;
 }
 
 export interface ShortcutUnlinkResult {
@@ -62,10 +63,11 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 		return { ok: false, shortcutAppId, steamAppId, error: 'mapping_remove_failed' };
 	}
 
-	// The backing icon file is deliberately preserved below. Keep its matching
-	// marker as well so an immediate same-AppID relink can reuse it; a different
-	// AppID still fails the marker check and performs a full icon replacement.
-	await supersedeArtworkApplications(shortcutAppId, true);
+	if (options.clearIcon) {
+		await supersedeArtworkApplications(shortcutAppId, false);
+	} else {
+		await supersedeArtworkApplications(shortcutAppId, true);
+	}
 	try {
 		const apps = (window as any).SteamClient?.Apps;
 		if (typeof apps?.ClearCustomArtworkForApp === 'function') {
@@ -73,6 +75,12 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 				try { apps.ClearCustomArtworkForApp(shortcutAppId, slot); } catch {}
 			}
 			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		if (options.clearIcon) {
+			if (typeof apps?.SetShortcutIcon === 'function') {
+				try { void apps.SetShortcutIcon(shortcutAppId, ''); } catch {}
+			}
+			try { localStorage.removeItem(`gdl_shortcut_icon_${shortcutAppId}`); } catch {}
 		}
 		const originalTitle = getOriginalShortcutTitle(shortcutAppId);
 		if (originalTitle && typeof apps?.SetShortcutName === 'function') {
@@ -85,10 +93,11 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 		}
 		forgetOriginalShortcutTitle(shortcutAppId);
 		if (!options.preserveLinkHistory) forgetShortcutSteamAppId(shortcutAppId);
-		// Preserve the last valid shortcut icon. Earlier builds blanked it here and
-		// then deleted the backing _icon file, so a transient icon-download failure
-		// during relink left the game permanently iconless.
-		void clearArtworkExceptIconBackend({ shortcut_app_id: String(shortcutAppId) }).catch((_error: unknown): void => {});
+		if (options.clearIcon) {
+			void clearArtworkBackend({ shortcut_app_id: String(shortcutAppId) }).catch((_error: unknown): void => {});
+		} else {
+			void clearArtworkExceptIconBackend({ shortcut_app_id: String(shortcutAppId) }).catch((_error: unknown): void => {});
+		}
 		const startDir = String(readShortcutOverviewField(app, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir') || '').trim();
 		void restoreSteamAppIdFileBackend({
 			request_json: JSON.stringify({ exe_path: exePath, start_dir: startDir }),
@@ -161,12 +170,22 @@ export async function unlinkAllShortcutsFromSteam(doc?: Document | null): Promis
 			title: record.title,
 			steamAppId: hasMapping ? steamAppId : '',
 			preserveLinkHistory: true,
+			clearIcon: true,
 		});
 		if (!result.ok) {
-			result = await unlinkShortcutFromSteam({ doc, shortcutAppId: record.id, title: record.title, steamAppId: hasMapping ? steamAppId : '', preserveLinkHistory: true });
+			result = await unlinkShortcutFromSteam({ doc, shortcutAppId: record.id, title: record.title, steamAppId: hasMapping ? steamAppId : '', preserveLinkHistory: true, clearIcon: true });
 		}
 		return result;
 	}));
+
+	void clearAllLinkedArtworksBackend().catch(() => {});
+	const apps = (window as any).SteamClient?.Apps;
+	for (const { record } of targets) {
+		try { localStorage.removeItem(`gdl_shortcut_icon_${record.id}`); } catch {}
+		if (typeof apps?.SetShortcutIcon === 'function') {
+			try { void apps.SetShortcutIcon(record.id, ''); } catch {}
+		}
+	}
 
 	for (const result of results) {
 		if (result.ok) unlinked += 1;
@@ -192,10 +211,15 @@ export function cleanAllArtworkAndRestoreNames(): void {
 					try { apps.ClearCustomArtworkForApp(record.id, slot); } catch {}
 				}
 			}
+			if (typeof apps?.SetShortcutIcon === 'function') {
+				try { void apps.SetShortcutIcon(record.id, ''); } catch {}
+			}
+			try { localStorage.removeItem(`gdl_shortcut_icon_${record.id}`); } catch {}
 			const originalTitle = getOriginalShortcutTitle(record.id);
 			if (originalTitle && typeof apps?.SetShortcutName === 'function') {
 				try { apps.SetShortcutName(record.id, originalTitle); } catch {}
 			}
 		}
+		void clearAllLinkedArtworksBackend().catch(() => {});
 	} catch {}
 }
