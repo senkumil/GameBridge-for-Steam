@@ -6,6 +6,7 @@ const backendMain = readFileSync(new URL('../backend/main.lua', import.meta.url)
 const storeLua = readFileSync(new URL('../backend/lib/store.lua', import.meta.url), 'utf8');
 const newsLua = readFileSync(new URL('../backend/lib/news.lua', import.meta.url), 'utf8');
 const artworkImageTs = readFileSync(new URL('../frontend/features/library/artwork-image.ts', import.meta.url), 'utf8');
+const artworkHeroTs = readFileSync(new URL('../frontend/features/library/artwork-hero.ts', import.meta.url), 'utf8');
 const artworkTs = readFileSync(new URL('../frontend/features/library/artwork.ts', import.meta.url), 'utf8');
 const legacyResolverTs = readFileSync(new URL('../frontend/features/library/legacy-resolver.ts', import.meta.url), 'utf8');
 const reconcilerTs = readFileSync(new URL('../frontend/features/shortcuts/reconciler.ts', import.meta.url), 'utf8');
@@ -85,10 +86,19 @@ if (artworkTs.includes("defaultLogoPin: SteamLogoPinPosition = heroUsesLegacyFal
 	throw new Error('artwork.ts must default defaultLogoPin to BottomLeft, never forcing CenterCenter.');
 }
 
-// 10. Candidate URL priorities: official Steam URLs before community in hero/logo/wide
-const heroBlock = legacyResolverTs.match(/heroUrls:\s*string\[\]\s*=\s*\[([\s\S]*?)\];/)?.[1] || '';
-if (heroBlock.indexOf('modern?.hero') > heroBlock.indexOf('community?.hero')) {
-	throw new Error('legacy-resolver.ts must prioritize official modern hero URLs before community?.hero.');
+// 10. Candidate URL priorities: official Steam URLs before community, and Base hero before 2x hero
+if (!artworkTs.includes('buildHeroCandidateUrls') || !legacyResolverTs.includes('buildHeroCandidateUrls')) {
+	throw new Error('artwork.ts and legacy-resolver.ts must both use buildHeroCandidateUrls for standardized Hero resolution.');
+}
+const candidatesBlock = artworkHeroTs.substring(artworkHeroTs.indexOf('const candidates:'));
+const baseIdx = candidatesBlock.indexOf('${sharedBase}/library_hero.jpg');
+const twoXIdx = candidatesBlock.indexOf('${sharedBase}/library_hero_2x.jpg');
+const commIdx = candidatesBlock.indexOf('communityHero,');
+if (baseIdx === -1 || twoXIdx === -1 || baseIdx > twoXIdx) {
+	throw new Error('artwork-hero.ts must prioritize Base hero (library_hero.jpg) before 2x hero (library_hero_2x.jpg).');
+}
+if (commIdx === -1 || twoXIdx > commIdx) {
+	throw new Error('artwork-hero.ts must prioritize 2x hero fallback before community hero.');
 }
 const logoBlock = legacyResolverTs.match(/logoUrls:\s*string\[\]\s*=\s*\[([\s\S]*?)\];/)?.[1] || '';
 if (logoBlock.indexOf('modern?.logo') > logoBlock.indexOf('community?.logo')) {

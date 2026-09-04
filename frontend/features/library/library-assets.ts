@@ -8,6 +8,7 @@ export interface SteamLibraryAssets {
 	found?: boolean;
 	portrait?: string;
 	hero?: string;
+	hero2x?: string;
 	logo?: string;
 	wide?: string;
 	legacy_header?: string; legacy_logo?: string;
@@ -35,7 +36,7 @@ function requestKey(appId: string, language = steamLanguageSync() || 'english'):
 	return `${appId}|${String(language || 'english').toLowerCase()}`;
 }
 function storageKey(appId: string, language: string): string {
-	return `library_assets_v3_${language}_${appId}`;
+	return `library_assets_v4_${language}_${appId}`;
 }
 
 function usableLibraryAssetSnapshot(data: SteamLibraryAssets | null | undefined): data is SteamLibraryAssets {
@@ -50,6 +51,9 @@ export function getCachedLibraryAssets(appId: string, language = steamLanguageSy
 		CACHE_TTL.libraryAssets, CACHE_RETENTION.libraryAssets);
 	if (entry && usableLibraryAssetSnapshot(entry.data)) return { data: entry.data, fresh: entry.fresh };
 	if (entry) cacheDelete(storageKey(appId, language));
+	const fallbackV3 = cacheRead<SteamLibraryAssets>(`library_assets_v3_${language}_${appId}`,
+		CACHE_TTL.libraryAssets, CACHE_RETENTION.libraryAssets);
+	if (fallbackV3 && usableLibraryAssetSnapshot(fallbackV3.data)) return { data: fallbackV3.data, fresh: false };
 	const legacy = cacheRead<SteamLibraryAssets>(`library_assets_v2_${language}_${appId}`,
 		CACHE_TTL.libraryAssets, CACHE_RETENTION.libraryAssets);
 	return legacy && usableLibraryAssetSnapshot(legacy.data) ? { data: legacy.data, fresh: false } : null;

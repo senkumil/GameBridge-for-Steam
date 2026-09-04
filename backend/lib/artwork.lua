@@ -333,7 +333,7 @@ function M.fetch_library_assets(request_json)
         controller_support = tostring(common.controller_support or ""),
         category_ids = category_ids,
         release_date = release_date,
-        library_metadata_algorithm = 3,
+        library_metadata_algorithm = 3, -- library_metadata_algorithm = 1
         logo_position = (type(assets) == "table" and type(assets.library_logo) == "table" and assets.library_logo.logo_position)
             or (type(assets) == "table" and assets.logo_position)
             or (type(common.library_assets) == "table" and common.library_assets.logo_position) or nil,

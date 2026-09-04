@@ -10,6 +10,13 @@ import {
 } from './library-assets';
 import { waitForSteamBridge } from './steam-bridge';
 import {
+	buildHeroCandidateUrls,
+	classifyHeroVariant,
+	determineHeroSelectionReason,
+	isHero2xUrl,
+	logHeroResolutionDiagnostics,
+} from './artwork-hero';
+import {
 	applyOfficialShortcutIconOnce,
 	clearShortcutIconMarker,
 	SHORTCUT_ICON_STORAGE_PREFIX,
@@ -176,7 +183,17 @@ export function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): 
 	const hasValidPortrait = isTrustedArtworkSourceUrl(marker.sourceUrls?.portrait
 		|| (marker.provenance?.portrait as { url?: unknown } | undefined)?.url);
 	const slots = new Set(marker.slots || []);
-	return slots.has(0) && slots.has(1) && slots.has(2) && slots.has(3) && hasValidPortrait;
+	if (!(slots.has(0) && slots.has(1) && slots.has(2) && slots.has(3) && hasValidPortrait)) {
+		return false;
+	}
+	const heroSource = marker.sourceUrls?.hero || (marker.provenance?.hero as any)?.url || '';
+	const heroProv = marker.provenance?.hero as any;
+	const is2xHero = isHero2xUrl(heroSource) || heroProv?.variant === '2x';
+	const heroPolicyEvaluated = Boolean(heroProv?.heroPolicyVersion && heroProv.heroPolicyVersion >= 1);
+	if (is2xHero && !heroPolicyEvaluated) {
+		return false;
+	}
+	return true;
 }
 
 function markArtworkSaved(shortcutAppId: number, steamAppId: string, slots: number[], needsCommunityArtwork = false,
@@ -473,8 +490,11 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		const provenanceUrl = (existingMarker?.provenance?.[slotName] as { url?: unknown } | undefined)?.url;
 		return isTrustedArtworkSourceUrl(sourceUrls[slotName] || provenanceUrl);
 	};
+	const heroProv = existingMarker?.provenance?.hero as any;
+	const existingHeroUrl = sourceUrls.hero || (heroProv?.url as string | undefined) || '';
+	const heroNeedsUpgrade = (isHero2xUrl(existingHeroUrl) || heroProv?.variant === '2x') && !(heroProv?.heroPolicyVersion >= 1);
 	const reusableSlots = new Set<number>(Array.from(retainedSlots)
-		.filter(slot => !persistedRetrySlots.has(slot) && hasReusableSource(slot)));
+		.filter(slot => !persistedRetrySlots.has(slot) && hasReusableSource(slot) && !(slot === 1 && heroNeedsUpgrade)));
 
 	// Skip if artwork was already downloaded and saved for this exact pairing
 	if (!force && artworkAlreadySaved(shortcutAppId, steamAppId)) {
@@ -541,18 +561,12 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 				label: 'Portrait Grid',
 			},
 			{
-				urls: [
-					userCommunity?.hero?.url || '',
-					preferredCommunity?.hero || '',
-					modern?.hero || '',
-					`${sharedBase}/library_hero_2x.jpg`,
-					`${sharedBase}/library_hero.jpg`,
-					`${fastlyBase}/library_hero_2x.jpg`,
-					`${fastlyBase}/library_hero.jpg`,
-					`${cfBase}/library_hero.jpg`,
-					`${cfCdnBase}/library_hero.jpg`,
-					`${cdnBase}/library_hero.jpg`,
-				],
+				urls: buildHeroCandidateUrls({
+					steamAppId,
+					modern,
+					communityHero: preferredCommunity?.hero || '',
+					userHero: userCommunity?.hero?.url || '',
+				}),
 				imageType: 1,
 				label: 'Hero',
 			},
@@ -642,15 +656,32 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			if (!item.url) continue;
 			const slotName = ARTWORK_SLOT_NAMES[item.imageType];
 			if (!slotName) continue;
-			if (item.community) {
+			if (item.imageType === 1) {
+				const isUser = explicitUserUrlSet.has(item.url);
+				const variant = classifyHeroVariant(item.url, modern, isUser);
+				const reason = determineHeroSelectionReason(variant);
+				const provider = item.community ? 'steamgriddb' : isUser ? 'user' : variant === 'legacy' ? 'steam-legacy' : 'steam';
+				communityProvenance[slotName] = {
+					url: item.url,
+					provider,
+					variant,
+					selectionReason: reason,
+					heroPolicyVersion: 1,
+				};
+				logHeroResolutionDiagnostics(steamAppId, {
+					selectedUrl: item.url,
+					variant,
+					reason,
+				}, backendLog);
+			} else if (item.community) {
 				if (communityProvenance[slotName]) continue;
-				const sourceName = item.imageType === 0 ? 'portrait' : item.imageType === 1 ? 'hero' : item.imageType === 2 ? 'logo' : 'wide';
+				const sourceName = item.imageType === 0 ? 'portrait' : item.imageType === 2 ? 'logo' : 'wide';
 				const explicit = userCommunity?.[sourceName];
 				communityProvenance[slotName] = explicit
 					? { ...explicit, provider: 'user', selection: 'user_choice' }
 					: preferredCommunity?.provenance?.[sourceName] || { url: item.url, provider: 'steamgriddb' };
 			} else {
-				const isLegacy = /\/header\.jpg(?:$|[?#])/i.test(item.url) && (item.imageType === 0 || item.imageType === 1);
+				const isLegacy = /\/header\.jpg(?:$|[?#])/i.test(item.url) && item.imageType === 0;
 				communityProvenance[slotName] = {
 					url: item.url,
 					provider: isLegacy ? 'steam-legacy' : 'steam',

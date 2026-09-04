@@ -1,6 +1,7 @@
 import type { SteamGameData } from '../../domain/types';
 import { automaticArtworkMeetsSlotQuality } from './artwork-quality';
 import { getCommunityArtwork, retiredCommunityArtworkPreferred, type CommunityArtworkAssets } from './artwork-community';
+import { buildHeroCandidateUrls } from './artwork-hero';
 import { getModernLibraryAssets, type SteamLibraryAssets } from './library-assets';
 import { isLegacyGame } from './legacy-games';
 import type { ResourceStatus } from '../shortcuts/transaction';
@@ -69,19 +70,13 @@ export async function buildSlotResolvers(
 		`${cdnBase}/library_600x900.jpg`,
 	].filter(Boolean);
 
-	// Hero (1): 1920x620 wide hero banners.
+	// Hero (1): 1920x620 wide hero banners (Base first, 2X as fallback).
 	// REJECT header.jpg from candidateUrls!
-	const heroUrls: string[] = [
-		modern?.hero || '',
-		`${sharedBase}/library_hero_2x.jpg`,
-		`${sharedBase}/library_hero.jpg`,
-		`${fastlyBase}/library_hero_2x.jpg`,
-		`${fastlyBase}/library_hero.jpg`,
-		`${cfBase}/library_hero.jpg`,
-		`${cfCdnBase}/library_hero.jpg`,
-		`${cdnBase}/library_hero.jpg`,
-		community?.hero || '',
-	].filter(Boolean);
+	const heroUrls: string[] = buildHeroCandidateUrls({
+		steamAppId,
+		modern,
+		communityHero: community?.hero || '',
+	});
 
 	// Logo (2): Transparent game logos
 	const logoUrls: string[] = [
