@@ -84,12 +84,27 @@ function fetch_published_file_previews(file_ids_csv) return social.fetch_publish
 function fetch_friend_review(steam_id64, steam_app_id) return social.fetch_friend_review(steam_id64, steam_app_id) end
 function fetch_friend_personas(steam_ids_csv) return social.fetch_friend_personas(steam_ids_csv) end
 function fetch_community_activity(steam_app_id, steam_id64) return social.fetch_community_activity(steam_app_id, steam_id64) end
-function fetch_community_content(steam_app_id, language) return community.fetch_community_content(steam_app_id, language) end
-function fetch_community_items_catalog(steam_app_id, language) return community.fetch_community_items_catalog(steam_app_id, language) end
+function fetch_community_content(steam_app_id, language)
+    local ok, res = pcall(community.fetch_community_content, steam_app_id, language)
+    return ok and res or cjson.encode({ items = {}, available = false, error = "backend_error" })
+end
+function fetch_community_items_catalog(steam_app_id, language)
+    local ok, res = pcall(community.fetch_community_items_catalog, steam_app_id, language)
+    return ok and res or cjson.encode({ error = "backend_error" })
+end
 function fetch_library_assets(request_json) return artwork.fetch_library_assets(request_json) end
-function fetch_community_artwork(request_json) return artwork.fetch_community_artwork(request_json) end
-function fetch_community_artwork_candidates(request_json) return artwork_candidates.fetch(request_json) end
-function fetch_artwork_image(request_json) return artwork_image_io.fetch_remote(request_json) end
+function fetch_community_artwork(request_json)
+    local ok, res = pcall(artwork.fetch_community_artwork, request_json)
+    return ok and res or cjson.encode({ error = "backend_error" })
+end
+function fetch_community_artwork_candidates(request_json)
+    local ok, res = pcall(artwork_candidates.fetch, request_json)
+    return ok and res or cjson.encode({ eligible = false, error = "backend_error" })
+end
+function fetch_artwork_image(request_json)
+    local ok, res = pcall(artwork_image_io.fetch_remote, request_json)
+    return ok and res or cjson.encode({ ok = false, error = "backend_error" })
+end
 function read_local_artwork_image(request_json) return artwork_image_io.read_local(request_json) end
 function validate_steamgriddb_api_key(request_json) return artwork.validate_steamgriddb_api_key(request_json) end
 function save_shortcut_icon(request_json) return artwork.save_shortcut_icon(request_json) end

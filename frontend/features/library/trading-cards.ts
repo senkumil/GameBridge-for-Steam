@@ -607,8 +607,9 @@ export async function renderOfficialTradingCards(
 
 	const officialPortrait = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${steamAppId}/library_600x900.jpg`;
 	const badgeAsset = catalog.foil_badge || catalog.badges?.find(badge => badge.foil) || catalog.badges?.[catalog.badges.length - 1];
-	const badgeSource = normalizeCommunityAssetUrl(badgeAsset?.image) || officialPortrait;
-	const badgeTitle = badgeAsset?.title || gdlText('cards_found', 'Cards found');
+	const cardFallback = catalog.cards?.[0]?.image || '';
+	const badgeSource = normalizeCommunityAssetUrl(badgeAsset?.image) || cardFallback || officialPortrait;
+	const badgeTitle = badgeAsset?.title || catalog.badges?.[0]?.title || gdlText('cards_found', 'Cards found');
 	const section = buildNativeSidebarSection(doc, layout, {
 		sectionId: 'gdl-trading-cards-section',
 		headerText: loc('AppDetails_SectionTitle_TradingCards', gdlText('trading_cards', 'Trading Cards')),
@@ -617,6 +618,9 @@ export async function renderOfficialTradingCards(
 		cloneInnerClass: false,
 	});
 	if (!section) return;
+
+	const badgeImg = section.querySelector<HTMLImageElement>('.gdl-trading-badge-image');
+	badgeImg?.addEventListener('error', () => { badgeImg.style.visibility = 'hidden'; });
 
 	const heading = section.querySelector('h2');
 	if (heading) {

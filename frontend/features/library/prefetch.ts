@@ -66,11 +66,11 @@ function phaseRank(phase: PrefetchPhase): number {
 function sortPendingTasks(): void {
 	const visible = currentVisibleAppId();
 	pendingTasks.sort((left, right) => {
-		const phaseDifference = phaseRank(left.phase) - phaseRank(right.phase);
-		if (phaseDifference !== 0) return phaseDifference;
 		const leftVisible = left.appId === visible ? 0 : 1;
 		const rightVisible = right.appId === visible ? 0 : 1;
 		if (leftVisible !== rightVisible) return leftVisible - rightVisible;
+		const phaseDifference = phaseRank(left.phase) - phaseRank(right.phase);
+		if (phaseDifference !== 0) return phaseDifference;
 		return left.order - right.order;
 	});
 }

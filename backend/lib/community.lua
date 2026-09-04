@@ -17,7 +17,7 @@ local DEBUG_LOGS = false
 local function debug_log(message)
     if DEBUG_LOGS then logger:info(message) end
 end
-local function parse_hub_cards(html, fallback_type, items)
+local function parse_hub_cards(html, fallback_type, items, safe_language)
     debug_log("parse_hub_cards: html length=" .. tostring(#html) .. " first200=" .. html:sub(1, 200))
 
     -- Try multiple delimiter patterns - the Millennium http module may return
@@ -102,7 +102,7 @@ local function parse_hub_cards(html, fallback_type, items)
             elseif ct:find("video") or ct:find("vídeo") then
                 item.type = "video"
                 item.label = "Video"
-            elseif ct:find("artwork") or ct:find("arte") then
+            elseif ct:find("artwork") or ct:find("arte") or ct:find("gráfico") or ct:find("grafico") or ct:find("material") then
                 item.type = "artwork"
                 item.label = "Artwork"
             elseif ct:find("screenshot") or ct:find("captura") then
@@ -174,12 +174,21 @@ local function parse_hub_cards(html, fallback_type, items)
             item.author_name = item.author_name:gsub("&amp;", "&"):gsub("&#39;", "'"):gsub("%s+$", "")
         end
 
-        -- Link from data-modal-content-url
-        item.link = nil
-        local window_start = (card_start > 3000) and (card_start - 3000) or 1
-        local window = html:sub(window_start, card_start)
-        for m in window:gmatch('data%-modal%-content%-url="([^"]*)"') do
-            item.link = m
+        -- Link from data-modal-content-url or publishedfileid
+        item.link = card:match('data%-modal%-content%-url="([^"]*)"')
+            or card:match('href="([^"]*sharedfiles/filedetails[^"]*)"')
+        if not item.link then
+            local window_start = (card_start > 3000) and (card_start - 3000) or 1
+            local window = html:sub(window_start, card_start)
+            for m in window:gmatch('data%-modal%-content%-url="([^"]*)"') do
+                item.link = m
+            end
+        end
+        if not item.link then
+            local file_id = card:match('data%-publishedfileid="([^"]*)"') or card:match('id="apphub_Card_(%d+)"')
+            if file_id and file_id ~= "" then
+                item.link = "https://steamcommunity.com/sharedfiles/filedetails/?id=" .. file_id
+            end
         end
         if item.link then
             item.link = item.link:gsub("&amp;", "&")
@@ -209,19 +218,17 @@ local function parse_hub_cards(html, fallback_type, items)
 end
 
 function M.fetch_community_content(steam_app_id, language)
-    local appid = tostring(steam_app_id or "")
-    local requested_language = tostring(language or "english")
-    -- Millennium can deliver named arguments in lexical order.
-    if not appid:match("^%d+$") and requested_language:match("^%d+$") then
-        appid, requested_language = requested_language, appid
+    local appid, safe_language = util.normalize_appid_and_language(steam_app_id, language)
+    if not appid:match("^%d+$") then
+        return cjson.encode({ items = {}, available = false, error = "invalid_appid" })
     end
-    local safe_language = util.safe_language(requested_language)
     local items = {}
 	local successful_pages = 0
 
     local function fetch_feed(lang, filter_lang, pages)
         local headers = {
             ["Accept"] = "text/html,*/*",
+            ["User-Agent"] = USER_AGENT,
             ["Cookie"] = "Steam_Language=" .. lang .. "; steamLanguage=" .. lang .. "; timezoneOffset=-18000,0;",
             ["Accept-Language"] = lang,
         }
@@ -237,7 +244,7 @@ function M.fetch_community_content(steam_app_id, language)
             })
             if ok and response and response.status == 200 and response.body then
                 successful_pages = successful_pages + 1
-                parse_hub_cards(response.body, nil, items)
+                parse_hub_cards(response.body, nil, items, safe_language)
                 logger:info("Trending homecontent (" .. lang .. ") page " .. page .. " parsed; total: " .. tostring(#items))
             else
                 logger:info("Trending homecontent (" .. lang .. ") page " .. page .. " fetch failed or empty")
@@ -249,6 +256,7 @@ function M.fetch_community_content(steam_app_id, language)
     local function fetch_sub(lang, filter_lang, subsection, fallback_type, label)
         local headers = {
             ["Accept"] = "text/html,*/*",
+            ["User-Agent"] = USER_AGENT,
             ["Cookie"] = "Steam_Language=" .. lang .. "; steamLanguage=" .. lang .. "; timezoneOffset=-18000,0;",
             ["Accept-Language"] = lang,
         }
@@ -263,7 +271,7 @@ function M.fetch_community_content(steam_app_id, language)
         })
         if ok and response and response.status == 200 and response.body then
             successful_pages = successful_pages + 1
-            parse_hub_cards(response.body, fallback_type, items)
+            parse_hub_cards(response.body, fallback_type, items, safe_language)
             logger:info(label .. " (" .. lang .. ") parsed; total: " .. tostring(#items))
         end
     end
@@ -366,7 +374,7 @@ local function community_items_parse_catalog(html, appid)
     -- Badge images are the exact transparent 80x80 assets uploaded through
     -- Steamworks. Keep all six definitions and expose the foil badge directly.
     for class_name, image, alt in html:gmatch(
-        '<div class="badge%-item([^"]*)"[^>]*>.-<img[^>]-src="([^"]+)"[^>]-alt="([^"]+)"') do
+        '<div class="badge%-item([^"]*)"[^>]*>%s*<img[^>]-src="([^"]+)"[^>]-alt="([^"]+)"') do
         image = html_unescape(image)
         alt = community_items_clean(alt)
         if community_items_is_steam_asset(image) and not seen_badges[image] then
@@ -420,7 +428,13 @@ local function community_items_parse_market_catalog(body, appid)
             local market_hash = tostring(description.market_hash_name or result.hash_name or "")
             local title = community_items_clean(description.name or result.name or "")
             local icon = tostring(description.icon_url_large or description.icon_url or "")
-            local is_card = item_type:find("trading card", 1, true) ~= nil
+            local is_card = item_type:find("card", 1, true) ~= nil
+                or item_type:find("cromo", 1, true) ~= nil
+                or item_type:find("karte", 1, true) ~= nil
+                or item_type:find("carte", 1, true) ~= nil
+                or item_type:find("cart", 1, true) ~= nil
+                or item_type:find("коллекцион", 1, true) ~= nil
+                or item_type ~= ""
             local is_foil = item_type:find("foil", 1, true) ~= nil
                 or market_hash:lower():find("(foil)", 1, true) ~= nil
             if is_card and not is_foil and title ~= "" and icon ~= "" then
@@ -445,12 +459,7 @@ local function community_items_parse_market_catalog(body, appid)
 end
 
 function M.fetch_community_items_catalog(steam_app_id, language)
-    local appid = tostring(steam_app_id or "")
-    local requested_language = tostring(language or "english")
-    -- Millennium can reorder named callable arguments alphabetically.
-    if not appid:match("^%d+$") and requested_language:match("^%d+$") then
-        appid, requested_language = requested_language, appid
-    end
+    local appid, safe_language = util.normalize_appid_and_language(steam_app_id, language)
     if not appid:match("^%d+$") then
         return cjson.encode({ error = "invalid_appid", cards = {}, badges = {} })
     end

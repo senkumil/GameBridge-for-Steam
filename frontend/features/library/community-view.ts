@@ -187,6 +187,7 @@ export function scheduleCommunityHydration(
 					inner.innerHTML = renderCommunityContentHtml(data, items);
 					root.dataset.gdlCommunitySignature = signature;
 				}
+				root.style.display = '';
 				setupCommunityProgressiveReveal(doc, root);
 			} else if (!inner.querySelector('.gdl-community-card')) {
 				root.style.display = 'none';

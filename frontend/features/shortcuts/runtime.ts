@@ -15,3 +15,4 @@ export { shouldAutoApplyNoLauncher, hasNoLauncherOption, mergeNoLauncherOption, 
 
 export { clearNativeAddAutoPromptSuppressions, getNativeAddAutoPromptSuppressionCount, getNativeAddAutoPromptSuppressions } from './auto-prompt-policy';
 export { performFactoryReset, type FactoryResetOptions, type FactoryResetResult } from './factory-reset';
+export { scheduleReconciliation, runDurableReconciliation } from './reconciler';

@@ -45,19 +45,53 @@ local function trusted_download_url(value)
 end
 
 function M.fetch_remote(request_json)
-    local ok_request, request = pcall(cjson.decode, tostring(request_json or ""))
+    local ok_request, request = true, nil
+    if type(request_json) == "table" then
+        if type(request_json.request_json) == "string" then
+            ok_request, request = pcall(cjson.decode, request_json.request_json)
+        elseif type(request_json.url) == "string" then
+            request = request_json
+        else
+            request = request_json
+        end
+    else
+        ok_request, request = pcall(cjson.decode, tostring(request_json or ""))
+    end
     if not ok_request or type(request) ~= "table" then return cjson.encode({ ok = false, error = "invalid_request" }) end
     local url = trusted_download_url(request.url)
     if url == "" then return cjson.encode({ ok = false, error = "untrusted_url" }) end
-    local ok_http, response = pcall(http.get, url, {
-        headers = { ["Accept"] = "image/avif,image/webp,image/png,image/jpeg,*/*", ["User-Agent"] = USER_AGENT },
-        timeout = 15,
-    })
-    if not ok_http or not response then return cjson.encode({ ok = false, error = "network_error" }) end
-    local status = tonumber(response.status) or 0
-    local body = response.body
-    if status ~= 200 then return cjson.encode({ ok = false, error = "http_error", status = status }) end
-    local mime, data = encode_image(body)
+    local current_url = url
+    local response = nil
+    for _ = 1, 4 do
+        local ok_http, res = pcall(http.get, current_url, {
+            headers = { ["Accept"] = "image/avif,image/webp,image/png,image/jpeg,*/*", ["User-Agent"] = USER_AGENT },
+            timeout = 15,
+        })
+        if not ok_http or not res then return cjson.encode({ ok = false, error = "network_error" }) end
+        local status = tonumber(res.status) or 0
+        if status == 200 then
+            response = res
+            break
+        elseif (status == 301 or status == 302 or status == 307 or status == 308) and type(res.headers) == "table" then
+            local location = tostring(res.headers.location or res.headers.Location or "")
+            if location ~= "" then
+                if location:match("^/") then
+                    local scheme_host = current_url:match("^(https?://[^/]+)")
+                    location = (scheme_host or "") .. location
+                end
+                current_url = trusted_download_url(location)
+                if current_url == "" then return cjson.encode({ ok = false, error = "untrusted_redirect" }) end
+            else
+                return cjson.encode({ ok = false, error = "http_error", status = status })
+            end
+        else
+            return cjson.encode({ ok = false, error = "http_error", status = status })
+        end
+    end
+    if not response or tonumber(response.status) ~= 200 then
+        return cjson.encode({ ok = false, error = "http_error", status = response and response.status or 0 })
+    end
+    local mime, data = encode_image(response.body)
     if not mime then return cjson.encode({ ok = false, error = "unsupported_image" }) end
     return cjson.encode({ ok = true, mime = mime, data_base64 = data })
 end

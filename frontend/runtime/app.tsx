@@ -14,7 +14,7 @@ import { clearCommunityItemCaches } from '../features/library/community-items';
 import { clearSocialRuntimeCaches, configureSocialRuntimeHost } from '../features/library/social';
 import { configureLibraryRuntimeHost, disposeLibraryRuntime, findNonSteamNotice, getCurrentInjectedAppId, getCurrentInjectedShortcutAppId, handleLibraryNavigation, refreshLibraryArtwork, resetLibraryInjection, tryInjectLibraryData } from '../features/library/runtime';
 import { DisposableRegistry } from '../core/disposables';
-import { configureShortcutRuntimeHost, disposeCustomizationArtwork, mutationMayContainProperties, startNativeAddAutoDetector, stopNativeAddAutoDetector, tryInjectCustomizationArtwork, tryInjectPropertiesField } from '../features/shortcuts/runtime';
+import { configureShortcutRuntimeHost, disposeCustomizationArtwork, mutationMayContainProperties, scheduleReconciliation, startNativeAddAutoDetector, stopNativeAddAutoDetector, tryInjectCustomizationArtwork, tryInjectPropertiesField } from '../features/shortcuts/runtime';
 import { GDL_INJECTED } from '../features/library/constants';
 import { activateBigPicture, deactivateBigPicture, getBigPictureDocument, isBigPictureActive, refreshBigPicture } from '../features/big-picture/runtime';
 import { captureNativeUiBlueprints, clearNativeUiBlueprints } from '../steam/native-dom';
@@ -428,6 +428,7 @@ export default definePlugin(() => {
 		const bigPictureDoc = getBigPictureDocument();
 		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
 		void syncMissingArtworkForMappedShortcuts();
+		scheduleReconciliation(5000);
 	}).catch((e) => {
 		console.error('[GDL] Failed to load mappings from backend:', e);
 		startPlaytimeTracker();

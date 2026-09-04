@@ -17,22 +17,19 @@ local html_unescape = util.html_unescape
 local partner_events_unavailable = {}
 local PARTNER_UNAVAILABLE_CACHE_LIMIT = 64
 function M.fetch_news(steam_app_id, language)
-    steam_app_id = tostring(steam_app_id or "")
-    local lang = tostring(language or "")
-    -- Some Millennium builds can deliver named arguments in lexical order.
-    -- Undo the swap when the numeric AppID arrives in the language position.
-    if not steam_app_id:match("^%d+$") and lang:match("^%d+$") then
-        steam_app_id, lang = lang, steam_app_id
+    local appid, safe_language = util.normalize_appid_and_language(steam_app_id, language)
+    if not appid:match("^%d+$") then
+        return cjson.encode({ error = "invalid_appid", appnews = { newsitems = {} } })
     end
-    lang = lang:gsub("[^%w_]", "")
+    local lang = safe_language:gsub("[^%w_]", "")
     local url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid="
-        .. steam_app_id
+        .. appid
         .. "&count=50&maxlength=600&feeds=steam_community_announcements&format=json"
     if lang ~= "" then url = url .. "&l=" .. lang end
     logger:info("Fetching news from: " .. url)
 
     local res, err = http.get(url, {
-        headers = { ["Accept"] = "application/json" },
+        headers = { ["Accept"] = "application/json", ["User-Agent"] = USER_AGENT },
         timeout = 15
     })
 
@@ -105,7 +102,7 @@ local function scrape_partner_events(appid, lang, max)
     -- embeds the same event data in its data-initialEvents attribute
     local url = "https://store.steampowered.com/news/app/" .. appid .. "?l=" .. lang
     local ok, res = pcall(http.get, url, {
-        headers = { ["Accept"] = "text/html,*/*" },
+        headers = { ["Accept"] = "text/html,*/*", ["User-Agent"] = USER_AGENT },
         timeout = 20
     })
     if not ok or not res or res.status ~= 200 or not res.body then
@@ -182,14 +179,11 @@ local function scrape_partner_events(appid, lang, max)
 end
 
 function M.fetch_partner_events(steam_app_id, language)
-    local appid = tostring(steam_app_id)
-    local lang = tostring(language or "english")
-    -- Some Millennium builds (seen on Linux) map named JS arguments onto Lua
-    -- positionals in a different order; detect the swap and undo it
-    if not appid:match("^%d+$") and lang:match("^%d+$") then
-        appid, lang = lang, appid
+    local appid, safe_language = util.normalize_appid_and_language(steam_app_id, language)
+    if not appid:match("^%d+$") then
+        return cjson.encode({ items = {}, available = false, error = "invalid_appid" })
     end
-    lang = lang:gsub("[^%w_]", "")
+    local lang = safe_language:gsub("[^%w_]", "")
     if lang == "" then lang = "english" end
     local items, unavailable, transient_error = scrape_partner_events(appid, lang, 50)
     return cjson.encode({

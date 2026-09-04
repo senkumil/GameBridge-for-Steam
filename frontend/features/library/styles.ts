@@ -36,8 +36,9 @@ export function ensureNativeGameInfoStyles(doc: Document): void {
 			overflow: visible !important;
 		}
 		[class*="LogoContainer"], [class*="logoContainer"] {
-			max-width: 55% !important;
-			max-height: 55% !important;
+			max-width: 60% !important;
+			max-height: 70% !important;
+			overflow: visible !important;
 			transition: max-width 0.2s ease, max-height 0.2s ease !important;
 		}
 		[class*="LogoContainer"] img, [class*="logoContainer"] img {
@@ -47,9 +48,8 @@ export function ensureNativeGameInfoStyles(doc: Document): void {
 		}
 
 		/* Responsive hero banner and background resizing matching native Steam */
-		[class*="TopCapsule"], [class*="topCapsule"],
-		[class*="HeroAndLogo"], [class*="heroAndLogo"] {
-			max-height: min(320px, 26vw, 36vh) !important;
+		[class*="TopCapsule"], [class*="topCapsule"] {
+			max-height: min(340px, 30vw, 40vh) !important;
 			transition: max-height 0.2s ease, height 0.2s ease !important;
 		}
 		[class*="TopCapsule"] [class*="ImgContainer"],
@@ -60,51 +60,45 @@ export function ensureNativeGameInfoStyles(doc: Document): void {
 		}
 
 		@media (max-width: 1200px) {
-			[class*="TopCapsule"], [class*="topCapsule"],
-			[class*="HeroAndLogo"], [class*="heroAndLogo"] {
-				max-height: min(270px, 25vw, 32vh) !important;
+			[class*="TopCapsule"], [class*="topCapsule"] {
+				max-height: min(300px, 28vw, 36vh) !important;
 			}
 		}
 
 		@media (max-width: 1000px) {
-			[class*="TopCapsule"], [class*="topCapsule"],
-			[class*="HeroAndLogo"], [class*="heroAndLogo"] {
-				max-height: min(220px, 24vw, 28vh) !important;
+			[class*="TopCapsule"], [class*="topCapsule"] {
+				max-height: min(260px, 26vw, 32vh) !important;
 			}
 		}
 
 		@media (max-width: 900px) {
 			[class*="LogoContainer"], [class*="logoContainer"] {
-				max-width: 48% !important;
-				max-height: 48% !important;
+				max-width: 52% !important;
+				max-height: 60% !important;
 			}
 			[class*="PlayBarLabel"], [class*="playBarLabel"] {
 				font-size: 10.5px !important;
 			}
-			[class*="TopCapsule"], [class*="topCapsule"],
-			[class*="HeroAndLogo"], [class*="heroAndLogo"] {
-				max-height: min(190px, 24vw, 26vh) !important;
+			[class*="TopCapsule"], [class*="topCapsule"] {
+				max-height: min(220px, 25vw, 30vh) !important;
 			}
 		}
 
 		@media (max-width: 800px) {
-			[class*="TopCapsule"], [class*="topCapsule"],
-			[class*="HeroAndLogo"], [class*="heroAndLogo"] {
-				max-height: min(170px, 24vw, 24vh) !important;
+			[class*="TopCapsule"], [class*="topCapsule"] {
+				max-height: min(200px, 25vw, 28vh) !important;
 			}
 		}
 
 		@media (max-height: 750px) {
-			[class*="TopCapsule"], [class*="topCapsule"],
-			[class*="HeroAndLogo"], [class*="heroAndLogo"] {
-				max-height: min(220px, 28vh) !important;
+			[class*="TopCapsule"], [class*="topCapsule"] {
+				max-height: min(240px, 32vh) !important;
 			}
 		}
 
 		@media (max-height: 600px) {
-			[class*="TopCapsule"], [class*="topCapsule"],
-			[class*="HeroAndLogo"], [class*="heroAndLogo"] {
-				max-height: min(160px, 24vh) !important;
+			[class*="TopCapsule"], [class*="topCapsule"] {
+				max-height: min(190px, 28vh) !important;
 			}
 		}
 	`);

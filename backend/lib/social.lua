@@ -50,8 +50,14 @@ local function strip_html(s)
 end
 
 function M.fetch_friend_review(steam_id64, steam_app_id)
-    local sid = tostring(steam_id64 or ""):match("(%d+)") or ""
-    local appid = tostring(steam_app_id or ""):match("(%d+)") or ""
+    local sid, appid = "", ""
+    if type(steam_id64) == "table" then
+        sid = tostring(steam_id64.steam_id64 or steam_id64.steamid64 or steam_id64.id or ""):match("(%d+)") or ""
+        appid = tostring(steam_id64.steam_app_id or steam_id64.appid or steam_app_id or ""):match("(%d+)") or ""
+    else
+        sid = tostring(steam_id64 or ""):match("(%d+)") or ""
+        appid = tostring(steam_app_id or ""):match("(%d+)") or ""
+    end
     -- SteamID64s are 17 digits, appids far shorter; undo swapped arguments
     -- (same Linux argument-order quirk as fetch_partner_events)
     if #sid < 15 and #appid >= 15 then
@@ -68,7 +74,7 @@ function M.fetch_friend_review(steam_id64, steam_app_id)
 
     -- l=english pins the rating summary text so voted_up detection is stable
     local ok, res = pcall(http.get, public_url .. "?l=english", {
-        headers = { ["Accept"] = "text/html,*/*" },
+        headers = { ["Accept"] = "text/html,*/*", ["User-Agent"] = USER_AGENT },
         timeout = 10
     })
     if ok and res and res.status == 200 and res.body then
@@ -98,8 +104,9 @@ local FRIEND_PERSONA_CACHE_SECONDS = 15 * 60
 local FRIEND_PERSONA_FAILURE_CACHE_SECONDS = 60
 
 function M.fetch_friend_personas(steam_ids_csv)
+    local raw_csv = type(steam_ids_csv) == "table" and (steam_ids_csv.steam_ids_csv or steam_ids_csv.ids or "") or steam_ids_csv
     local ids, seen = {}, {}
-    for id in tostring(steam_ids_csv or ""):gmatch("(%d+)") do
+    for id in tostring(raw_csv or ""):gmatch("(%d+)") do
         if not seen[id] and #ids < FRIEND_PERSONA_MAX_REQUESTS then
             seen[id] = true
             table.insert(ids, id)
@@ -115,7 +122,10 @@ function M.fetch_friend_personas(steam_ids_csv)
             table.insert(results, cached.entry)
         else
             local url = "https://steamcommunity.com/profiles/" .. sid .. "/?xml=1"
-            local ok_req, res = pcall(http.get, url, { timeout = 8 })
+            local ok_req, res = pcall(http.get, url, {
+                headers = { ["User-Agent"] = USER_AGENT },
+                timeout = 8
+            })
             local entry = { steamid = sid, name = "", avatar = "" }
             if ok_req and res and res.status == 200 and res.body then
                 local name = res.body:match("<steamID><!%[CDATA%[(.-)%]%]></steamID>")
@@ -151,8 +161,14 @@ local ACTIVITY_CACHE_LIMIT = 32
 local ACTIVITY_CACHE_SECONDS = 30
 
 function M.fetch_community_activity(steam_app_id, steam_id64)
-    local appid = tostring(steam_app_id or ""):match("(%d+)") or ""
-    local sid = tostring(steam_id64 or ""):match("(%d+)") or ""
+    local appid, sid = "", ""
+    if type(steam_app_id) == "table" then
+        appid = tostring(steam_app_id.steam_app_id or steam_app_id.appid or ""):match("(%d+)") or ""
+        sid = tostring(steam_app_id.steam_id64 or steam_app_id.steamid64 or steam_id64 or ""):match("(%d+)") or ""
+    else
+        appid = tostring(steam_app_id or ""):match("(%d+)") or ""
+        sid = tostring(steam_id64 or ""):match("(%d+)") or ""
+    end
     if appid == "" and sid == "" then return "[]" end
 
     local cache_key = appid .. "_" .. sid
@@ -222,7 +238,7 @@ function M.fetch_community_activity(steam_app_id, steam_id64)
 
     for _, target_url in ipairs(urls) do
         local ok, res = pcall(http.get, target_url, {
-            headers = { ["Accept"] = "text/html,*/*" },
+            headers = { ["Accept"] = "text/html,*/*", ["User-Agent"] = USER_AGENT },
             timeout = 8
         })
         if ok and res and res.status == 200 and res.body then

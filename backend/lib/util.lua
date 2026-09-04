@@ -98,15 +98,29 @@ M.LANGUAGE_KEY_ALIASES = {
 }
 
 function M.normalize_appid_and_language(first, second)
-    local appid = tostring(first or "")
+    if type(first) == "table" then
+        local appid = tostring(first.steam_app_id or first.appid or first.app_id or first.id or ""):match("(%d+)") or ""
+        local lang = tostring(first.language or first.lang or second or "english")
+        return appid, M.safe_language(lang)
+    end
+    local appid = tostring(first or ""):match("(%d+)") or ""
     local language = tostring(second or "english")
-    if not appid:match("^%d+$") and language:match("^%d+$") then
-        appid, language = language, appid
+    if appid == "" and language:match("^%d+$") then
+        appid, language = language:match("(%d+)") or "", appid
     end
     return appid, M.safe_language(language)
 end
 
 function M.decode_json(cjson, raw)
+    if type(raw) == "table" then
+        if type(raw.request_json) == "string" then
+            local ok, value = pcall(cjson.decode, raw.request_json)
+            if ok and type(value) == "table" then return value, nil end
+        elseif type(raw.request_json) == "table" then
+            return raw.request_json, nil
+        end
+        return raw, nil
+    end
     local ok, value = pcall(cjson.decode, tostring(raw or ""))
     if ok then return value, nil end
     return nil, tostring(value)
@@ -352,6 +366,70 @@ function M.parse_binary_vdf_object(data, position, depth)
         end
     end
     return nil, position, "unexpected_eof"
+end
+
+function M.get_active_account_id()
+    local millennium = deps.millennium
+    local fs = deps.fs
+    local logger = deps.logger
+    local steam_path = millennium.steam_path()
+    local vdf_path = fs.join(steam_path, "config", "loginusers.vdf")
+    local function account_id_from_steamid64(id64)
+        if not tostring(id64 or ""):match("^%d+$") then return nil end
+        local result = 0
+        for i = 1, #id64 do
+            result = (result * 10 + tonumber(id64:sub(i, i))) % 4294967296
+        end
+        return tostring(math.floor(result))
+    end
+    local users = {}
+    if fs.exists(vdf_path) then
+        local f = io.open(vdf_path, "r")
+        if f then
+            local content = f:read("*a")
+            f:close()
+            local current = nil
+            for line in content:gmatch("[^\r\n]+") do
+                local id64 = line:match('^%s*"(%d%d%d%d%d%d%d%d%d+)"%s*$')
+                if id64 then
+                    current = { id64 = id64, most_recent = false, auto_login = false, timestamp = 0 }
+                    table.insert(users, current)
+                elseif current then
+                    if line:match('"MostRecent"%s*"1"') then current.most_recent = true end
+                    if line:match('"AutoLogin"%s*"1"') then current.auto_login = true end
+                    local timestamp = line:match('"Timestamp"%s*"(%d+)"')
+                    if timestamp then current.timestamp = tonumber(timestamp) or 0 end
+                end
+            end
+        end
+    end
+    table.sort(users, function(a, b)
+        if a.most_recent ~= b.most_recent then return a.most_recent end
+        if a.auto_login ~= b.auto_login then return a.auto_login end
+        return (a.timestamp or 0) > (b.timestamp or 0)
+    end)
+    local userdata_root = fs.join(steam_path, "userdata")
+    for _, user in ipairs(users) do
+        local account_id = account_id_from_steamid64(user.id64)
+        if account_id and fs.exists(fs.join(userdata_root, account_id)) then
+            return account_id
+        end
+    end
+    local best_id, best_time = nil, -1
+    local entries = fs.exists(userdata_root) and fs.list(userdata_root) or nil
+    if entries then
+        for _, entry in ipairs(entries) do
+            if entry.is_directory then
+                local account_id = tostring(entry.name or entry.path or ""):match("(%d+)[\\/]?$")
+                local modified = tonumber(fs.last_write_time(entry.path) or 0) or 0
+                if account_id and modified >= best_time then
+                    best_id = account_id
+                    best_time = modified
+                end
+            end
+        end
+    end
+    return best_id
 end
 
 return M

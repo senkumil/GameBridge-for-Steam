@@ -11,78 +11,9 @@ local icon_files = deps.artwork_icon
 local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
     local M = {}
 local function get_active_account_id()
-    local steam_path = millennium.steam_path()
-    local vdf_path = fs.join(steam_path, "config", "loginusers.vdf")
-    local function account_id_from_steamid64(id64)
-        if not tostring(id64 or ""):match("^%d+$") then return nil end
-        -- Lua doubles lack precision for 17-digit integers, so calculate
-        -- SteamID64 modulo 2^32 digit by digit.
-        local result = 0
-        for i = 1, #id64 do
-            result = (result * 10 + tonumber(id64:sub(i, i))) % 4294967296
-        end
-        return tostring(math.floor(result))
+    if util and util.get_active_account_id then
+        return util.get_active_account_id()
     end
-    local users = {}
-    if fs.exists(vdf_path) then
-        local f = io.open(vdf_path, "r")
-        if f then
-            local content = f:read("*a")
-            f:close()
-            local current = nil
-            for line in content:gmatch("[^\r\n]+") do
-                local id64 = line:match('^%s*"(%d%d%d%d%d%d%d%d%d+)"%s*$')
-                if id64 then
-                    current = { id64 = id64, most_recent = false, auto_login = false, timestamp = 0 }
-                    table.insert(users, current)
-                elseif current then
-                    if line:match('"MostRecent"%s*"1"') then current.most_recent = true end
-                    if line:match('"AutoLogin"%s*"1"') then current.auto_login = true end
-                    local timestamp = line:match('"Timestamp"%s*"(%d+)"')
-                    if timestamp then current.timestamp = tonumber(timestamp) or 0 end
-                end
-            end
-        end
-    else
-        logger:warn("loginusers.vdf not found at " .. vdf_path)
-    end
-    -- Current Steam builds may omit MostRecent entirely. Prefer it when
-    -- present, then AutoLogin, then the newest login timestamp.
-    table.sort(users, function(a, b)
-        if a.most_recent ~= b.most_recent then return a.most_recent end
-        if a.auto_login ~= b.auto_login then return a.auto_login end
-        return (a.timestamp or 0) > (b.timestamp or 0)
-    end)
-    local userdata_root = fs.join(steam_path, "userdata")
-    for _, user in ipairs(users) do
-        local account_id = account_id_from_steamid64(user.id64)
-        if account_id and fs.exists(fs.join(userdata_root, account_id)) then
-            logger:info("Active Steam account ID: " .. account_id .. " (from " .. user.id64 .. ")")
-            return account_id
-        end
-    end
-    -- Last-resort fallback for portable/trimmed Steam installs: choose the
-    -- most recently modified numeric userdata directory.
-    local best_id = nil
-    local best_time = -1
-    local entries = fs.exists(userdata_root) and fs.list(userdata_root) or nil
-    if entries then
-        for _, entry in ipairs(entries) do
-            if entry.is_directory then
-                local account_id = tostring(entry.name or entry.path or ""):match("(%d+)[\\/]?$")
-                local modified = tonumber(fs.last_write_time(entry.path) or 0) or 0
-                if account_id and modified >= best_time then
-                    best_id = account_id
-                    best_time = modified
-                end
-            end
-        end
-    end
-    if best_id then
-        logger:info("Active Steam account ID fallback: " .. best_id)
-        return best_id
-    end
-    logger:warn("Could not determine an active Steam userdata account")
     return nil
 end
 -- ── Artwork saving to Steam grid folder ────────────────────────────────
@@ -156,7 +87,7 @@ local function library_asset_url(appid, relative)
         or value:match("^https?://") or not value:match("^[%w%._%-%/]+$") then
         return ""
     end
-    return "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/"
+    return "https://shared.steamstatic.com/store_item_assets/steam/apps/"
         .. tostring(appid) .. "/" .. value
 end
 local function legacy_store_asset_url(appid, value)
@@ -264,8 +195,8 @@ local function official_install_size_bytes(depots)
 end
 
 function M.fetch_library_assets(request_json)
-    local ok_request, request = pcall(cjson.decode, tostring(request_json or ""))
-    if not ok_request or type(request) ~= "table" then
+    local request = util.decode_json and util.decode_json(cjson, request_json) or nil
+    if type(request) ~= "table" then
         request = { steam_app_id = request_json }
     end
     local appid = tostring(request.steam_app_id or request.appid or "")
@@ -400,8 +331,9 @@ function M.fetch_library_assets(request_json)
         category_ids = category_ids,
         release_date = release_date,
         library_metadata_algorithm = 1,
-        historical_metadata_algorithm = 1,
-        logo_position = type(assets.library_logo) == "table" and assets.library_logo.logo_position or nil,
+        logo_position = (type(assets) == "table" and type(assets.logo_position) == "table" and assets.logo_position)
+            or (type(common.library_assets) == "table" and type(common.library_assets.logo_position) == "table" and common.library_assets.logo_position)
+            or nil,
         install_size = official_install_size_bytes(type(body.data[appid]) == "table" and body.data[appid].depots or nil),
         install_size_algorithm = 3,
     }
@@ -577,11 +509,17 @@ end
 local STEAMGRIDDB_CURATED_RANKS = {
     ["221430"] = {
         portrait_rank = 2,
+        portrait_id = 152317,
         hero_id = 38076,
         logo_id = 119351,
         wide_rank = 1,
     },
-    ["237110"] = { portrait_id = 46421 },
+    ["237110"] = {
+        portrait_id = 46421,
+        hero_id = 12459,
+        logo_id = 9592,
+        wide_id = 177942,
+    },
 }
 
 function M.fetch_community_artwork(request_json)
@@ -674,18 +612,51 @@ function M.fetch_community_artwork(request_json)
 end
 
 function M.save_shortcut_artwork(request_json)
-    local ok_request, request = pcall(cjson.decode, tostring(request_json or ""))
-    if not ok_request or type(request) ~= "table" then return cjson.encode({ ok = false, error = "invalid_request" }) end
-    local shortcut_app_id = tostring(request.shortcut_app_id or "")
+    local request = util.decode_json(cjson, request_json)
+    if not request or type(request) ~= "table" then return cjson.encode({ ok = false, error = "invalid_request" }) end
+    local shortcut_app_id = tostring(request.shortcut_app_id or request.target_app_id or ""):match("(%d+)") or ""
     local image_type = tonumber(request.image_type)
     local ext = tostring(request.extension or "png"):lower()
     if ext == "jpeg" then ext = "jpg" end
-    if not shortcut_app_id:match("^%d+$") or not image_type or image_type < 0 or image_type > 3
-        or (ext ~= "png" and ext ~= "jpg") then
+    if shortcut_app_id == "" or not image_type or image_type < 0 or image_type > 3 then
         return cjson.encode({ ok = false, error = "invalid_request" })
     end
-    local body = icon_files.decode_base64(request.data_base64 or request.image_base64 or "")
-    if not icon_files.validate(body, ext) then return cjson.encode({ ok = false, error = "invalid_image" }) end
+
+    local body = nil
+    local url = tostring(request.url or "")
+    if url ~= "" and url:match("^https?://") then
+        local ok_http, res = pcall(http.get, url, {
+            headers = {
+                ["Accept"] = "image/png,image/jpeg,image/webp,*/*",
+                ["User-Agent"] = USER_AGENT,
+            },
+            timeout = 20,
+        })
+        if ok_http and res and res.status == 200 and res.body and #res.body > 100 then
+            body = res.body
+        else
+            logger:warn("Backend artwork download failed for " .. url .. " status=" .. tostring(res and res.status or "error"))
+        end
+    end
+
+    if not body then
+        local raw_data = request.data_base64 or request.image_base64 or request.base64 or ""
+        if raw_data ~= "" then
+            body = icon_files.decode_base64(raw_data)
+        end
+    end
+
+    if not body or #body <= 100 then
+        return cjson.encode({ ok = false, error = "empty_or_failed_image" })
+    end
+
+    -- Automatically detect true extension from magic bytes
+    if body:byte(1) == 137 and body:sub(2, 4) == "PNG" then
+        ext = "png"
+    elseif body:byte(1) == 255 and body:byte(2) == 216 then
+        ext = "jpg"
+    end
+
     local account_id = get_active_account_id()
     if not account_id then return cjson.encode({ ok = false, error = "active_user_not_found" }) end
     local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
@@ -703,7 +674,7 @@ function M.save_shortcut_artwork(request_json)
     if fs.exists(target) then os.remove(target) end
     local moved = os.rename(temp, target)
     if not moved then os.remove(temp); return cjson.encode({ ok = false, error = "commit_failed" }) end
-    for _, old_ext in ipairs({ "png", "jpg", "jpeg" }) do
+    for _, old_ext in ipairs({ "png", "jpg", "jpeg", "webp" }) do
         local old = fs.join(grid_dir, shortcut_app_id .. suffix .. "." .. old_ext)
         if old ~= target and fs.exists(old) then os.remove(old) end
     end
@@ -712,15 +683,15 @@ function M.save_shortcut_artwork(request_json)
 end
 
 function M.save_shortcut_icon(request_json)
-    local ok_request, request = pcall(cjson.decode, tostring(request_json or ""))
-    if not ok_request or type(request) ~= "table" then
+    local request = util.decode_json(cjson, request_json)
+    if not request or type(request) ~= "table" then
         return cjson.encode({ error = "invalid_request" })
     end
 
-    local shortcut_app_id = tostring(request.shortcut_app_id or "")
-    local steam_app_id = tostring(request.steam_app_id or "")
+    local shortcut_app_id = tostring(request.shortcut_app_id or ""):match("(%d+)") or ""
+    local steam_app_id = tostring(request.steam_app_id or ""):match("(%d+)") or ""
     local language = tostring(request.language or "english")
-    if not shortcut_app_id:match("^%d+$") or not steam_app_id:match("^%d+$") then
+    if shortcut_app_id == "" or steam_app_id == "" then
         return cjson.encode({ error = "invalid_appid" })
     end
 	local icon_epoch = icon_files.begin(shortcut_app_id)
@@ -736,6 +707,27 @@ function M.save_shortcut_icon(request_json)
     if not fs.exists(grid_dir) then fs.create_directories(grid_dir) end
     if not fs.exists(grid_dir) then
         return cjson.encode({ error = "grid_directory_failed" })
+    end
+
+    local icon_url = tostring(request.url or request.icon_url or "")
+    if icon_url ~= "" and icon_url:match("^https?://") then
+        local ok_http, res = pcall(http.get, icon_url, {
+            headers = { ["Accept"] = "image/png,image/jpeg,image/x-icon,*/*", ["User-Agent"] = USER_AGENT },
+            timeout = 15,
+        })
+        if ok_http and res and res.status == 200 and res.body and #res.body > 100 then
+            local ext = tostring(request.extension or "png"):lower()
+            if res.body:byte(1) == 137 and res.body:sub(2, 4) == "PNG" then ext = "png"
+            elseif res.body:byte(1) == 255 and res.body:byte(2) == 216 then ext = "jpg"
+            end
+            if icon_write_is_current() then
+                local filepath, write_error = icon_files.write(grid_dir, shortcut_app_id, ext, res.body)
+                if filepath then
+                    logger:info("Official shortcut icon saved from URL: " .. filepath)
+                    return cjson.encode({ saved = true, path = filepath, extension = ext, source = icon_url })
+                end
+            end
+        end
     end
 
     local icon_base64 = tostring(request.icon_base64 or request.data_base64 or "")

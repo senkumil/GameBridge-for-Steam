@@ -8,19 +8,27 @@ for index = 1, #chars do lookup[chars:sub(index, index)] = index - 1 end
 function M.encode_base64(data)
     if type(data) ~= "string" or data == "" then return "" end
     local output = {}
-    for index = 1, #data, 3 do
-        local a = data:byte(index) or 0
-        local b = data:byte(index + 1)
-        local c = data:byte(index + 2)
-        local value = a * 65536 + (b or 0) * 256 + (c or 0)
-        local i1 = math.floor(value / 262144) % 64
-        local i2 = math.floor(value / 4096) % 64
-        local i3 = math.floor(value / 64) % 64
-        local i4 = value % 64
-        output[#output + 1] = chars:sub(i1 + 1, i1 + 1)
-        output[#output + 1] = chars:sub(i2 + 1, i2 + 1)
-        output[#output + 1] = b and chars:sub(i3 + 1, i3 + 1) or "="
-        output[#output + 1] = c and chars:sub(i4 + 1, i4 + 1) or "="
+    local len = #data
+    local chunk_size = 3072
+    for chunk_start = 1, len, chunk_size do
+        local chunk_end = math.min(chunk_start + chunk_size - 1, len)
+        local chunk_out = {}
+        local k = 1
+        for index = chunk_start, chunk_end, 3 do
+            local a = data:byte(index) or 0
+            local b = data:byte(index + 1)
+            local c = data:byte(index + 2)
+            local value = a * 65536 + (b or 0) * 256 + (c or 0)
+            local i1 = math.floor(value / 262144) % 64
+            local i2 = math.floor(value / 4096) % 64
+            local i3 = math.floor(value / 64) % 64
+            local i4 = value % 64
+            chunk_out[k] = chars:sub(i1 + 1, i1 + 1) .. chars:sub(i2 + 1, i2 + 1)
+                .. (b and chars:sub(i3 + 1, i3 + 1) or "=")
+                .. (c and chars:sub(i4 + 1, i4 + 1) or "=")
+            k = k + 1
+        end
+        output[#output + 1] = table.concat(chunk_out)
     end
     return table.concat(output)
 end
@@ -29,21 +37,31 @@ function M.decode_base64(data)
     data = tostring(data or ""):gsub("%s", "")
     if data == "" or #data % 4 ~= 0 or data:find("[^A-Za-z0-9%+/%=]") then return nil end
     local output = {}
-    for index = 1, #data, 4 do
-        local c1, c2 = data:sub(index, index), data:sub(index + 1, index + 1)
-        local c3, c4 = data:sub(index + 2, index + 2), data:sub(index + 3, index + 3)
-        local a, b = lookup[c1], lookup[c2]
-        local c, d = c3 == "=" and 0 or lookup[c3], c4 == "=" and 0 or lookup[c4]
-        if not a or not b or c == nil or d == nil then return nil end
-        if (c3 == "=" and c4 ~= "=") or ((c3 == "=" or c4 == "=") and index + 3 ~= #data) then return nil end
-        local value = a * 262144 + b * 4096 + c * 64 + d
-        local first = math.floor(value / 65536) % 256
-        if c3 == "=" then output[#output + 1] = string.char(first)
-        else
-            local second = math.floor(value / 256) % 256
-            output[#output + 1] = c4 == "=" and string.char(first, second)
-                or string.char(first, second, value % 256)
+    local len = #data
+    local chunk_size = 4096
+    for chunk_start = 1, len, chunk_size do
+        local chunk_end = math.min(chunk_start + chunk_size - 1, len)
+        local chunk_out = {}
+        local k = 1
+        for index = chunk_start, chunk_end, 4 do
+            local c1, c2 = data:sub(index, index), data:sub(index + 1, index + 1)
+            local c3, c4 = data:sub(index + 2, index + 2), data:sub(index + 3, index + 3)
+            local a, b = lookup[c1], lookup[c2]
+            local c, d = c3 == "=" and 0 or lookup[c3], c4 == "=" and 0 or lookup[c4]
+            if not a or not b or c == nil or d == nil then return nil end
+            if (c3 == "=" and c4 ~= "=") or ((c3 == "=" or c4 == "=") and index + 3 ~= len) then return nil end
+            local value = a * 262144 + b * 4096 + c * 64 + d
+            local first = math.floor(value / 65536) % 256
+            if c3 == "=" then
+                chunk_out[k] = string.char(first)
+            else
+                local second = math.floor(value / 256) % 256
+                chunk_out[k] = c4 == "=" and string.char(first, second)
+                    or string.char(first, second, value % 256)
+            end
+            k = k + 1
         end
+        output[#output + 1] = table.concat(chunk_out)
     end
     return table.concat(output)
 end

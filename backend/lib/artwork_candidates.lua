@@ -7,9 +7,12 @@ local M = {}
 local CURATED = {
     ["221430"] = {
         title = "Pro Evolution Soccer 2013",
-        portrait_rank = 2, hero_id = 38076, logo_id = 119351, wide_rank = 1,
+        portrait_rank = 2, portrait_id = 152317, hero_id = 38076, logo_id = 119351, wide_rank = 1,
     },
-    ["237110"] = { title = "Mortal Kombat Komplete Edition", portrait_id = 46421 },
+    ["237110"] = {
+        title = "Mortal Kombat Komplete Edition",
+        portrait_id = 46421, hero_id = 12459, logo_id = 9592, wide_id = 177942,
+    },
 }
 local retired_cache, retired_checked_at = {}, {}
 local RETIRED_PROFILE_CACHE_SECONDS = 30 * 60
@@ -74,9 +77,11 @@ local function candidates(body, slot)
         local url = type(item) == "table" and trusted_image_url(item.url) or ""
         local width, height = tonumber(item.width), tonumber(item.height)
         local spec = QUALITY[slot]
-        local ratio = width and height and height > 0 and width / height or nil
-        local quality_ok = not spec or (width and height and width >= spec.min_width and height >= spec.min_height
-            and ratio >= spec.min_ratio and ratio <= spec.max_ratio)
+        local quality_ok = not spec or (width and height
+            and (not spec.min_width or width >= spec.min_width)
+            and (not spec.min_height or height >= spec.min_height)
+            and (not spec.min_ratio or (ratio and ratio >= spec.min_ratio))
+            and (not spec.max_ratio or (ratio and ratio <= spec.max_ratio)))
         if url ~= "" and safe(item) and quality_ok then
             local thumb = trusted_image_url(item.thumb or item.thumbnail)
             table.insert(result, {
@@ -132,58 +137,61 @@ local function default_id(list, wanted_id, wanted_rank)
 end
 
 function M.fetch(request_json)
-    local parsed, input = pcall(cjson.decode, tostring(request_json or ""))
-    if not parsed or type(input) ~= "table" then return cjson.encode({ error = "invalid_request" }) end
-    local appid = tostring(input.steam_app_id or input.appid or "")
-    if not appid:match("^%d+$") then return cjson.encode({ error = "invalid_appid" }) end
-    -- The automatic artwork workflow is deliberately retired-only. The
-    -- Properties picker is an explicit user action, however, and may offer
-    -- SteamGridDB alternatives for any real Steam AppID.
-    local profile = input.include_all == true
-        and (CURATED[appid] or { title = "Steam AppID " .. appid })
-        or retired_profile(appid)
-    if not profile then return cjson.encode({ eligible = false }) end
-    if input.eligibility_only == true then return cjson.encode({ eligible = true, title = profile.title }) end
-    local api_keys, seen_keys = {}, {}
-    local function add_api_key(value)
-        local key = tostring(value or ""):match("^%s*(.-)%s*$") or ""
-        if #key >= 16 and #key <= 160 and not seen_keys[key] then
-            seen_keys[key] = true
-            api_keys[#api_keys + 1] = key
+    local ok_fetch, res = pcall(function()
+        local parsed, input = pcall(cjson.decode, tostring(request_json or ""))
+        if not parsed or type(input) ~= "table" then return cjson.encode({ error = "invalid_request" }) end
+        local appid = tostring(input.steam_app_id or input.appid or "")
+        if not appid:match("^%d+$") then return cjson.encode({ error = "invalid_appid" }) end
+        local profile = input.include_all == true
+            and (CURATED[appid] or { title = "Steam AppID " .. appid })
+            or retired_profile(appid)
+        if not profile then return cjson.encode({ eligible = false }) end
+        if input.eligibility_only == true then return cjson.encode({ eligible = true, title = profile.title }) end
+        local api_keys, seen_keys = {}, {}
+        local function add_api_key(value)
+            local key = tostring(value or ""):match("^%s*(.-)%s*$") or ""
+            if #key >= 16 and #key <= 160 and not seen_keys[key] then
+                seen_keys[key] = true
+                api_keys[#api_keys + 1] = key
+            end
         end
+        add_api_key(input.api_key)
+        if type(input.api_keys) == "table" then
+            for _, value in ipairs(input.api_keys) do add_api_key(value) end
+        end
+        if #api_keys == 0 then
+            return cjson.encode({ eligible = true, title = profile.title, error = "api_key_missing" })
+        end
+        local api_key, game_id = nil, nil
+        for _, candidate_key in ipairs(api_keys) do
+            local game = request("games/steam/" .. appid, candidate_key)
+            game_id = type(game) == "table" and type(game.data) == "table" and tonumber(game.data.id) or nil
+            if game_id then api_key = candidate_key; break end
+        end
+        if not game_id then return cjson.encode({ eligible = true, title = profile.title, error = "game_not_found" }) end
+        local id = tostring(game_id)
+        local portrait = candidates(request("grids/game/" .. id .. "?dimensions=600x900,342x482,660x930", api_key), "portrait")
+        if #portrait == 0 then portrait = candidates(request("grids/game/" .. id, api_key), "portrait") end
+        local hero = candidates(request("heroes/game/" .. id, api_key), "hero")
+        local logo = candidates(request("logos/game/" .. id, api_key), "logo")
+        local wide = candidates(request("grids/game/" .. id .. "?dimensions=920x430", api_key), "wide")
+        local icons = candidates(request("icons/game/" .. id, api_key), "icon")
+        return cjson.encode({
+            eligible = true, title = profile.title, source = "steamgriddb",
+            defaults = {
+                portrait = default_id(portrait, profile.portrait_id, profile.portrait_rank),
+                hero = default_id(hero, profile.hero_id, profile.hero_rank),
+                logo = default_id(logo, profile.logo_id, profile.logo_rank),
+                wide = default_id(wide, profile.wide_id, profile.wide_rank),
+                icon = default_id(icons, profile.icon_id, profile.icon_rank),
+            },
+            slots = { portrait = portrait, hero = hero, logo = logo, wide = wide, icon = icons },
+        })
+    end)
+    if not ok_fetch then
+        return cjson.encode({ eligible = false, error = "fetch_failed" })
     end
-    add_api_key(input.api_key)
-    if type(input.api_keys) == "table" then
-        for _, value in ipairs(input.api_keys) do add_api_key(value) end
-    end
-    if #api_keys == 0 then
-        return cjson.encode({ eligible = true, title = profile.title, error = "api_key_missing" })
-    end
-    local api_key, game_id = nil, nil
-    for _, candidate_key in ipairs(api_keys) do
-        local game = request("games/steam/" .. appid, candidate_key)
-        game_id = type(game) == "table" and type(game.data) == "table" and tonumber(game.data.id) or nil
-        if game_id then api_key = candidate_key; break end
-    end
-    if not game_id then return cjson.encode({ eligible = true, title = profile.title, error = "game_not_found" }) end
-    local id = tostring(game_id)
-    local portrait = candidates(request("grids/game/" .. id .. "?dimensions=600x900,342x482,660x930", api_key), "portrait")
-    if #portrait == 0 then portrait = candidates(request("grids/game/" .. id, api_key), "portrait") end
-    local hero = candidates(request("heroes/game/" .. id, api_key), "hero")
-    local logo = candidates(request("logos/game/" .. id, api_key), "logo")
-    local wide = candidates(request("grids/game/" .. id .. "?dimensions=920x430", api_key), "wide")
-    local icons = candidates(request("icons/game/" .. id, api_key), "icon")
-    return cjson.encode({
-        eligible = true, title = profile.title, source = "steamgriddb",
-        defaults = {
-            portrait = default_id(portrait, profile.portrait_id, profile.portrait_rank),
-            hero = default_id(hero, profile.hero_id, profile.hero_rank),
-            logo = default_id(logo, profile.logo_id, profile.logo_rank),
-            wide = default_id(wide, profile.wide_id, profile.wide_rank),
-            icon = default_id(icons, profile.icon_id, profile.icon_rank),
-        },
-        slots = { portrait = portrait, hero = hero, logo = logo, wide = wide, icon = icons },
-    })
+    return res
 end
 
 return M
