@@ -30,9 +30,18 @@ export async function imageUrlToBase64(url: string): Promise<string | null> {
 		const dataUrl = await blobToDataUrl(direct.blob);
 		if (dataUrl) return dataUrl;
 	}
-	// Steam's CEF may reject otherwise valid image hosts because of CORS. Use
-	// the plugin backend as a strictly allow-listed binary bridge instead of a
-	// public third-party image proxy.
+	if (direct.status >= 400 && direct.status < 500) return null;
+	if (!url.includes('steamstatic.com') && !url.includes('steampowered.com')) {
+		try {
+			const proxied = 'https://wsrv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//, '')) + '&output=png';
+			const fallback = await fetchWithTimeout(proxied, 8000);
+			if (fallback.ok && fallback.blob) {
+				const dataUrl = await blobToDataUrl(fallback.blob);
+				if (dataUrl) return dataUrl;
+			}
+		} catch {}
+	}
+	// Steam CEF may reject external hosts due to CORS. Use backend as secondary fallback.
 	try {
 		const raw = await fetchArtworkImageBackend({ request_json: JSON.stringify({ url }) });
 		let value: any = raw;

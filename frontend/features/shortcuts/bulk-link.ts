@@ -286,10 +286,10 @@ export async function linkAllShortcutsExperimental(
 					const iconPromise = applyOfficialShortcutIcon(target.sid, target.steamAppId, false)
 						.catch(error => backendLog(`[NGL][Bulk] Icon failed for ${target.sid}: ${error}`));
 
-					// Bounded timeout per game (max 10s) so slow downloads never block the worker pool
+					// Bounded timeout per game (max 20s) so slow downloads never block the worker pool
 					await Promise.race([
 						Promise.allSettled([artPromise, iconPromise]),
-						new Promise(resolve => setTimeout(resolve, 10_000)),
+						new Promise(resolve => setTimeout(resolve, 20_000)),
 					]);
 
 					artDone += 1;

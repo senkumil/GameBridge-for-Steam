@@ -36,6 +36,7 @@ export const clearArtworkExceptIconBackend = callable<[{ shortcut_app_id: string
 export const clearAllLinkedArtworksBackend = callable<[], string>('clear_all_linked_artworks');
 
 export const detectGameCandidatesBackend = callable<[{ request_json: string }], string>('detect_game_candidates');
+export const detectGameCandidatesLocalBackend = callable<[{ request_json: string }], string>('detect_game_candidates_local');
 
 export const getShortcutDetailsBackend = callable<[{ shortcut_app_id: string; title?: string }], string>('get_shortcut_details');
 export const listShortcutsBackend = callable<[], string>('list_shortcuts');

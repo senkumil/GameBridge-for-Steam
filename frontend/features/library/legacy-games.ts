@@ -90,6 +90,25 @@ const LEGACY_GAMES: Record<string, LegacyGameRecord> = {
 			},
 		],
 	},
+	'237110': {
+		developer: 'NetherRealm Studios, High Voltage Software',
+		publisher: 'Warner Bros. Interactive Entertainment',
+		genre: () => gdlText('genre_action', 'Action'),
+		steamRelease: '3 JUL 2013',
+		franchise: 'Mortal Kombat',
+		description: () => gdlText(
+			'legacy_mkke_description',
+			'Mortal Kombat Komplete Edition delivers the critically acclaimed game, all previously released downloadable content (DLC), and iconic guest characters.',
+		),
+		metacritic: 81,
+		controllerSupport: 'full',
+		features: [
+			{ key: 'legacy:single-player', kind: 'single-player', categoryId: 2 },
+			{ key: 'legacy:multiplayer', kind: 'multiplayer', categoryId: 1 },
+			{ key: 'legacy:controller-full', kind: 'controller-full', categoryId: 28 },
+		],
+		externalAchievements: [],
+	},
 };
 
 export function legacyGameRecord(steamAppId: string, data?: SteamGameData): LegacyGameRecord | null {

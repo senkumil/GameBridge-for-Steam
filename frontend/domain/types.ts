@@ -116,6 +116,8 @@ export interface ShortcutDetectionCandidate {
 	ambiguous?: boolean;
 	identity_collision?: boolean;
 	remembered?: boolean;
+	validation_state?: 'pending' | 'partial' | 'confirmed';
+	phase?: 'local' | 'remote' | 'all';
 }
 
 export interface ShortcutDetectionResult {
@@ -126,6 +128,8 @@ export interface ShortcutDetectionResult {
 	source?: string;
 	error?: string;
 	transient_error?: boolean;
+	validation_state?: 'pending' | 'partial' | 'confirmed';
+	phase?: 'local' | 'remote' | 'all';
 }
 
 export interface ShortcutDetectionContext {

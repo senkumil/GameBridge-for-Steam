@@ -13,9 +13,12 @@ import { spoofArtwork, applyOfficialShortcutIcon, isLogoPositionVerified } from 
 import { shortcutRuntimeHost } from './host';
 import { isLegacyGame } from '../library/legacy-games';
 import { getGameData } from '../../core/game-data';
+import { getPreferences } from '../../core/preferences';
 
 let isReconciling = false;
 let reconciliationTimer: ReturnType<typeof setTimeout> | null = null;
+const reconcileCooldowns = new Map<number, number>();
+const RECONCILE_COOLDOWN_MS = 5 * 60 * 1000;
 
 export interface ReconciliationStatus {
 	totalChecked: number;
@@ -58,13 +61,24 @@ export async function reconcileShortcut(
 		|| createInitialManifest(shortcutAppId, steamAppId);
 
 	const logoUnverified = !isLogoPositionVerified(shortcutAppId, steamAppId);
+	const hasMissingSlots =
+		manifest.portrait.status !== 'READY' ||
+		manifest.hero.status !== 'READY' ||
+		manifest.logo.status !== 'READY' ||
+		manifest.wide.status !== 'READY' ||
+		manifest.icon.status !== 'READY';
+	const autoCommunity = getPreferences().autoCommunityArtwork;
+	const onCooldown = Date.now() - (reconcileCooldowns.get(shortcutAppId) || 0) < RECONCILE_COOLDOWN_MS;
+	const communityEligible = hasMissingSlots && autoCommunity && !onCooldown;
+
 	const needsRepair =
 		logoUnverified ||
 		slotNeedsRepair(manifest.portrait.status) ||
 		slotNeedsRepair(manifest.hero.status) ||
 		slotNeedsRepair(manifest.logo.status) ||
 		slotNeedsRepair(manifest.wide.status) ||
-		slotNeedsRepair(manifest.icon.status);
+		slotNeedsRepair(manifest.icon.status) ||
+		communityEligible;
 
 	if (!needsRepair) {
 		const hasUnavailable =
@@ -119,7 +133,12 @@ export async function reconcileShortcut(
 			manifest.wide.status === 'READY' &&
 			manifest.icon.status === 'READY';
 
-		return allReady ? 'repaired' : 'degraded';
+		if (allReady) {
+			reconcileCooldowns.delete(shortcutAppId);
+			return 'repaired';
+		}
+		reconcileCooldowns.set(shortcutAppId, Date.now());
+		return 'degraded';
 	} catch (error) {
 		backendLog(`[NGL][Reconciler] Failed healing ${shortcutAppId}: ${error}`);
 		return 'failed';

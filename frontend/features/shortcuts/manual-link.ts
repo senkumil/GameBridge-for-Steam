@@ -1,4 +1,4 @@
-import type { ShortcutDetectionContext, ShortcutDetectionResult } from '../../domain/types';
+import type { ShortcutDetectionCandidate, ShortcutDetectionContext, ShortcutDetectionResult } from '../../domain/types';
 import { backendLog } from '../../api/backend';
 import { getGameData } from '../../core/game-data';
 import { escapeHtml, normalizeTitle } from '../../core/text';
@@ -6,7 +6,7 @@ import { gdlText } from '../../steam/localization';
 import { findActiveShortcutAppId, SHORTCUT_THRESHOLD, shortcutPathBasename } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForShortcut, getAllShortcutRecords, shortcutAlreadyLinked } from './registry';
-import { buildShortcutDetectionContext, detectShortcutCandidates } from './detection';
+import { buildShortcutDetectionContext, detectShortcutCandidatesLocal, enrichShortcutCandidatesRemote, mergeCandidateLists } from './detection';
 import { cancelPendingLinkJobs, enqueueLinkJob, getPendingLinkJob } from './link-job-queue';
 import { isShortcutIdentityMutationInProgress, linkShortcutToSteam, shouldAutoApplyNoLauncher } from './linking';
 import { isShortcutDismissed, undismissShortcut } from './dismissed';
@@ -58,6 +58,10 @@ export function showShortcutManualLinkModal(
 	const targetDoc = (doc && doc.body) ? doc : (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' && document.body ? document : null));
 	if (!targetDoc || !targetDoc.body) return;
 	const existingModal = targetDoc.getElementById('gdl-manual-link-modal');
+	if (existingModal && (existingModal as any)._updateCandidates && (existingModal as any)._shortcutAppId === context.shortcutAppId) {
+		(existingModal as any)._updateCandidates(detection.candidates || [], !options.loading);
+		return;
+	}
 	if (existingModal) {
 		existingModal.remove();
 	}
@@ -65,8 +69,8 @@ export function showShortcutManualLinkModal(
 	const source: ShortcutLinkReviewSource = options.source || 'manual';
 	const loading = options.loading === true;
 	const automaticNativeAddReview = source === 'native-add-auto';
-	const candidates = (detection.candidates || []).slice(0, 10);
-	const hasCandidates = candidates.length > 0;
+	let currentCandidates = (detection.candidates || []).slice(0, 10);
+	const hasCandidates = currentCandidates.length > 0;
 	const dialogTitle = automaticNativeAddReview
 		? gdlText('auto_link_title', 'Steam game detected')
 		: gdlText('link_game', 'Link game');
@@ -85,15 +89,16 @@ export function showShortcutManualLinkModal(
 
 	const overlay = targetDoc.createElement('div');
 	overlay.id = 'gdl-manual-link-modal';
+	(overlay as any)._shortcutAppId = context.shortcutAppId;
 	overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100vw;height:100vh;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.72);font-family:Arial,Helvetica,sans-serif;color:#dcdedf;pointer-events:auto;';
 	overlay.innerHTML = `
 		<div role="dialog" aria-modal="true" style="width:min(620px,calc(100vw - 40px));overflow:hidden;border-radius:6px;background:linear-gradient(145deg,#1b2531,#121922);border:1px solid rgba(102,192,244,.30);box-shadow:0 24px 80px rgba(0,0,0,.78);">
 			<div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;background:linear-gradient(90deg,rgba(39,65,84,.95),rgba(24,31,41,.96));border-bottom:1px solid rgba(255,255,255,.09);">
-				<div><div style="font-size:20px;font-weight:600;color:#fff;">${escapeHtml(dialogTitle)}</div><div style="margin-top:4px;font-size:11px;letter-spacing:.8px;color:#66c0f4;text-transform:uppercase;">${escapeHtml(loading ? gdlText('link_searching', 'Searching for Steam matches…') : hasCandidates ? gdlText('auto_link_ready_to_review', 'Match ready for review') : gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</div></div>
+				<div><div style="font-size:20px;font-weight:600;color:#fff;">${escapeHtml(dialogTitle)}</div><div class="gdl-manual-link-dialog-subtitle" style="margin-top:4px;font-size:11px;letter-spacing:.8px;color:#66c0f4;text-transform:uppercase;">${escapeHtml(loading ? gdlText('link_searching', 'Searching for Steam matches…') : hasCandidates ? gdlText('auto_link_ready_to_review', 'Match ready for review') : gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</div></div>
 				<button class="gdl-manual-link-close" aria-label="${escapeHtml(gdlText('close', 'Close'))}" style="border:0;background:transparent;color:#8f98a0;font-size:24px;line-height:1;cursor:pointer;padding:0 3px;">×</button>
 			</div>
 			<div style="padding:20px 22px 22px;">
-				<div style="font-size:13px;line-height:1.5;color:#acb2b8;margin-bottom:17px;">${escapeHtml(dialogMessage)}</div>
+				<div class="gdl-manual-link-dialog-message" style="font-size:13px;line-height:1.5;color:#acb2b8;margin-bottom:17px;">${escapeHtml(dialogMessage)}</div>
 				<div style="display:flex;gap:16px;align-items:stretch;margin-bottom:16px;padding:12px;background:rgba(0,0,0,.16);border:1px solid rgba(255,255,255,.06);border-radius:4px;">
 					<img class="gdl-manual-link-image" alt="" style="width:194px;height:91px;object-fit:cover;border:1px solid rgba(255,255,255,.10);border-radius:2px;" />
 					<div style="display:flex;flex:1;min-width:0;flex-direction:column;justify-content:center;gap:7px;">
@@ -161,7 +166,7 @@ export function showShortcutManualLinkModal(
 		else if (image.complete) settleImage(image.naturalWidth > 0);
 	};
 
-	for (const candidate of candidates) {
+	for (const candidate of currentCandidates) {
 		const option = targetDoc.createElement('option');
 		option.value = candidate.appid;
 		const confBadge = candidate.confidence === 'exact' || candidate.confidence === 'high' ? ' [HIGH]' : (candidate.confidence === 'medium' ? ' [MEDIUM]' : ' [LOW]');
@@ -169,12 +174,12 @@ export function showShortcutManualLinkModal(
 		option.textContent = `${candidate.name} — AppID ${candidate.appid} (${Math.round(candidate.score)}%)${confBadge}${isCollision}`;
 		select.appendChild(option);
 	}
-	if (candidates.length) {
+	if (currentCandidates.length) {
 		// Steam CEF can restore the previous value of a dynamically recreated
 		// <select>. Always start on the backend's highest-ranked candidate instead
 		// of silently preserving an AppID selected in an earlier modal.
 		select.selectedIndex = 0;
-		select.value = candidates[0].appid;
+		select.value = currentCandidates[0].appid;
 	} else {
 		const option = targetDoc.createElement('option');
 		option.value = '';
@@ -184,6 +189,9 @@ export function showShortcutManualLinkModal(
 		select.appendChild(option);
 		select.disabled = true;
 	}
+	let userHasInteracted = false;
+	let modalSubmitting = false;
+	let linkSucceeded = false;
 	let imageRequestRevision = 0;
 	let manualLookupTimer: ReturnType<typeof setTimeout> | null = null;
 	const renderCandidate = () => {
@@ -191,7 +199,7 @@ export function showShortcutManualLinkModal(
 			clearTimeout(manualLookupTimer);
 			manualLookupTimer = null;
 		}
-		const candidate = candidates.find(item => item.appid === select.value) || candidates[0];
+		const candidate = currentCandidates.find(item => item.appid === select.value) || currentCandidates[0];
 		const requestRevision = ++imageRequestRevision;
 		if (!candidate) {
 			name.textContent = context.title;
@@ -199,6 +207,10 @@ export function showShortcutManualLinkModal(
 			clearCandidateImage();
 			status.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
 			status.style.color = '#e5ad37';
+			if (!modalSubmitting && !manualAppIdInput.value.trim()) {
+				confirm.disabled = true;
+				confirm.style.opacity = '.65';
+			}
 			return;
 		}
 		name.textContent = candidate.name;
@@ -220,6 +232,10 @@ export function showShortcutManualLinkModal(
 			status.textContent = '';
 			status.style.color = '#8f98a0';
 		}
+		if (!modalSubmitting) {
+			confirm.disabled = false;
+			confirm.style.opacity = '1';
+		}
 		// Store-search thumbnails and guessed static CDN paths are not stable for
 		// every Steam game. Show the candidate image immediately, then reconcile
 		// it with the authoritative appdetails header for the selected AppID.
@@ -231,6 +247,79 @@ export function showShortcutManualLinkModal(
 			candidate.image = officialImage;
 			loadCandidateImage(officialImage);
 		}).catch(() => {});
+	};
+
+	const updateCandidatesInPlace = (newCandidates: ShortcutDetectionCandidate[], isEnriched: boolean): void => {
+		if (targetDoc.getElementById('gdl-manual-link-modal') !== overlay) return;
+		currentCandidates = (newCandidates || []).slice(0, 10);
+		const hasCands = currentCandidates.length > 0;
+
+		const subtitleEl = overlay.querySelector('.gdl-manual-link-dialog-subtitle') as HTMLElement | null;
+		if (subtitleEl) {
+			subtitleEl.textContent = isEnriched
+				? (hasCands ? gdlText('auto_link_ready_to_review', 'Match ready for review') : gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))
+				: (hasCands ? gdlText('auto_link_ready_to_review', 'Match ready for review') : gdlText('link_searching', 'Searching for Steam matches…'));
+		}
+		const dialogMsgEl = overlay.querySelector('.gdl-manual-link-dialog-message') as HTMLElement | null;
+		if (dialogMsgEl && !userHasInteracted) {
+			dialogMsgEl.textContent = !hasCands
+				? (isEnriched ? gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.') : gdlText('link_searching', 'Searching for Steam matches…'))
+				: (automaticNativeAddReview ? gdlText('auto_link_message', 'A likely Steam match was found for “{name}”. Confirm it before NativeGameLink loads the game data.', { name: context.title }) : gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.'));
+		}
+
+		const previousSelectedValue = select.value;
+		select.innerHTML = '';
+		if (hasCands) {
+			select.disabled = false;
+			if (!modalSubmitting) {
+				confirm.disabled = false;
+				confirm.style.opacity = '1';
+			}
+			for (const cand of currentCandidates) {
+				const option = targetDoc.createElement('option');
+				option.value = cand.appid;
+				const confBadge = cand.confidence === 'exact' || cand.confidence === 'high' ? ' [HIGH]' : (cand.confidence === 'medium' ? ' [MEDIUM]' : ' [LOW]');
+				const isCollision = cand.identity_collision ? ' ⚠️' : '';
+				option.textContent = `${cand.name} — AppID ${cand.appid} (${Math.round(cand.score)}%)${confBadge}${isCollision}`;
+				select.appendChild(option);
+			}
+			if (userHasInteracted && previousSelectedValue && currentCandidates.some(c => c.appid === previousSelectedValue)) {
+				select.value = previousSelectedValue;
+			} else if (!userHasInteracted) {
+				select.selectedIndex = 0;
+				select.value = currentCandidates[0].appid;
+			}
+		} else {
+			const option = targetDoc.createElement('option');
+			option.value = '';
+			option.textContent = isEnriched
+				? gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)')
+				: gdlText('link_searching', 'Searching for Steam matches…');
+			select.appendChild(option);
+			select.disabled = true;
+			if (!modalSubmitting && !/^\d+$/.test(manualAppIdInput.value.trim())) {
+				confirm.disabled = true;
+				confirm.style.opacity = '.65';
+			}
+		}
+
+		if (isEnriched) {
+			overlay.removeAttribute('data-gdl-link-loading');
+		}
+
+		renderCandidate();
+	};
+
+	(overlay as any)._updateCandidates = updateCandidatesInPlace;
+	(overlay as any)._markEnrichmentComplete = (): void => {
+		overlay.removeAttribute('data-gdl-link-loading');
+		if (currentCandidates.length === 0) {
+			const subtitleEl = overlay.querySelector('.gdl-manual-link-dialog-subtitle') as HTMLElement | null;
+			if (subtitleEl) subtitleEl.textContent = gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)');
+			const dialogMsgEl = overlay.querySelector('.gdl-manual-link-dialog-message') as HTMLElement | null;
+			if (dialogMsgEl && !userHasInteracted) dialogMsgEl.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
+			renderCandidate();
+		}
 	};
 	const renderManualAppId = () => {
 		let manualAppId = manualAppIdInput.value.trim();
@@ -250,7 +339,13 @@ export function showShortcutManualLinkModal(
 			clearCandidateImage();
 			status.textContent = gdlText('manual_appid_invalid', 'Enter a numeric Steam AppID.');
 			status.style.color = '#e5ad37';
+			confirm.disabled = true;
+			confirm.style.opacity = '.65';
 			return;
+		}
+		if (!modalSubmitting) {
+			confirm.disabled = false;
+			confirm.style.opacity = '1';
 		}
 		const requestRevision = ++imageRequestRevision;
 		name.textContent = gdlText('manual_appid_title', 'Manual Steam AppID');
@@ -291,18 +386,29 @@ export function showShortcutManualLinkModal(
 	};
 
 	select.addEventListener('change', () => {
+		userHasInteracted = true;
 		if (manualAppIdInput.value) manualAppIdInput.value = '';
 		renderCandidate();
-		const currentSelected = candidates.find(candidate => candidate.appid === select.value) || candidates[0];
+		const currentSelected = currentCandidates.find(candidate => candidate.appid === select.value) || currentCandidates[0];
 		updateLauncherBypass(currentSelected?.appid || '');
 	});
 	manualAppIdInput.addEventListener('input', () => {
+		userHasInteracted = true;
 		renderManualAppId();
 		updateLauncherBypass(manualAppIdInput.value.trim());
 		const val = manualAppIdInput.value.trim();
 		if (/^\d+$/.test(val)) {
-			confirm.disabled = false;
-			confirm.style.opacity = '1';
+			if (!modalSubmitting) {
+				confirm.disabled = false;
+				confirm.style.opacity = '1';
+			}
+		} else if (!val) {
+			const hasCandidate = Boolean(currentCandidates.find(candidate => candidate.appid === select.value) || currentCandidates[0]);
+			confirm.disabled = !hasCandidate || modalSubmitting;
+			confirm.style.opacity = (hasCandidate && !modalSubmitting) ? '1' : '.65';
+		} else {
+			confirm.disabled = true;
+			confirm.style.opacity = '.65';
 		}
 	});
 	renderCandidate();
@@ -339,10 +445,8 @@ export function showShortcutManualLinkModal(
 		updateExeSummary();
 	}
 
-	updateLauncherBypass(candidates[0]?.appid || '');
+	updateLauncherBypass(currentCandidates[0]?.appid || '');
 
-	let modalSubmitting = false;
-	let linkSucceeded = false;
 	let successfulLinkedShortcutId: number | null = null;
 	let queuedLinkWatch: ReturnType<typeof setInterval> | null = null;
 	let queuedInBackground = false;
@@ -456,7 +560,7 @@ export function showShortcutManualLinkModal(
 			status.style.color = '#ff6b6b';
 			return;
 		}
-		const selected = candidates.find(candidate => candidate.appid === select.value) || candidates[0];
+		const selected = currentCandidates.find(candidate => candidate.appid === select.value) || currentCandidates[0];
 		const steamAppId = manualAppId || selected?.appid || '';
 		if (!steamAppId) {
 			status.textContent = gdlText('enter_appid', 'Enter an AppID or store link.');
@@ -543,17 +647,14 @@ export function showShortcutManualLinkModal(
 	targetDoc.body.appendChild(overlay);
 }
 
+let globalDetectionGeneration = 0;
+
 async function inspectShortcutReview(
 	record: { id: number; title: string },
 	source: ShortcutLinkReviewSource,
 	targetDoc?: Document | null,
 ): Promise<void> {
-	// A dismissed shortcut intentionally renders the manual-link button even if
-	// an older mapping remains on disk. It must be allowed to re-open review.
 	if (source !== 'manual' && shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id)) return;
-	// Paint the real picker immediately. Detection continues in the background
-	// and replaces this same modal once candidates are ready; there is no separate
-	// loading dialog that makes the click feel delayed or disconnected.
 	const immediateDoc = (targetDoc && targetDoc.body)
 		? targetDoc
 		: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
@@ -567,15 +668,14 @@ async function inspectShortcutReview(
 		recommendedExePath: '',
 		recommendedStartDir: '',
 	};
+	const currentGeneration = ++globalDetectionGeneration;
 	const loadingShown = Boolean(immediateDoc?.body && !immediateDoc.getElementById('gdl-manual-link-modal'));
 	if (loadingShown) {
 		showShortcutManualLinkModal(immediateDoc as Document, immediateContext, { candidates: [] }, { source, loading: true });
-		immediateDoc?.getElementById('gdl-manual-link-modal')?.setAttribute('data-gdl-link-loading', '1');
+		const createdModal = immediateDoc?.getElementById('gdl-manual-link-modal');
+		createdModal?.setAttribute('data-gdl-link-loading', '1');
 	}
-	// A background queue mutation must not make an explicit click look dead.
-	// Wait briefly for the current mutation to settle, then continue even if a
-	// stale flag survived a route/cache rebuild. Automatic prompts still yield
-	// immediately while another identity operation is active.
+
 	if (shortcutMutationInProgress() && source === 'manual') {
 		let waitMs = 0;
 		while (shortcutMutationInProgress() && waitMs < 1200) {
@@ -590,6 +690,7 @@ async function inspectShortcutReview(
 	if (source !== 'manual' && shortcutDetectionInFlight.has(record.id)) return;
 	shortcutDetectionInFlight.add(record.id);
 	let modalRendered = false;
+
 	try {
 		let context: ShortcutDetectionContext | null = null;
 		for (let attempt = 0; attempt < 3; attempt++) {
@@ -623,70 +724,88 @@ async function inspectShortcutReview(
 			return;
 		}
 
-		let rawDetection: ShortcutDetectionResult | null = null;
-		try {
-			const detectionPromise = detectShortcutCandidates(context);
-			const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 5000));
-			rawDetection = await Promise.race([detectionPromise, timeoutPromise]);
-		} catch (detectionErr) {
-			backendLog(`Candidate detection error for ${record.title}: ${detectionErr}`);
-		}
-		const detection: ShortcutDetectionResult = rawDetection && typeof rawDetection === 'object'
-			? {
-				candidates: Array.isArray(rawDetection.candidates) ? rawDetection.candidates : [],
-				launcher_detected: Boolean(rawDetection.launcher_detected),
-				generic_launcher: Boolean(rawDetection.generic_launcher),
-				executable: String(rawDetection.executable || ''),
-				source: String(rawDetection.source || ''),
-				error: rawDetection.error,
-			}
-			: {
-				candidates: [],
-				launcher_detected: false,
-				generic_launcher: false,
-				executable: '',
-				source: '',
-			};
+		if (globalDetectionGeneration !== currentGeneration) return;
+		if (loadingShown && !manualLinkModalPresent(immediateDoc) && source !== 'manual') return;
 
+		// Phase A: Local zero-network discovery (<50ms)
+		const localDetection = await detectShortcutCandidatesLocal(context);
+		if (globalDetectionGeneration !== currentGeneration) return;
+		if (loadingShown && !manualLinkModalPresent(immediateDoc) && source !== 'manual') return;
+
+		let activeCandidates = (localDetection?.candidates || []).slice();
 		const existingMappedId = findMappingForShortcut(record.id, record.title, context.exePath);
 		if (existingMappedId && /^\d+$/.test(existingMappedId)) {
 			const mappedData = await getGameData(existingMappedId);
 			if (mappedData) {
-				const existingIndex = detection.candidates.findIndex(candidate => candidate.appid === existingMappedId);
+				const existingIndex = activeCandidates.findIndex(candidate => candidate.appid === existingMappedId);
 				if (existingIndex >= 0) {
-					const [item] = detection.candidates.splice(existingIndex, 1);
+					const [item] = activeCandidates.splice(existingIndex, 1);
 					item.score = 100;
-					detection.candidates.unshift(item);
+					activeCandidates.unshift(item);
 				} else {
-					detection.candidates.unshift({
+					activeCandidates.unshift({
 						appid: existingMappedId,
 						name: mappedData.name || record.title,
 						score: 100,
 						direct: true,
 						confidence: 'high',
 						image: mappedData.header_image,
+						validation_state: 'confirmed',
 					});
 				}
 			}
 		}
 
-		// A route change or an explicit close can remove the immediate modal while
-		// detection is running. Never resurrect it after that cancellation.
-		if (loadingShown && !manualLinkModalPresent(immediateDoc) && source !== 'manual') return;
 		const doc = (immediateDoc && immediateDoc.body)
 			? immediateDoc
 			: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
 		if (!doc?.body) return;
-		// The immediate picker is replaced in-place with the detected candidate
-		// data. Closing it is an explicit cancellation, so stop here.
-		if (loadingShown) {
-			const existingModal = (doc || immediateDoc)?.getElementById('gdl-manual-link-modal');
-			if (existingModal) existingModal.remove();
+
+		const currentModal = doc.getElementById('gdl-manual-link-modal');
+		if (currentModal && (currentModal as any)._updateCandidates) {
+			(currentModal as any)._updateCandidates(activeCandidates, false);
+			modalRendered = true;
+		} else {
+			showShortcutManualLinkModal(doc, context, { candidates: activeCandidates }, { source, loading: activeCandidates.length === 0 });
+			modalRendered = true;
 		}
-		if (shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id) && source !== 'manual') return;
-		backendLog(`Showing ${source} link modal for ${record.title} with ${detection.candidates.length} candidate(s)`);
-		showShortcutManualLinkModal(doc, context, detection, { source });
-		modalRendered = true;
+
+		// Phase B: Remote background enrichment
+		const enrichmentContext = context;
+		const localSnapshot = activeCandidates.slice();
+		void enrichShortcutCandidatesRemote(enrichmentContext, localSnapshot).then(remoteDetection => {
+			if (globalDetectionGeneration !== currentGeneration) return;
+			const liveDoc = (immediateDoc && immediateDoc.body)
+				? immediateDoc
+				: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
+			const liveModal = liveDoc?.getElementById('gdl-manual-link-modal');
+			if (!liveModal || !(liveModal as any)._updateCandidates) return;
+
+			if (remoteDetection && remoteDetection.candidates && remoteDetection.candidates.length > 0) {
+				let merged = mergeCandidateLists(localSnapshot, remoteDetection.candidates);
+				if (existingMappedId && /^\d+$/.test(existingMappedId)) {
+					const existingIndex = merged.findIndex(c => c.appid === existingMappedId);
+					if (existingIndex > 0) {
+						const [item] = merged.splice(existingIndex, 1);
+						item.score = 100;
+						merged.unshift(item);
+					}
+				}
+				(liveModal as any)._updateCandidates(merged, true);
+			} else {
+				(liveModal as any)._markEnrichmentComplete?.();
+			}
+		}).catch(err => {
+			backendLog(`Remote candidate enrichment error for ${record.title}: ${err}`);
+			const liveDoc = (immediateDoc && immediateDoc.body)
+				? immediateDoc
+				: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
+			const liveModal = liveDoc?.getElementById('gdl-manual-link-modal');
+			if (liveModal && (liveModal as any)._markEnrichmentComplete) {
+				(liveModal as any)._markEnrichmentComplete();
+			}
+		});
+
 	} catch (error) {
 		backendLog(`Manual shortcut review failed for ${record.title}: ${error}`);
 		if (source === 'manual' && !modalRendered) {

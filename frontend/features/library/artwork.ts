@@ -4,6 +4,7 @@ import { clearSavedCommunityArtworkSelection, getSavedCommunityArtworkSelection,
 import { imageUrlToBase64, normalizeCommunityArtworkDataUrl } from './artwork-image';
 import { automaticArtworkMeetsSlotQuality } from './artwork-quality';
 import { getCommunityArtwork, retiredCommunityArtworkPreferred, type CommunityArtworkAssets } from './artwork-community';
+import { isLegacyGame } from './legacy-games';
 import {
 	clearLibraryAssetDataCaches, getModernLibraryAssets,
 	invalidateLibraryAssetDataCaches, type SteamLibraryAssets,
@@ -130,8 +131,8 @@ function isTrustedArtworkSourceUrl(value: unknown): value is string {
 /** Increment only the reviewed title whose curated artwork changed. This
  * refreshes that shortcut without repainting artwork for every linked game. */
 function curatedArtworkProfileRevision(steamAppId: string): number {
-	if (steamAppId === '221430') return 4;
-	if (steamAppId === '237110') return 3;
+	if (steamAppId === '221430') return 5;
+	if (steamAppId === '237110') return 4;
 	return 0;
 }
 
@@ -515,16 +516,21 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 	{
 		const userCommunity = getSavedCommunityArtworkSelection(shortcutAppId, steamAppId);
 		const modernPromise = getModernLibraryAssets(steamAppId);
-		const preferredCommunityPromise = retiredCommunityArtworkPreferred(steamAppId)
-			.then(preferred => preferred ? getCommunityArtwork(steamAppId) : null);
+		const legacy = legacyPortraitOnly || isLegacyGame(steamAppId);
+		const preferredCommunityPromise = legacy
+			? getCommunityArtwork(steamAppId)
+			: retiredCommunityArtworkPreferred(steamAppId).then(preferred => preferred ? getCommunityArtwork(steamAppId) : null);
 		const modern = await Promise.race<SteamLibraryAssets | null>([
 			modernPromise,
 			new Promise<null>(resolve => setTimeout(() => resolve(null), 12000)),
 		]);
-		const preferredCommunity = await Promise.race<CommunityArtworkAssets | null>([
+		let preferredCommunity = await Promise.race<CommunityArtworkAssets | null>([
 			preferredCommunityPromise,
 			new Promise<null>(resolve => setTimeout(() => resolve(null), 12000)),
 		]);
+		if (!preferredCommunity && (!modern?.hero || legacy)) {
+			preferredCommunity = await getCommunityArtwork(steamAppId).catch((): null => null);
+		}
 		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
 		const communityUrlSet = new Set([
 			userCommunity?.portrait?.url, userCommunity?.hero?.url,
@@ -624,7 +630,9 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
 		const communitySlots: string[] = [];
 		const communityProvenance: Record<string, unknown> = {};
-		const needsCommunityArtwork = (item: typeof downloads[number]): boolean => !item.dataUrl;
+		const isLowResHeader = (url: string): boolean => /\/header\.jpg(?:$|[?#])/i.test(url);
+		const needsCommunityArtwork = (item: typeof downloads[number]): boolean =>
+			!item.dataUrl || (item.imageType === 3 && isLowResHeader(item.url) && !modern?.wide);
 		if (downloads.some(needsCommunityArtwork)) {
 			const community = preferredCommunity || await getCommunityArtwork(steamAppId);
 			if (community) {
@@ -637,16 +645,19 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 					if (!needsCommunityArtwork(item)) continue;
 					const url = communityUrlByType[item.imageType];
 					if (!url) continue;
-					item.url = url;
-					item.community = true;
-					const slotName = ARTWORK_SLOT_NAMES[item.imageType];
-					communitySlots.push(slotName);
-					const sourceName = item.imageType === 0 ? 'portrait' : item.imageType === 1 ? 'hero' : item.imageType === 2 ? 'logo' : 'wide';
-					if (community.provenance?.[sourceName]) communityProvenance[slotName] = community.provenance[sourceName];
 					const dataUrl = await imageUrlToBase64(url);
 					if (!isCurrent()) break;
 					if (dataUrl && await automaticArtworkMeetsSlotQuality(dataUrl, item.imageType)) {
+						item.url = url;
 						item.dataUrl = dataUrl;
+						item.community = true;
+						const slotName = ARTWORK_SLOT_NAMES[item.imageType];
+						communitySlots.push(slotName);
+						const sourceName = item.imageType === 0 ? 'portrait' : item.imageType === 1 ? 'hero' : item.imageType === 2 ? 'logo' : 'wide';
+						if (community.provenance?.[sourceName]) communityProvenance[slotName] = community.provenance[sourceName];
+					} else if (!item.dataUrl) {
+						item.url = url;
+						item.community = true;
 					}
 				}
 			}
@@ -729,7 +740,31 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			}
 
 			// Fallback: If CEF SetCustomArtworkForApp failed, timed out, or dataUrl was blocked by CORS,
-			// let backend download the asset and write it directly to the Steam grid folder.
+			// write base64 directly to grid files or let backend download the asset.
+			if (!slotApplied && dataUrl) {
+				try {
+					const commaIdx = dataUrl.indexOf(',');
+					const base64Data = commaIdx >= 0 ? dataUrl.substring(commaIdx + 1) : dataUrl;
+					const mime = dataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
+					const ext = mime === 'png' ? 'png' : 'jpg';
+					const raw = await saveShortcutArtworkBackend({ request_json: JSON.stringify({
+						shortcut_app_id: shortcutAppId,
+						steam_app_id: steamAppId,
+						image_type: imageType,
+						data_base64: base64Data,
+						extension: ext,
+					}) });
+					let response: any = raw;
+					for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
+					if (response?.ok === true || response?.saved === true) {
+						slotApplied = true;
+						backendLog('Artwork saved directly to grid by backend (base64): ' + label + ' for ' + shortcutAppId);
+					}
+				} catch (e) {
+					backendLog('Backend grid save error (base64) (' + label + '): ' + e);
+				}
+			}
+
 			if (!slotApplied && url) {
 				try {
 					const raw = await saveShortcutArtworkBackend({ request_json: JSON.stringify({

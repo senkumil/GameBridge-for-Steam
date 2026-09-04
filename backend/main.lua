@@ -46,6 +46,7 @@ deps.shortcut_detection_aliases = load_factory("shortcut_detection_aliases")(dep
 deps.shortcut_detection_rules = load_factory("shortcut_detection_rules")(deps)
 deps.shortcut_detection_tracking = load_factory("shortcut_detection_tracking")(deps)
 deps.shortcut_detection_pe = load_factory("shortcut_detection_pe")(deps)
+deps.shortcut_detection_local = load_factory("shortcut_detection_local")(deps)
 
 local mappings = load_factory("mappings")(deps)
 local store = load_factory("store")(deps)
@@ -55,9 +56,10 @@ deps.shortcut_registry = shortcut_registry
 local news = load_factory("news")(deps)
 local social = load_factory("social")(deps)
 local community = load_factory("community")(deps)
+local artwork_candidates = load_factory("artwork_candidates")(deps)
+deps.artwork_candidates = artwork_candidates
 local artwork = load_factory("artwork")(deps)
 local artwork_image_io = load_factory("artwork_image_io")(deps)
-local artwork_candidates = load_factory("artwork_candidates")(deps)
 deps.achievement_settings = load_factory("achievement_settings")(deps)
 deps.achievement_policy = load_factory("achievement_policy")(deps)
 deps.achievement_sources = load_factory("achievement_sources")(deps)
@@ -78,6 +80,7 @@ function fetch_game_data(steam_app_id, language) return store.fetch_game_data(st
 function get_shortcut_details(shortcut_app_id, title) return shortcut_detection.get_shortcut_details(shortcut_app_id, title) end
 function list_shortcuts() return shortcut_registry.list() end
 function detect_game_candidates(request_json) return shortcut_detection.detect_game_candidates(request_json) end
+function detect_game_candidates_local(request_json) return shortcut_detection.detect_game_candidates_local(request_json) end
 function fetch_news(steam_app_id, language) return news.fetch_news(steam_app_id, language) end
 function fetch_partner_events(steam_app_id, language) return news.fetch_partner_events(steam_app_id, language) end
 function fetch_published_file_previews(file_ids_csv) return social.fetch_published_file_previews(file_ids_csv) end

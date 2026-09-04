@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 
 const qualitySource = readFileSync(new URL('../frontend/features/library/artwork-quality.ts', import.meta.url), 'utf8');
 const artworkSource = readFileSync(new URL('../frontend/features/library/artwork.ts', import.meta.url), 'utf8');
-const backendArtworkSource = readFileSync(new URL('../backend/lib/artwork.lua', import.meta.url), 'utf8');
+const backendArtworkSource = readFileSync(new URL('../backend/lib/artwork.lua', import.meta.url), 'utf8')
+	+ readFileSync(new URL('../backend/lib/artwork_candidates.lua', import.meta.url), 'utf8');
 const linkingSource = readFileSync(new URL('../frontend/features/shortcuts/linking.ts', import.meta.url), 'utf8');
 const unlinkingSource = readFileSync(new URL('../frontend/features/shortcuts/unlinking.ts', import.meta.url), 'utf8');
 const linkQueueSource = readFileSync(new URL('../frontend/features/shortcuts/link-job-queue.ts', import.meta.url), 'utf8');

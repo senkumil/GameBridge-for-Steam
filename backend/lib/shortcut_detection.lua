@@ -16,14 +16,9 @@ end
 -- Bounded LRU caches. TTL alone does not release entries that are never read
 -- again, which matters during long-running Steam sessions with many games.
 local detection_cache = deps.ttl_cache
-local detection_new_cache = detection_cache.new
-local detection_cache_get = detection_cache.get
-local detection_cache_set = detection_cache.set
-local detection_candidate_cache = detection_new_cache(128)
-local detection_vdf_cache = detection_new_cache(16)
-local detection_store_cache = detection_new_cache(96)
-local detection_appdetails_cache = detection_new_cache(96)
-local detection_appinfo_cache = detection_new_cache(96)
+local detection_new_cache, detection_cache_get, detection_cache_set = detection_cache.new, detection_cache.get, detection_cache.set
+local detection_candidate_cache, detection_vdf_cache = detection_new_cache(128), detection_new_cache(16)
+local detection_store_cache, detection_appdetails_cache, detection_appinfo_cache = detection_new_cache(96), detection_new_cache(96), detection_new_cache(96)
 -- A maintained alias (for example "re4") only narrows the search.  It must
 -- never look like near-certain identification unless the candidate's official
 -- Steam launch configuration also contains the executable we are inspecting.
@@ -32,27 +27,20 @@ local DETECTION_UNVERIFIED_ALIAS_MAX_SCORE = 84
 -- Pure text matching and the maintained alias catalogue live in focused
 -- modules; this detector remains responsible for filesystem/network evidence.
 local detection_text = deps.shortcut_detection_text
-local detection_trim = detection_text.trim
-local detection_clean_path = detection_text.clean_path
-local detection_basename = detection_text.basename
-local detection_stem = detection_text.stem
-local detection_game_exe_hint = detection_text.game_exe_hint
-local detection_normalize = detection_text.normalize
+local detection_trim, detection_clean_path = detection_text.trim, detection_text.clean_path
+local detection_basename, detection_stem = detection_text.basename, detection_text.stem
+local detection_game_exe_hint, detection_normalize = detection_text.game_exe_hint, detection_text.normalize
 local detection_clean_game_title = detection_text.clean_game_title
-local DETECTION_GENERIC_WORDS = detection_text.generic_words
-local DETECTION_GENERIC_EXES = detection_text.generic_exes
+local DETECTION_GENERIC_WORDS, DETECTION_GENERIC_EXES = detection_text.generic_words, detection_text.generic_exes
 local KNOWN_TITLE_ALIASES = deps.shortcut_detection_aliases
 local detection_pe = deps.shortcut_detection_pe
-local detection_tokens = detection_text.tokens
-local detection_similarity = detection_text.similarity
-local detection_compact_similarity = detection_text.compact_similarity
-local detection_acronym_similarity = detection_text.acronym_similarity
+local detection_tokens, detection_similarity = detection_text.tokens, detection_text.similarity
+local detection_compact_similarity, detection_acronym_similarity = detection_text.compact_similarity, detection_text.acronym_similarity
 local function detection_read_small_file(path, max_bytes)
     if not path or path == "" or not fs.exists(path) then return nil end
     local handle = io.open(path, "r")
     if not handle then return nil end
-    local content = handle:read(max_bytes or 8192)
-    handle:close()
+    local content = handle:read(max_bytes or 8192); handle:close()
     return content
 end
 
@@ -60,10 +48,8 @@ local function detection_read_binary_file(path, max_bytes)
     if not path or path == "" or not fs.exists(path) then return nil end
     local handle = io.open(path, "rb")
     if not handle then return nil end
-    local content = handle:read("*a")
-    handle:close()
-    if not content or content == "" or #content > (max_bytes or 8 * 1024 * 1024) then return nil end
-    return content
+    local content = handle:read("*a"); handle:close()
+    return (content and content ~= "" and #content <= (max_bytes or 8 * 1024 * 1024)) and content or nil
 end
 
 local detection_binary_cstring = util.binary_cstring
@@ -71,10 +57,8 @@ local detection_binary_i32 = util.binary_i32
 local detection_parse_binary_vdf_object = util.parse_binary_vdf_object
 
 local function detection_shortcut_appid(value)
-    local appid = tonumber(value)
-    if not appid then return nil end
-    if appid < 0 then appid = appid + 4294967296 end
-    return math.floor(appid)
+    local id = tonumber(value)
+    return id and math.floor(id < 0 and id + 4294967296 or id) or nil
 end
 
 local detection_tracking = deps.shortcut_detection_tracking
@@ -204,7 +188,7 @@ local function detection_http_json(url, timeout)
             ["Accept"] = "application/json",
             ["User-Agent"] = USER_AGENT
         },
-        timeout = timeout or 8
+        timeout = timeout or 3
     })
     if not ok_http or not res or res.status ~= 200 then
         return nil, tostring(err or res or "HTTP request failed")
@@ -224,7 +208,7 @@ local function detection_fetch_appdetails(appid, language)
 
     local url = "https://store.steampowered.com/api/appdetails?appids=" .. id
         .. "&l=" .. detection_url_encode(lang)
-    local body = detection_http_json(url, 6)
+    local body = detection_http_json(url, 2.5)
     local record = type(body) == "table" and body[id] or nil
     if type(record) == "table" and record.success and type(record.data) == "table" then
         detection_cache_set(detection_appdetails_cache, cache_key, { data = record.data, ttl = 1800 })
@@ -241,31 +225,26 @@ local function detection_appid_from_arguments(arguments)
 end
 
 local function detection_find_steam_appid_file(exe_path)
-    local directory = fs.parent_path(detection_clean_path(exe_path))
+    local dir = fs.parent_path(detection_clean_path(exe_path))
     for _ = 1, 4 do
-        if not directory or directory == "" then break end
-        local content = detection_read_small_file(fs.join(directory, "steam_appid.txt"), 128)
+        if not dir or dir == "" then break end
+        local content = detection_read_small_file(fs.join(dir, "steam_appid.txt"), 128)
         local appid = content and content:match("(%d+)") or nil
         if appid then return appid, "steam_appid_file" end
-        local parent = fs.parent_path(directory)
-        if not parent or parent == "" or parent == directory then break end
-        directory = parent
+        local parent = fs.parent_path(dir)
+        if not parent or parent == "" or parent == dir then break end
+        dir = parent
     end
     return nil, nil
 end
 
 local function detection_find_appmanifest(exe_path)
     local path = detection_clean_path(exe_path)
-    local lower = path:lower()
-    local marker = "\\steamapps\\common\\"
-    local marker_start = lower:find(marker, 1, true)
+    local marker_start = path:lower():find("\\steamapps\\common\\", 1, true)
     if not marker_start then return nil, nil end
-
-    local steamapps_dir = path:sub(1, marker_start + #("\\steamapps") - 1)
-    local relative = path:sub(marker_start + #marker)
-    local install_folder = relative:match("^([^\\]+)")
+    local steamapps_dir = path:sub(1, marker_start + 10)
+    local install_folder = path:sub(marker_start + 18):match("^([^\\]+)")
     if not install_folder or install_folder == "" then return nil, nil end
-
     local ok_list, entries = pcall(fs.list, steamapps_dir)
     if not ok_list or type(entries) ~= "table" then return nil, nil end
     for _, entry in ipairs(entries) do
@@ -277,8 +256,7 @@ local function detection_find_appmanifest(exe_path)
             local content = detection_read_small_file(entry_path, 256 * 1024)
             local install_dir = content and content:match('"installdir"%s*"([^"]+)"') or nil
             if install_dir and install_dir:lower() == install_folder:lower() then
-                local content_id = content:match('"appid"%s*"(%d+)"')
-                return content_id or manifest_id, "steam_appmanifest"
+                return (content and content:match('"appid"%s*"(%d+)"')) or manifest_id, "steam_appmanifest"
             end
         end
     end
@@ -297,7 +275,7 @@ local function detection_store_search(query, language)
         .. detection_url_encode(cleaned)
         .. "&l=" .. detection_url_encode(lang)
         .. "&cc=US"
-    local body = detection_http_json(url, 4)
+    local body = detection_http_json(url, 2.5)
     if type(body) ~= "table" then return {}, false end
     local items = type(body) == "table" and type(body.items) == "table" and body.items or {}
     detection_cache_set(detection_store_cache, cache_key, { items = items, confirmed = true, ttl = 600 })
@@ -310,7 +288,7 @@ local function detection_fetch_appinfo(appid)
     local cached = detection_cache_get(detection_appinfo_cache, id, 1800)
     if cached then return cached.data end
 
-    local body = detection_http_json("https://api.steamcmd.net/v1/info/" .. id, 2)
+    local body = detection_http_json("https://api.steamcmd.net/v1/info/" .. id, 1.5)
     local data = type(body) == "table" and type(body.data) == "table" and body.data[id] or nil
     if data then detection_cache_set(detection_appinfo_cache, id, { data = data, ttl = 1800 }) end
     return data
@@ -331,22 +309,15 @@ end
 
 local function detection_folder_hints(exe_path, start_dir)
     local hints, seen = {}, {}
-    local function add(value)
-        local cleaned = detection_clean_game_title(value)
-        local normalized = detection_normalize(cleaned)
-        if cleaned ~= "" and normalized ~= "" and not seen[normalized] then
-            seen[normalized] = true
-            table.insert(hints, cleaned)
-        end
-    end
-    local directory = detection_clean_path(start_dir)
-    if directory == "" then directory = fs.parent_path(detection_clean_path(exe_path)) end
+    local dir = detection_clean_path(start_dir ~= "" and start_dir or fs.parent_path(detection_clean_path(exe_path)))
     for _ = 1, 6 do
-        if not directory or directory == "" then break end
-        add(detection_basename(directory))
-        local parent = fs.parent_path(directory)
-        if not parent or parent == directory then break end
-        directory = parent
+        if not dir or dir == "" then break end
+        local c = detection_clean_game_title(detection_basename(dir))
+        local n = detection_normalize(c)
+        if c ~= "" and n ~= "" and not seen[n] then seen[n] = true; table.insert(hints, c) end
+        local parent = fs.parent_path(dir)
+        if not parent or parent == dir then break end
+        dir = parent
     end
     return hints
 end
@@ -446,10 +417,24 @@ local function detection_direct_result(appid, source, request, language, launche
     }
 end
 
+function M.detect_game_candidates_local(request_json)
+    local ok_request, request = pcall(cjson.decode, tostring(request_json or "{}"))
+    if not ok_request or type(request) ~= "table" then
+        return detection_encode({ error = "invalid_request", candidates = {} })
+    end
+    if deps.shortcut_detection_local and deps.shortcut_detection_local.discover_local_candidates then
+        return detection_encode(deps.shortcut_detection_local.discover_local_candidates(request))
+    end
+    return detection_encode({ candidates = {}, error = "local_engine_unavailable" })
+end
+
 function M.detect_game_candidates(request_json)
     local ok_request, request = pcall(cjson.decode, tostring(request_json or "{}"))
     if not ok_request or type(request) ~= "table" then
         return detection_encode({ error = "invalid_request", candidates = {} })
+    end
+    if request.phase == "local" then
+        return M.detect_game_candidates_local(request_json)
     end
 
     request.title = detection_trim(request.title):sub(1, 240)
@@ -518,9 +503,7 @@ function M.detect_game_candidates(request_json)
     local direct_source = direct_appid and "launch_argument" or nil
     if not direct_appid and identity_exe_path ~= "" then
         direct_appid, direct_source = detection_find_steam_appid_file(identity_exe_path)
-    end
-    if not direct_appid and identity_exe_path ~= "" then
-        direct_appid, direct_source = detection_find_appmanifest(identity_exe_path)
+        if not direct_appid then direct_appid, direct_source = detection_find_appmanifest(identity_exe_path) end
     end
     if direct_appid then
         local direct = detection_direct_result(direct_appid, direct_source, request, language, launcher, generic_launcher)
@@ -537,10 +520,9 @@ function M.detect_game_candidates(request_json)
     -- validation before becoming a direct result; an unavailable or non-game
     -- AppID therefore falls back to the normal ranked-candidate path.
     local function automatic_alias_appid(value)
-        local normalized = detection_normalize(value)
-        if normalized == "" then return nil, nil end
-        local alias = KNOWN_TITLE_ALIASES[normalized:gsub("%s+", "")]
-            or KNOWN_TITLE_ALIASES[normalized]
+        local norm = detection_normalize(value)
+        if norm == "" then return nil, nil end
+        local alias = KNOWN_TITLE_ALIASES[norm:gsub("%s+", "")] or KNOWN_TITLE_ALIASES[norm]
         local appid = alias and tostring(alias.auto_appid or "") or ""
         return (appid:match("^%d+$") and appid or nil), (alias and alias.name or nil)
     end
@@ -633,27 +615,48 @@ function M.detect_game_candidates(request_json)
     for _, folder in ipairs(folders) do add_query(folder) end
 
     local by_id = {}
-
-    -- Aliases are search hints, never proof of identity.  Short executable
-    -- names such as re4/re9/mk are inherently ambiguous and must still compete
-    -- with Store results and appinfo validation.
-    for direct_id, default_name in pairs(alias_candidates) do
-        local image = "https://cdn.cloudflare.steamstatic.com/steam/apps/" .. direct_id .. "/header.jpg"
-        by_id[direct_id] = {
-            appid = direct_id,
-            name = default_name,
-            image = image,
-            item_type = "game",
-            reasons = { "franchise_alias" },
-            query_rank = 10,
-            query_index = 1,
-            executable_match = false,
-            direct = false,
-            alias_hint = true,
-        }
+    if type(request.local_candidates) == "table" then
+        for _, cand in ipairs(request.local_candidates) do
+            local cid = tostring(cand.appid or "")
+            if cid:match("^%d+$") then
+                by_id[cid] = {
+                    appid = cid,
+                    name = tostring(cand.name or ""),
+                    image = tostring(cand.image or ("https://cdn.cloudflare.steamstatic.com/steam/apps/" .. cid .. "/header.jpg")),
+                    item_type = "game",
+                    reasons = type(cand.reasons) == "table" and cand.reasons or { "local_discovery" },
+                    query_rank = 10,
+                    query_index = 1,
+                    executable_match = cand.executable_match == true,
+                    direct = cand.direct == true,
+                    alias_hint = cand.evidence_tier == "hint",
+                    from_appid_file = cand.from_appid_file == true,
+                }
+            end
+        end
     end
 
-    local max_queries = math.min(#queries, 5)
+    for direct_id, default_name in pairs(alias_candidates) do
+        if not by_id[direct_id] then
+            local image = "https://cdn.cloudflare.steamstatic.com/steam/apps/" .. direct_id .. "/header.jpg"
+            by_id[direct_id] = {
+                appid = direct_id,
+                name = default_name,
+                image = image,
+                item_type = "game",
+                reasons = { "franchise_alias" },
+                query_rank = 10,
+                query_index = 1,
+                executable_match = false,
+                direct = false,
+                alias_hint = true,
+            }
+        end
+    end
+
+    local has_local_candidates = false
+    for _ in pairs(by_id) do has_local_candidates = true; break end
+    local max_queries = has_local_candidates and math.min(#queries, 2) or math.min(#queries, 4)
 	local store_search_confirmed = true
     for query_index = 1, max_queries do
         local query_text = queries[query_index]
@@ -858,26 +861,34 @@ function M.detect_game_candidates(request_json)
             if rset[r] then table.insert(neg, r) end
         end
         candidate.negative_reasons = neg
-        if candidate.score >= 90 and not candidate.ambiguous then candidate.confidence = "high"
-        elseif candidate.score >= 70 then candidate.confidence = "medium"
-        else candidate.confidence = "low" end
+        candidate.confidence = (candidate.score >= 90 and not candidate.ambiguous) and "high" or (candidate.score >= 70 and "medium" or "low")
         table.insert(output, candidate)
     end
 
+    if (not store_search_confirmed or #output == 0) and deps.shortcut_detection_local and deps.shortcut_detection_local.discover_local_candidates then
+        local local_res = deps.shortcut_detection_local.discover_local_candidates(request)
+        if local_res and type(local_res.candidates) == "table" then
+            local existing_ids = {}
+            for _, c in ipairs(output) do existing_ids[c.appid] = true end
+            for _, lc in ipairs(local_res.candidates) do
+                if not existing_ids[lc.appid] then
+                    lc.warnings = lc.warnings or {}; table.insert(lc.warnings, "remote_validation_unavailable")
+                    lc.validation_state = "partial"; table.insert(output, lc)
+                end
+            end
+        end
+    end
+
     local result = {
-        candidates = output,
-        launcher_detected = launcher,
-        generic_launcher = generic_launcher,
-        executable = exe_basename,
-        queries = queries,
-        source = "steam_store_search",
-        ambiguous = output[1] and output[1].ambiguous or false,
-		transient_error = not store_search_confirmed,
+        candidates = output, launcher_detected = launcher, generic_launcher = generic_launcher,
+        executable = exe_basename, queries = queries, source = "steam_store_search",
+        ambiguous = output[1] and output[1].ambiguous or false, transient_error = not store_search_confirmed,
+        validation_state = store_search_confirmed and "confirmed" or "partial",
     }
     local encoded = detection_encode(result)
-	if store_search_confirmed then
-		detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 })
-	end
+    if store_search_confirmed and #output > 0 then
+        detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 })
+    end
     return encoded
 end
 

@@ -2,14 +2,18 @@ return function(deps)
 local fs = deps.fs
 local M, epochs = {}, {}
 
-local chars, lookup = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", {}
-for index = 1, #chars do lookup[chars:sub(index, index)] = index - 1 end
+local chars, lookup, bchars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", {}, {}
+for index = 1, #chars do
+    local c = chars:sub(index, index)
+    lookup[c] = index - 1
+    bchars[index - 1] = c
+end
 
 function M.encode_base64(data)
     if type(data) ~= "string" or data == "" then return "" end
     local output = {}
     local len = #data
-    local chunk_size = 3072
+    local chunk_size = 4096
     for chunk_start = 1, len, chunk_size do
         local chunk_end = math.min(chunk_start + chunk_size - 1, len)
         local chunk_out = {}
@@ -23,9 +27,9 @@ function M.encode_base64(data)
             local i2 = math.floor(value / 4096) % 64
             local i3 = math.floor(value / 64) % 64
             local i4 = value % 64
-            chunk_out[k] = chars:sub(i1 + 1, i1 + 1) .. chars:sub(i2 + 1, i2 + 1)
-                .. (b and chars:sub(i3 + 1, i3 + 1) or "=")
-                .. (c and chars:sub(i4 + 1, i4 + 1) or "=")
+            chunk_out[k] = bchars[i1] .. bchars[i2]
+                .. (b and bchars[i3] or "=")
+                .. (c and bchars[i4] or "=")
             k = k + 1
         end
         output[#output + 1] = table.concat(chunk_out)

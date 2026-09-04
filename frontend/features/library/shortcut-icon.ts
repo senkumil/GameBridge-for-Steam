@@ -1,6 +1,8 @@
 import { backendLog, saveShortcutIconBackend } from '../../api/backend';
+import { getPreferences } from '../../core/preferences';
 import { steamLanguageSync } from '../../steam/localization';
 import { getShortcutAppById, readShortcutOverviewField } from '../../steam/shortcuts';
+import { getCommunityArtwork } from './artwork-community';
 import { imageUrlToBase64 } from './artwork-image';
 import { getModernLibraryAssets, getResolvedLibraryAssets } from './library-assets';
 import { waitForSteamBridge } from './steam-bridge';
@@ -205,9 +207,49 @@ export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steam
 				language: steamLanguageSync() || 'english',
 			}),
 		}));
-		if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
 		if (response?.saved && response?.path) {
 			return await applyIconPath(String(response.path));
+		}
+
+		// Fallback: If Steam official icon was absent or probe failed, try recommended community icon
+		const preferences = getPreferences();
+		if (preferences.autoCommunityArtwork && preferences.steamGridDbApiKey) {
+			const community = await getCommunityArtwork(steamAppId);
+			if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
+			if (community?.icon) {
+				let commSaved: { saved?: boolean; path?: string } | null = null;
+				const dataUrl = await imageUrlToBase64(community.icon);
+				if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
+				if (dataUrl) {
+					const commaIdx = dataUrl.indexOf(',');
+					const base64 = commaIdx >= 0 ? dataUrl.substring(commaIdx + 1) : dataUrl;
+					const raw = await saveShortcutIconBackend({
+						request_json: JSON.stringify({
+							shortcut_app_id: String(shortcutAppId),
+							steam_app_id: steamAppId,
+							icon_base64: base64,
+							extension: 'png',
+							source: 'steamgriddb',
+						}),
+					});
+					try { commSaved = JSON.parse(raw); } catch {}
+				}
+				if (!commSaved?.saved && community.icon) {
+					const raw = await saveShortcutIconBackend({
+						request_json: JSON.stringify({
+							shortcut_app_id: String(shortcutAppId),
+							steam_app_id: steamAppId,
+							url: community.icon,
+							source: 'steamgriddb',
+						}),
+					});
+					try { commSaved = JSON.parse(raw); } catch {}
+				}
+				if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
+				if (commSaved?.saved && commSaved?.path) {
+					return await applyIconPath(String(commSaved.path));
+				}
+			}
 		}
 		return false;
 	} catch (e) {

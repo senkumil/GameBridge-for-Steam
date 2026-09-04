@@ -1,6 +1,7 @@
 import { backendLog, fetchCommunityArtworkBackend, fetchCommunityArtworkCandidatesBackend } from '../../api/backend';
 import { getPreferences, steamGridDbApiKeyCandidates } from '../../core/preferences';
 import { RetryingRequestCache } from '../../core/request-cache';
+import { isLegacyGame } from './legacy-games';
 
 export interface CommunityArtworkAssets {
 	found?: boolean;
@@ -8,10 +9,11 @@ export interface CommunityArtworkAssets {
 	hero?: string;
 	logo?: string;
 	wide?: string;
+	icon?: string;
 	curated?: boolean;
 	transient_error?: boolean;
 	source?: string;
-	provenance?: Partial<Record<'portrait' | 'hero' | 'logo' | 'wide', {
+	provenance?: Partial<Record<'portrait' | 'hero' | 'logo' | 'wide' | 'icon', {
 		id?: number | string;
 		provider?: string;
 		width?: number;
@@ -20,6 +22,8 @@ export interface CommunityArtworkAssets {
 		style?: string;
 		transparent?: boolean;
 	}>>;
+	defaults?: Partial<Record<'portrait' | 'hero' | 'logo' | 'wide' | 'icon', string | number>>;
+	slots?: Partial<Record<'portrait' | 'hero' | 'logo' | 'wide' | 'icon', unknown[]>>;
 }
 
 const retiredPreferenceRequests = new RetryingRequestCache<boolean>({
@@ -44,6 +48,7 @@ function apiKeyFingerprint(value: string): string {
 }
 
 export async function retiredCommunityArtworkPreferred(steamAppId: string): Promise<boolean> {
+	if (isLegacyGame(steamAppId)) return true;
 	try {
 		return await retiredPreferenceRequests.get(steamAppId, async () => {
 			const raw = await fetchCommunityArtworkCandidatesBackend({ request_json: JSON.stringify({
